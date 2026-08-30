@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy to workbench/settings.json and fill in. All fields optional. Without api_key the app runs on the built-in mock engine (full flow, no real model). Prefer editing via the in-app Settings page.",
+  "engine": "mock",
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "sk-your-key-here",
+  "model": "gpt-4o-mini",
+  "timeout_seconds": 120,
+  "writer_temperature": 0.8
+}

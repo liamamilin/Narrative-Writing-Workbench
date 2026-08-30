@@ -1,0 +1,43 @@
+{
+  "project": "Narrative Writing Harness",
+  "version": "source-package-v0.2",
+  "generated_assets": {
+    "docs": 14,
+    "prompts": 4,
+    "schemas": 3,
+    "smoke_benchmark_cases": 10,
+    "baselines": 2,
+    "implementation_task": 1
+  },
+  "files": [
+    "AGENTS.md",
+    "IMPLEMENTATION_TASK.md",
+    "MANIFEST.json",
+    "README.md",
+    "benchmarks/README.md",
+    "benchmarks/baselines/B0_direct.md",
+    "benchmarks/baselines/B1_strong.md",
+    "benchmarks/smoke_cases.jsonl",
+    "docs/00_PROJECT_OVERVIEW.md",
+    "docs/01_ARCHITECTURE.md",
+    "docs/02_WIR_SPEC.md",
+    "docs/03_AGENT_CONTRACTS.md",
+    "docs/04_PROMPT_SPEC.md",
+    "docs/05_CRITIC_SPEC.md",
+    "docs/06_PATCH_PROTOCOL.md",
+    "docs/07_BENCHMARK_SPEC.md",
+    "docs/08_EVALUATION_SPEC.md",
+    "docs/09_DATA_AND_RUN_FORMAT.md",
+    "docs/10_IMPLEMENTATION_PLAN.md",
+    "docs/11_ACCEPTANCE_CRITERIA.md",
+    "docs/12_THEORY.md",
+    "docs/13_FUTURE_ROADMAP.md",
+    "prompts/architect.md",
+    "prompts/critic.md",
+    "prompts/patcher.md",
+    "prompts/writer.md",
+    "schemas/critique.schema.json",
+    "schemas/run.schema.json",
+    "schemas/wir.schema.json"
+  ]
+}

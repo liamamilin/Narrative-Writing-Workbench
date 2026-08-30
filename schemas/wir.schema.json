@@ -1,0 +1,409 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/wir.schema.json",
+  "title": "Writing Intermediate Representation v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "wir_version",
+    "task",
+    "meaning",
+    "reader_state",
+    "perspective",
+    "beats",
+    "devices",
+    "constraints"
+  ],
+  "properties": {
+    "wir_version": {
+      "const": "0.1"
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "objective"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_length": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      }
+    },
+    "meaning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core_experience",
+        "surface_meaning",
+        "deep_meaning",
+        "final_realization"
+      ],
+      "properties": {
+        "core_experience": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "description",
+            "emotion",
+            "intensity"
+          ],
+          "properties": {
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "emotion": {
+              "type": "string"
+            },
+            "intensity": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            }
+          }
+        },
+        "surface_meaning": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deep_meaning": {
+          "type": "string",
+          "minLength": 1
+        },
+        "final_realization": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "reader_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "initial",
+        "target"
+      ],
+      "properties": {
+        "initial": {
+          "$ref": "#/$defs/readerState"
+        },
+        "target": {
+          "$ref": "#/$defs/readerState"
+        }
+      }
+    },
+    "perspective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "focalizer",
+        "distance",
+        "allowed_shifts"
+      ],
+      "properties": {
+        "focalizer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "distance": {
+          "enum": [
+            "close",
+            "medium",
+            "distant"
+          ]
+        },
+        "allowed_shifts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "beats": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 12,
+      "items": {
+        "$ref": "#/$defs/beat"
+      }
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/device"
+      },
+      "uniqueItems": true
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "factual_fidelity": {
+          "type": "boolean"
+        },
+        "allow_new_facts": {
+          "type": "boolean"
+        },
+        "max_explicit_moralization": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "avoid_generic_philosophy": {
+          "type": "boolean"
+        },
+        "avoid_emotional_labeling_when_behavior_suffices": {
+          "type": "boolean"
+        },
+        "max_contrast_redefinition_patterns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "target_length": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "readerState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "knowledge",
+        "belief",
+        "expectation",
+        "emotion",
+        "questions"
+      ],
+      "properties": {
+        "knowledge": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "belief": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expectation": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emotion": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "device": {
+      "enum": [
+        "delayed_explanation",
+        "partial_reveal",
+        "reinterpretation",
+        "perspective_dive",
+        "perspective_shift",
+        "contrast",
+        "semantic_echo",
+        "escalation",
+        "specific_to_abstract",
+        "abstract_to_specific",
+        "controlled_omission",
+        "circular_landing"
+      ]
+    },
+    "beatFunction": {
+      "enum": [
+        "entry",
+        "context",
+        "immersion",
+        "escalation",
+        "complication",
+        "reveal",
+        "reinterpretation",
+        "perspective_shift",
+        "contrast",
+        "payoff",
+        "landing"
+      ]
+    },
+    "beat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "function",
+        "reader_transition",
+        "information",
+        "meaning_gain",
+        "emotional_effect",
+        "perspective",
+        "devices",
+        "exit_questions"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^B[1-9][0-9]*$"
+        },
+        "function": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "primary",
+            "secondary"
+          ],
+          "properties": {
+            "primary": {
+              "$ref": "#/$defs/beatFunction"
+            },
+            "secondary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/beatFunction"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "reader_transition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "minLength": 1
+            },
+            "to": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "information": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reveal",
+            "conceal"
+          ],
+          "properties": {
+            "reveal": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "conceal": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "meaning_gain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "emotional_effect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "target",
+            "intensity"
+          ],
+          "properties": {
+            "target": {
+              "type": "string"
+            },
+            "intensity": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            }
+          }
+        },
+        "perspective": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "focalizer",
+            "distance"
+          ],
+          "properties": {
+            "focalizer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "distance": {
+              "enum": [
+                "close",
+                "medium",
+                "distant"
+              ]
+            }
+          }
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/device"
+          },
+          "uniqueItems": true
+        },
+        "exit_questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prose_budget": {
+          "enum": ["core", "support", "bridge"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "project": "Narrative Writing Product",
+  "extension": "Quick Write",
+  "version": "V0.1",
+  "pipeline": [
+    "Topic",
+    "Meaning Discovery",
+    "Angle Selection",
+    "WIR",
+    "Writer",
+    "Draft"
+  ],
+  "input_modes": [
+    "topic_only",
+    "source_grounded",
+    "draft_revision"
+  ],
+  "documents": [
+    "AGENTS.md",
+    "QUICK_WRITE_IMPLEMENTATION_TASK.md",
+    "README.md",
+    "product/11_QUICK_WRITE_VISION.md",
+    "product/12_INPUT_MODES_SPEC.md",
+    "product/13_MEANING_DISCOVERY_SPEC.md",
+    "product/14_ANGLE_SELECTION_SPEC.md",
+    "product/15_QUICK_WRITE_SCREEN_SPEC.md",
+    "product/16_QUICK_WRITE_FLOW_SPEC.md",
+    "product/17_QUICK_WRITE_DATA_API.md",
+    "product/18_TOPIC_SAFETY_AND_FACTUALITY.md",
+    "product/19_V0_1_SCOPE.md",
+    "product/20_V0_1_ACCEPTANCE_CRITERIA.md"
+  ]
+}

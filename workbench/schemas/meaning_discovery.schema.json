@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/workbench/schemas/meaning_discovery.schema.json",
+  "title": "Meaning Discovery V0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "topic",
+    "surface_question",
+    "candidate_angles",
+    "selected_angle_id",
+    "core_question",
+    "deep_meaning",
+    "common_reading",
+    "new_reading",
+    "reader_end_state"
+  ],
+  "properties": {
+    "topic": { "type": "string", "minLength": 1 },
+    "surface_question": { "type": "string" },
+    "candidate_tensions": { "type": "array", "items": { "type": "string" } },
+    "candidate_angles": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "core_question", "deep_meaning", "reader_end_state"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^A[0-9]$" },
+          "label": { "type": "string", "minLength": 1 },
+          "mechanism": { "type": "string" },
+          "core_question": { "type": "string" },
+          "deep_meaning": { "type": "string" },
+          "reader_end_state": { "type": "string" },
+          "risks": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "selected_angle_id": { "type": "string", "pattern": "^A[0-9]$" },
+    "selection_reason": { "type": "string" },
+    "core_question": { "type": "string", "minLength": 1 },
+    "deep_meaning": { "type": "string", "minLength": 1 },
+    "common_reading": { "type": "string" },
+    "new_reading": { "type": "string" },
+    "reader_end_state": { "type": "string", "minLength": 1 },
+    "key_tensions": { "type": "array", "items": { "type": "string" } },
+    "constraints": { "type": "array", "items": { "type": "string" } },
+    "fact_heavy": { "type": "boolean" },
+    "language": { "enum": ["zh", "en"] }
+  }
+}

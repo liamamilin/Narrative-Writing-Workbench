@@ -1,0 +1,21 @@
+# Local secrets & user data — NEVER commit
+workbench/settings.json
+workbench/env.sh
+.env
+workbench/workbench.db
+workbench/workbench.db-*
+*.db
+
+# Research data & run artifacts (personal material, not published)
+benchmarks/
+runs/
+ablation_*.txt
+
+# Scratch / caches / build artifacts
+.scratch/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+.DS_Store
+NarrativeWorkbench.app/

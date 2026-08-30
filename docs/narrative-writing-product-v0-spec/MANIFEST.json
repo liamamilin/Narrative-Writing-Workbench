@@ -1,0 +1,37 @@
+{
+  "project": "Narrative Writing Product",
+  "version": "V0 Product Spec",
+  "documents": [
+    "AGENTS.md",
+    "PRODUCT_IMPLEMENTATION_TASK.md",
+    "README.md",
+    "product/00_PRODUCT_VISION.md",
+    "product/01_PERSONAS_AND_JTBD.md",
+    "product/02_INFORMATION_ARCHITECTURE.md",
+    "product/03_USER_FLOW.md",
+    "product/04_SCREEN_SPEC.md",
+    "product/05_INTERACTION_SPEC.md",
+    "product/06_DATA_MODEL.md",
+    "product/07_API_CONTRACT.md",
+    "product/08_PRODUCT_COPY.md",
+    "product/09_V0_SCOPE.md",
+    "product/10_ACCEPTANCE_CRITERIA.md"
+  ],
+  "core_screens": [
+    "Home",
+    "New Task",
+    "Writing Workspace",
+    "Writing Map",
+    "Version History / Compare",
+    "Project"
+  ],
+  "golden_path": [
+    "Material",
+    "Intent",
+    "Generate",
+    "Read",
+    "Review",
+    "Patch",
+    "Accept"
+  ]
+}

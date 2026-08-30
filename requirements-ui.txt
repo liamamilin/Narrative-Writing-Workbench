@@ -1,0 +1,2 @@
+# Optional: local web UI (ui/server.py). Core pipeline does not need these.
+Flask>=2.0
