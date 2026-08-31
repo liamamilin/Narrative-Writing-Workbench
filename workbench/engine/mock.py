@@ -45,6 +45,7 @@ _MOCK_WIR = {
 
 class MockWritingEngine:
     name = "mock"
+    simulate_repair = False    # tests flip this to exercise the reset path
 
     def discover_meaning(self, *, topic, writing_mode, angle_mode,
                          custom_angle, avoid, config, emit=None) -> dict:
@@ -99,9 +100,19 @@ class MockWritingEngine:
         text = "\n\n".join(paras)
         if on_delta:
             import time as _t
-            for i in range(0, len(text), 24):
-                on_delta(text[i:i + 24])
-                _t.sleep(0.005)
+            if self.simulate_repair:
+                # exercise the UI's reset/clear path mid-stream
+                half = len(text) // 2
+                for i in range(0, half, 24):
+                    on_delta(text[i:i + 24])
+                on_delta("", True)
+                for i in range(0, len(text), 24):
+                    on_delta(text[i:i + 24])
+                    _t.sleep(0.005)
+            else:
+                for i in range(0, len(text), 24):
+                    on_delta(text[i:i + 24])
+                    _t.sleep(0.005)
         return GenerateResult(text=text, plan=plan)
 
     def review(self, *, content, material, instruction, plan, config) -> dict:

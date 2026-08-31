@@ -469,3 +469,300 @@ def test_delta_stream_batches_flush_and_reset():
     assert ch.evts[-1] == ("delta", {"reset": True})
     cb.flush()
     assert len(ch.evts) == 3                   # flush after reset is a no-op
+
+
+# ------------------------------------ 11. in-task param edits take effect ----
+
+def test_generate_body_params_persist_and_reach_engine():
+    spy = SpyEngine()
+    c = _client(spy)
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={
+        "instruction": "写父亲", "immersion": "high", "explicitness": "low",
+        "intensity": "low", "target_length": 1200})
+    t = c.get(f"/tasks/{tid}").json()
+    assert t["instruction"] == "写父亲"
+    cfg = t["config"]
+    assert (cfg["immersion"], cfg["explicitness"], cfg["intensity"]) == \
+        ("high", "low", "low")
+    assert cfg["target_length"] == 1200
+    kw = spy.generate_calls[-1]
+    assert kw["instruction"] == "写父亲"
+    assert kw["config"]["target_length"] == 1200
+    assert kw["config"]["immersion"] == "high"
+
+
+def test_regenerate_body_params_persist():
+    c = _client()
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    r = c.post(f"/tasks/{tid}/regenerate", json={
+        "preserve_angle": True, "immersion": "low", "target_length": 500})
+    assert r.status_code == 200, r.text
+    cfg = c.get(f"/tasks/{tid}").json()["config"]
+    assert (cfg["immersion"], cfg["target_length"]) == ("low", 500)
+
+
+def test_generate_rejects_invalid_param_values():
+    c = _client()
+    tid = qw_task(c)
+    assert c.post(f"/tasks/{tid}/generate",
+                  json={"immersion": "extreme"}).status_code == 400
+    assert c.post(f"/tasks/{tid}/generate",
+                  json={"target_length": 99}).status_code == 400
+    assert c.post(f"/tasks/{tid}/generate",
+                  json={"target_length": "abc"}).status_code == 400
+
+
+def test_generate_without_body_keeps_stored_config():
+    spy = SpyEngine()
+    c = _client(spy)
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    kw = spy.generate_calls[-1]
+    assert kw["config"]["target_length"] == 900     # from creation
+
+
+def test_dial_block_maps_levels_to_guidance():
+    from workbench.engine.real import _dial_block
+    block = _dial_block({"immersion": "high", "explicitness": "low",
+                         "intensity": "medium"})
+    assert "Experience settings" in block
+    assert "sensory detail" in block
+    assert "do not state the theme" in block.lower()
+    assert block.count("\n- ") == 3
+    assert _dial_block({}) == ""
+    assert _dial_block({"immersion": None, "explicitness": "bogus"}) == ""
+
+
+# ================= regression: T0/T1/T2 bug sweep (2026-08-31) ==============
+
+import threading
+import time
+
+from workbench.service import _validate_target_length
+
+
+# ---- T0: language gate uses discovery language, not the English seed topic ----
+
+def test_topic_led_language_resolves_from_meaning_not_topic():
+    from workbench.engine.real import resolve_language_for
+    meaning = {"topic": "talk about failure", "selected_angle_id": "a1",
+               "candidate_angles": [{"id": "a1", "label": "告别是重复练习的死亡"}],
+               "core_question": "为什么告别让人麻木?",
+               "deep_meaning": "告别揭示人对失去的防御机制",
+               "reader_end_state": "读者理解自己的回避",
+               "key_tensions": ["想说与不说"]}
+    # English topic, Chinese discovery -> expected zh (was en -> false gate fail)
+    exp = resolve_language_for({"expected_language": "auto"},
+                               material="talk about failure",
+                               instruction="", meaning=meaning, default="auto")
+    assert exp == "zh"
+    # explicit wins
+    assert resolve_language_for({"expected_language": "en"}, "谈谈失败", "",
+                                meaning, "auto") == "en"
+    # source-grounded (no meaning): unchanged heuristic on material
+    assert resolve_language_for({"expected_language": "auto"}, "an English memo",
+                                "", None, "auto") == "en"
+
+
+def test_gate_message_maps_reasons_to_human_zh():
+    from workbench.engine.real import _gate_message
+    msg = _gate_message(["language mismatch: expected en, got zh",
+                         "length 1200 outside [350, 3000]"])
+    assert "语言与预期不符" in msg and "篇幅" in msg
+    assert _gate_message([]) == "未通过检查"
+    assert _gate_message(["refusal pattern"]) == "模型拒绝了这次写作"
+
+
+def test_hard_gates_allow_new_facts_skips_fidelity():
+    from app.gates import hard_gates
+    zh = ("2019年的冬天,他站起来说:“这么多年我们再没有提起那件事,谁也没有回头。”"
+          "站台上的灯一盏一盏灭了。") * 2
+    strict = hard_gates(zh, {"material": "告别", "instruction": "",
+                             "target_length": 0, "expected_language": "zh"})
+    assert strict["checks"]["factual_fidelity"] is False       # numerals/quote
+    loose = hard_gates(zh, {"material": "告别", "instruction": "",
+                            "target_length": 0, "expected_language": "zh",
+                            "allow_new_facts": True})
+    assert loose["checks"]["factual_fidelity"] is True
+    assert loose["functional_failure"] is False
+
+
+# ---- T1: SSE must not replay the previous run when a second one starts ----
+
+def test_progress_waits_for_new_run_not_previous_replay():
+    from workbench.progress import BROKER
+    c = _client()
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})           # run 1 closes its channel
+    old_text = c.get(f"/tasks/{tid}").json()["draft"]["working_content"][:20]
+
+    def second_run():
+        time.sleep(0.3)
+        ch = BROKER.channel(tid, reset=True)
+        ch.emit("stage", {"stage": "writing"})
+        ch.emit("delta", {"t": "SECOND-RUN-MARKER"})
+        ch.close()
+    threading.Thread(target=second_run, daemon=True).start()
+    with c.stream("GET", f"/tasks/{tid}/progress") as r:
+        body = "".join(r.iter_text())
+    assert "SECOND-RUN-MARKER" in body
+    assert old_text not in body                          # no leak of run 1
+
+
+def test_progress_still_replays_for_late_subscriber():
+    c = _client()
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    with c.stream("GET", f"/tasks/{tid}/progress") as r:  # no new run coming
+        body = "".join(r.iter_text())
+    assert "event: delta" in body and "event: eof" in body
+
+
+# ---- T1: non-EngineError must not strand status='generating' ----
+
+class ExplodingEngine(MockWritingEngine):
+    def generate(self, **kw):
+        raise RuntimeError("connection reset")
+
+
+def test_ungrouped_generate_error_resets_status_to_failed():
+    c = _client(ExplodingEngine())
+    tid = qw_task(c)
+    r = c.post(f"/tasks/{tid}/generate", json={})
+    assert r.status_code == 500 and r.json()["error"]["retryable"] is True
+    assert c.get(f"/tasks/{tid}").json()["status"] == "failed"
+
+
+# ---- T1: stale-generating escape must run before param writes touch updated_at ----
+
+def test_stale_generating_allows_retry_despite_param_overrides():
+    svc = _svc()
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    # force a stale 'generating' row (6 min old)
+    old = "2000-01-01T00:00:00+00:00"
+    svc.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
+                (old, tid))
+    r = c.post(f"/tasks/{tid}/generate",
+               json={"immersion": "high", "target_length": 700})
+    assert r.status_code == 200                          # retry allowed
+
+
+# ---- T2: regenerate/rediscover must honor the concurrency guard ----
+
+def test_regenerate_and_rediscover_guard_concurrency():
+    svc = _svc()
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    fresh = "2999-01-01T00:00:00+00:00"                  # future ts => age<300
+    svc.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
+                (fresh, tid))
+    assert c.post(f"/tasks/{tid}/regenerate",
+                  json={"preserve_angle": True}).status_code == 409
+    assert c.post(f"/tasks/{tid}/rediscover-angle", json={}).status_code == 409
+
+
+# ---- T2: checkpoint dedupe (no version spam when content unchanged) ----
+
+def test_checkpoint_dedupes_unchanged_content():
+    c = _client()
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    v1 = c.post(f"/tasks/{tid}/checkpoint").json()["version_id"]
+    r2 = c.post(f"/tasks/{tid}/checkpoint").json()
+    assert r2.get("deduped") is True and r2["version_id"] == v1
+    n = len(c.get(f"/tasks/{tid}").json()["draft"]["versions"])
+    c.post(f"/tasks/{tid}/checkpoint")
+    assert len(c.get(f"/tasks/{tid}").json()["draft"]["versions"]) == n
+
+
+# ---- T2: target_length validated at every entry point ----
+
+def test_target_length_validated_at_create_and_patch():
+    c = _client()
+    assert c.post("/tasks", json={"input_mode": "topic_only", "topic": "x",
+        "config": {"target_length": 9999}}).status_code == 400
+    tid = qw_task(c)
+    assert c.patch(f"/tasks/{tid}", json={
+        "config": {"target_length": -5}}).status_code == 400
+    assert c.patch(f"/tasks/{tid}", json={
+        "config": {"target_length": "many"}}).status_code == 400
+    assert c.patch(f"/tasks/{tid}", json={
+        "config": {"target_length": 600}}).status_code == 200
+
+
+# ================= regression: T3 sweep (2026-08-31) =======================
+
+def test_settings_view_reports_running_adapter_not_file():
+    from workbench import settings as ws
+    ws.save({"engine": "real"})                  # file says real...
+    c = _client()                                # ...but service runs mock
+    assert c.get("/settings").json()["engine"] == "mock"
+
+
+def test_update_settings_rolls_back_when_engine_build_fails(monkeypatch):
+    from workbench import service as svc_mod
+    from workbench import settings as ws
+    calls = {"n": 0}
+
+    def flaky_engine():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("bad base_url")
+        return MockWritingEngine()
+
+    monkeypatch.setattr(svc_mod, "get_engine", flaky_engine)
+    svc = Service(Database(":memory:"), engine=MockWritingEngine())
+    c = TestClient(create_app(svc))
+    r = c.post("/settings", json={"engine": "real"})
+    assert r.status_code == 500 and r.json()["error"]["code"] == "SETTINGS_FAILED"
+    assert ws.load()["engine"] == "mock"          # rolled back on disk
+    assert svc.engine.name == "mock"              # and in memory
+
+
+def test_generate_can_clear_instruction():
+    c = _client()
+    tid = qw_task(c, instruction="写父亲")
+    c.post(f"/tasks/{tid}/generate", json={"instruction": ""})
+    assert c.get(f"/tasks/{tid}").json()["instruction"] == ""
+
+
+def test_mock_simulate_repair_emits_reset():
+    eng = MockWritingEngine()
+    eng.simulate_repair = True
+    events = []
+    res = eng.generate(material="m", instruction="i", task_type="essay",
+                       config={},
+                       on_delta=lambda d, r=False: events.append((d, r)))
+    assert ("", True) in events                       # repair reset signal fired
+    # text after the last reset reconstructs the final draft
+    last = max(i for i, (d, r) in enumerate(events) if r)
+    assert "".join(d for d, r in events[last + 1:] if not r) == res.text
+
+
+def test_pending_patches_survive_reload_with_before_after():
+    c = _client()
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    task = c.get(f"/tasks/{tid}").json()
+    r = c.post(f"/tasks/{tid}/patch", json={
+        "base_version_id": task["draft"]["current_version_id"],
+        "selection": {"paragraph_start": 1, "paragraph_end": 1},
+        "instruction": "shorter", "locks": {}})
+    assert r.status_code == 200
+    pend = c.get(f"/tasks/{tid}").json()["pending_patches"]
+    assert pend and pend[0]["before"] and pend[0]["after"]
+    assert pend[0]["patch_id"] == r.json()["patch_id"]
+
+
+def test_test_connection_allows_empty_key_for_local_base():
+    c = _client()
+    r = c.post("/settings/test", json={
+        "base_url": "http://127.0.0.1:9/v1", "model": "whatever", "api_key": ""})
+    body = r.json()
+    assert body.get("ok") is False
+    assert "API key is empty" not in str(body.get("error", ""))  # connection err instead

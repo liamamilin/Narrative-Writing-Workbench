@@ -233,3 +233,51 @@ the user requested token-level streaming. Additive, default-off plumbing:
 All existing callers pass no `on_delta` → behavior bit-identical (173 tests
 pass, 4 new). Verified end-to-end on the real provider: 19 delta events,
 reconstruction byte-identical to the persisted draft.
+
+## Addendum (2026-08-31): in-task param fixes, streaming race & gate sweep
+
+User-reported: (1) editing intent/immersion/explicitness/length then
+Regenerate had no effect; (2) streaming felt poor; (3) a confusing
+"did not pass a safety check" failure. Root causes and fixes:
+
+Params (three layers): frontend sent `null` on generate → now sends the five
+Goal-panel controls; `/generate` ignored a body → `_apply_param_overrides`
+persists+validates (dials low/med/high, length 100–5000) before running;
+`real.py` consumed only target_length → `_dial_block` now feeds the three
+experience dials into the architect+writer instruction.
+
+Streaming: SSE `/progress` raced the POST (client connects before status
+flips to generating) → 2s grace loop that follows the channel-object swap on
+reset; `_delta_stream` batch 24→8 chars; reconnect no longer doubles text
+(seq dedupe in `openProgress`); a typewriter pacing layer smooths fast
+providers.
+
+Gate (T0, engine touch — explicit user request): the hard gate resolved
+expected_language from the *seed topic*, so an English topic with Chinese
+discovery prose failed `expected_language_match` (the "safety check" error).
+`real.py:resolve_language_for` now probes the Meaning Discovery text for
+topic-led pieces; `app/gates.py:hard_gates` gains an opt-in
+`allow_new_facts` flag (default False → bit-identical for source-grounded
+runs) so topic-led fiction isn't failed for invented numerals/quotes/names.
+Gate failures now log full `failure_reasons` and surface a human zh message.
+
+Robustness: non-`EngineError` (transport) no longer strands status='generating'
+(→ failed + SSE error); stale-generating retry runs before param writes;
+regenerate/rediscover share the concurrency guard; autosave flushes +
+deduped checkpoint before a destructive regenerate; diffHtml drains tails;
+target_length validated at create/patch/override.
+
+Spec note: engine freeze carries the "unless explicitly requested" exception
+(AGENTS.md); the two `app/` edits (gates.py flag, and the earlier streaming
+plumbing) are additive and default-preserving. 188 tests pass (10 new).
+Verified on the real provider: English topic + auto language + Chinese prose
+→ status ready, 97 delta events, all four stages.
+
+Same sweep also cleared the T3 tier: runGeneration now guards against
+navigation mid-run (tid capture), settings report the running adapter name
+and roll back to mock on a failed hot-swap, an explicit empty instruction
+clears it, MockWritingEngine gains an opt-in `simulate_repair` reset signal,
+test_connection accepts empty keys for local providers, pending patches
+(before/after) survive reload, AUTOSTART is bound to its target task, the
+writing-map tab handles errors, and cancelling the fact-heavy confirm opens
+the created task instead of orphaning it. 194 tests pass (16 new).

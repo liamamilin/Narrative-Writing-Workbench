@@ -176,3 +176,26 @@ Home → Start with an idea → 为什么罗马帝国灭亡？ → Write
 - Factuality: topic_only doesn't claim grounding; warning; source transition ✓
 - Failure safety: discovery/writer failure leaves no broken draft, retry ✓
 - Original source-grounded flow unchanged ✓
+
+## Post-delivery hardening (2026-08-31)
+
+Two user-facing bug rounds after Q0-Q9 sign-off; details in
+`QUICK_WRITE_IMPLEMENTATION_REVIEW.md` addenda (2026-08-30 / 2026-08-31).
+
+Round A (reported bugs): in-task edits to intent/immersion/explicitness/
+target length now reach the engine end-to-end (frontend body →
+`_apply_param_overrides` persistence → `_dial_block` prompt injection);
+token streaming fixed (SSE start race, seq dedupe, typewriter pacing).
+
+Round B (audit sweep, 16 items): language gate resolves from the discovery
+text for topic-led pieces (English topic + Chinese prose no longer fails
+the "safety check"); gate failures log reasons and surface human-readable
+zh messages; `allow_new_facts` opt-in in `app/gates.py` (default off,
+bit-identical for source-grounded runs); non-EngineError no longer strands
+tasks in 'generating'; regenerate/rediscover share the concurrency guard;
+autosave flush + deduped checkpoint before destructive regenerate; diff
+tails; unified target_length validation; settings rollback on failed
+hot-swap; pending-patch restore; navigation guards.
+
+Suite: **194 passed** (16 new regression tests). Verified end-to-end on the
+real provider (English topic, auto language, 97 delta events, status ready).

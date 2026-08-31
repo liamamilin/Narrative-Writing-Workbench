@@ -10,7 +10,10 @@ Workbench product interface. Engine internals stay behind this class.
 from __future__ import annotations
 
 import json
+import logging
 import os
+
+log = logging.getLogger("workbench.engine.real")
 
 from app.config import Config
 from app.gates import hard_gates, resolve_expected_language
@@ -122,19 +125,19 @@ class RealWritingEngine:
 
     def generate(self, *, material, instruction, task_type, config,
                  meaning=None, emit=None, on_delta=None) -> GenerateResult:
-        expected = resolve_expected_language(
-            {"expected_language": config.get("expected_language"),
-             "instruction": instruction, "material": material},
-            self.config.expected_language)
+        allow_new_facts = bool(meaning) or not bool(
+            config.get("locks", {}).get("facts", True))
+        expected = resolve_language_for(config, material, instruction,
+                                        meaning, self.config.expected_language)
         constraints = {
             "factual_fidelity": bool(config.get("locks", {}).get("facts", True))
                                 and not meaning,
-            "allow_new_facts": bool(meaning) or not bool(
-                config.get("locks", {}).get("facts", True)),
+            "allow_new_facts": allow_new_facts,
             "target_length": config.get("target_length"),
         }
         if meaning:
             instruction = _compose_topic_instruction(instruction, meaning)
+        instruction = _dial_block(config) + (instruction or "")
         engine_type = _TASK_TYPE_MAP.get(task_type, "narrative_commentary")
         if emit:
             emit("stage", {"stage": "structure"})
@@ -155,9 +158,15 @@ class RealWritingEngine:
         if lw.functional_failure or not (lw.text or "").strip():
             raise GenerationFailed("The draft could not be generated correctly.")
         gate = hard_gates(lw.text, {"material": material, "instruction": instruction,
-                                    "target_length": target, "expected_language": expected})
+                                    "target_length": target,
+                                    "expected_language": expected,
+                                    "allow_new_facts": allow_new_facts})
         if gate["functional_failure"]:
-            raise GenerationFailed("The draft did not pass a safety check. Please retry.")
+            log.warning("gate failure task=%s reasons=%s", task_type,
+                        gate["failure_reasons"])
+            raise GenerationFailed(
+                f"草稿未通过安全检查:{_gate_message(gate['failure_reasons'])}。"
+                "请调整意图或目标字数后重试。")
         return GenerateResult(text=lw.text, plan={"wir": wir, "meaning": meaning})
 
     # -------------------------------------------------------------- review ----
@@ -255,6 +264,69 @@ def _load_product_patch_prompt(prompts_dir):
 def _load_prompt(prompts_dir, name):
     from app.prompts import load_prompt
     return load_prompt(prompts_dir, name)
+
+
+_DIAL_GUIDANCE = {
+    ("immersion", "high"): "immersion high: stay inside scenes — render moments through action, dialogue, sensory detail; minimize summary.",
+    ("immersion", "medium"): "immersion medium: alternate between scene presentation and compact summary.",
+    ("immersion", "low"): "immersion low: summary and exposition are acceptable; do not dramatize every beat into a scene.",
+    ("explicitness", "high"): "explicitness high: the writer's point may be stated directly at key moments.",
+    ("explicitness", "medium"): "explicitness medium: state the point plainly only where the reader would otherwise get lost.",
+    ("explicitness", "low"): "explicitness low: do not state the theme; let meaning emerge from images, detail and structure.",
+    ("intensity", "high"): "intensity high: emotional stakes are strong and present; language may run hot.",
+    ("intensity", "medium"): "intensity medium: moderate emotional charge, with variation.",
+    ("intensity", "low"): "intensity low: restraint — understated language, emotion carried by concrete details, not stated.",
+}
+
+
+def _meaning_text(meaning: dict) -> str:
+    block = meaning_to_wir_block(meaning)
+    return "\n".join(str(v) for v in block.values() if v)
+
+
+def resolve_language_for(config: dict, material: str, instruction: str,
+                        meaning: dict | None, default: str) -> str:
+    """Topic-led pieces gate on the discovery language, not the seed topic."""
+    probe_instruction = instruction or ""
+    if meaning:
+        probe_instruction += "\n" + _meaning_text(meaning)
+    return resolve_expected_language(
+        {"expected_language": config.get("expected_language"),
+         "instruction": probe_instruction, "material": material}, default)
+
+
+_GATE_REASON_ZH = [
+    ("language mismatch", "语言与预期不符"),
+    ("output too short", "输出过短"),
+    ("length", "篇幅与目标字数差距过大"),
+    ("refusal", "模型拒绝了这次写作"),
+    ("format leakage", "正文混入了内部格式"),
+    ("unsupported numerals", "出现了素材中没有的数字"),
+    ("unsupported latin names", "出现了素材中没有的英文专名"),
+    ("unsupported long quotation", "出现了素材中没有的长引用"),
+]
+
+
+def _gate_message(reasons: list[str]) -> str:
+    out = []
+    for r in reasons or []:
+        for key, zh in _GATE_REASON_ZH:
+            if key in r and zh not in out:
+                out.append(zh)
+                break
+    return "、".join(out) or "未通过检查"
+
+
+def _dial_block(config: dict) -> str:
+    lines = []
+    for key in ("immersion", "explicitness", "intensity"):
+        hint = _DIAL_GUIDANCE.get((key, (config or {}).get(key)))
+        if hint:
+            lines.append(f"- {hint}")
+    if not lines:
+        return ""
+    return ("## Experience settings (set deliberately by the writer; honor all three)\n\n"
+            + "\n".join(lines) + "\n\n")
 
 
 def _compose_topic_instruction(instruction: str, meaning: dict) -> str:

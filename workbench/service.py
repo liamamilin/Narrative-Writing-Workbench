@@ -11,7 +11,9 @@ Golden rules enforced here:
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from datetime import datetime, timezone
 
 from . import meaning_schema
@@ -20,6 +22,8 @@ from .db import Database, new_id
 from .engine import (EngineError, GenerationFailed, LockConflict,
                      get_engine)
 from .progress import BROKER
+
+log = logging.getLogger("workbench.service")
 
 TASK_TYPES = {"fiction_scene", "narrative_analysis", "character_analysis",
               "essay", "emotional_retelling", "free_writing"}
@@ -54,9 +58,15 @@ def detect_fact_heavy(topic: str) -> bool:
 
 
 def _delta_stream(ch):
-    """Batch engine text deltas into SSE 'delta' events (flush every ~24 chars)."""
+    """Batch engine text deltas into SSE 'delta' events.
+
+    Small batches (>=8 chars) keep the token-by-token feel; a 0.3s age
+    flush prevents a partial buffer from stalling when the model pauses
+    (e.g. between paragraphs).
+    """
     buf = []
     size = [0]
+    last = [time.monotonic()]
 
     def cb(delta, reset=False):
         if reset:
@@ -66,10 +76,11 @@ def _delta_stream(ch):
             return
         buf.append(delta)
         size[0] += len(delta)
-        if size[0] >= 24:
+        if size[0] >= 8 or (time.monotonic() - last[0]) >= 0.3:
             ch.emit("delta", {"t": "".join(buf)})
             buf.clear()
             size[0] = 0
+            last[0] = time.monotonic()
 
     def flush():
         if buf:
@@ -91,6 +102,13 @@ class ApiError(Exception):
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _validate_target_length(value) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or not 100 <= value <= 5000:
+        raise ApiError("VALIDATION", "target_length must be an integer 100-5000.")
 
 
 def paragraphs(content: str) -> list[str]:
@@ -213,6 +231,7 @@ class Service:
             value = cfg.get(key)
             if value and value not in EXPERIENCE_LEVELS:
                 raise ApiError("VALIDATION", f"Invalid {value} for {key}.")
+        _validate_target_length(cfg.get("target_length"))
         expected_language = cfg.get("expected_language")
         if expected_language not in (None, "auto", "zh", "en"):
             raise ApiError("VALIDATION", "expected_language must be zh, en or auto.")
@@ -273,6 +292,7 @@ class Service:
             task["draft"] = draft
             task["pending_patches"] = [
                 {"patch_id": p["id"], "instruction": p["instruction"],
+                 "before": p["before_text"] or "", "after": p["after_text"] or "",
                  "selection": json.loads(p["selection_json"])}
                 for p in self.db.q(
                     "SELECT * FROM proposed_patches WHERE draft_id=? AND status='proposed'",
@@ -295,6 +315,38 @@ class Service:
             "locks": cfg.get("locks") or {},
             "constraints": cfg.get("constraints") or {},
         }
+
+    def _apply_param_overrides(self, task: dict, payload: dict) -> dict:
+        """Persist intent/experience/length edits sent with a generate call.
+
+        The Goal panel edits live in the DOM; without this they never reach
+        the DB and regeneration silently reuses the last-saved config. Only
+        keys actually present in the payload are written (partial updates).
+        """
+        tid = task["id"]
+        patch: dict = {}
+        if "instruction" in payload:
+            instr = (payload["instruction"] or "").strip()
+            if instr != (task["instruction"] or ""):   # explicit "" clears too
+                patch["instruction"] = instr
+        cfg: dict = {}
+        for key in ("immersion", "explicitness", "intensity"):
+            if key in payload and payload[key]:
+                if payload[key] not in EXPERIENCE_LEVELS:
+                    raise ApiError("VALIDATION", f"Invalid {key} value.")
+                cfg[key] = payload[key]
+        if "target_length" in payload and payload["target_length"] is not None:
+            try:
+                tl = int(payload["target_length"])
+            except (TypeError, ValueError):
+                raise ApiError("VALIDATION", "target_length must be an integer.")
+            _validate_target_length(tl)
+            cfg["target_length"] = tl
+        if cfg:
+            patch["config"] = cfg
+        if patch:
+            return self.update_task(tid, patch)
+        return task
 
     def _material(self, task: dict) -> str:
         parts = [s["content"] for s in task["sources"]
@@ -334,6 +386,7 @@ class Service:
             for key in ("immersion", "explicitness", "intensity"):
                 if merged[key] and merged[key] not in EXPERIENCE_LEVELS:
                     raise ApiError("VALIDATION", f"Invalid {key} value.")
+            _validate_target_length(merged["target_length"])
             self.db.exec(
                 "UPDATE writing_configs SET immersion=?,explicitness=?,intensity=?"
                 ",target_length=?,locks_json=?,constraints_json=? WHERE task_id=?",
@@ -368,14 +421,23 @@ class Service:
 
     # ---------------------------------------------------------- generate ----
 
-    def generate(self, tid: str) -> dict:
-        task = self.get_task(tid)
-        if task["status"] == "generating":
-            age = (datetime.now(timezone.utc)
-                   - datetime.fromisoformat(task["updated_at"])).total_seconds()
-            if age < 300:
-                raise ApiError("GENERATING", "Generation is already running.", 409)
-            # stale generating flag (client/server died): allow retry
+    def _guard_not_generating(self, task: dict) -> None:
+        """Reject concurrent generation; allow retry past a 5-min stale flag.
+
+        Must run BEFORE any param persistence: update_task refreshes
+        updated_at, which would reset the staleness clock forever.
+        """
+        if task["status"] != "generating":
+            return
+        age = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(task["updated_at"])).total_seconds()
+        if age < 300:
+            raise ApiError("GENERATING", "Generation is already running.", 409)
+        # stale generating flag (client/server died): allow retry
+
+    def generate(self, tid: str, payload: dict | None = None) -> dict:
+        self._guard_not_generating(self.get_task(tid))
+        task = self._apply_param_overrides(self.get_task(tid), payload or {})
         ch = BROKER.channel(tid, reset=True)
         ch.emit("stage", {"stage": "queued"})
         material = self._material(task)
@@ -418,6 +480,17 @@ class Service:
                 emit("error", {"message": str(exc) or "No angle found."})
             raise ApiError("DISCOVERY_FAILED",
                            str(exc) or "We couldn't find a strong angle. Please retry.",
+                           500, retryable=True) from exc
+        except Exception as exc:            # transport/ungrouped: never stick
+            log.exception("ungrouped discovery error for %s", tid)
+            self._persist_discovery(tid, task["topic"], None, "failed",
+                                    {"error": f"{type(exc).__name__}: {exc}"})
+            self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?",
+                         (now(), tid))
+            if emit:
+                emit("error", {"message": "Discovery failed."})
+            raise ApiError("DISCOVERY_FAILED",
+                           f"寻找角度失败:{type(exc).__name__} — 请重试。",
                            500, retryable=True) from exc
         errors = meaning_schema.validate_meaning(data)
         if errors:
@@ -491,6 +564,14 @@ class Service:
             emit("error", {"message": str(exc) or "Generation failed."})
             raise ApiError("GENERATION_FAILED",
                            str(exc) or "The draft could not be generated correctly.",
+                           500, retryable=True) from exc
+        except Exception as exc:            # transport errors, poisoned config…
+            log.exception("ungrouped generation error for %s", tid)
+            self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?",
+                         (now(), tid))
+            emit("error", {"message": "Generation failed."})
+            raise ApiError("GENERATION_FAILED",
+                           f"生成失败:{type(exc).__name__} — 请重试或调整参数。",
                            500, retryable=True) from exc
         ts = now()
         plan_id = new_id("plan")
@@ -668,6 +749,11 @@ class Service:
         draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
         if not draft:
             raise ApiError("NO_DRAFT", "Generate a draft first.", 409)
+        if draft["current_version_id"]:
+            cur = self.db.q1("SELECT content FROM versions WHERE id=?",
+                             (draft["current_version_id"],))
+            if cur and cur["content"] == draft["working_content"]:
+                return {"version_id": draft["current_version_id"], "deduped": True}
         ts = now()
         vid = new_id("ver")
         self.db.exec("INSERT INTO versions VALUES(?,?,?,?,?,?,?)",
@@ -690,13 +776,14 @@ class Service:
 
     # ------------------------------------------------------ retry paths ----
 
-    def rediscover_angle(self, tid: str) -> dict:
+    def rediscover_angle(self, tid: str, payload: dict | None = None) -> dict:
         """Try Another Angle: rerun Meaning Discovery/selection, then generate.
 
         Distinct code path from regenerate(): discovery runs again with an
         avoid-list of every previously selected angle.
         """
-        task = self.get_task(tid)
+        self._guard_not_generating(self.get_task(tid))
+        task = self._apply_param_overrides(self.get_task(tid), payload or {})
         if task.get("input_mode") != "topic_only":
             raise ApiError("VALIDATION",
                            "Angle retry is only for idea-based tasks.", 409)
@@ -712,7 +799,8 @@ class Service:
 
     def regenerate(self, tid: str, payload: dict) -> dict:
         """Rewrite Same Angle: preserve the selected meaning, rerun downstream."""
-        task = self.get_task(tid)
+        self._guard_not_generating(self.get_task(tid))
+        task = self._apply_param_overrides(self.get_task(tid), payload)
         if task.get("input_mode") != "topic_only":
             raise ApiError("VALIDATION",
                            "This rewrite applies only to idea-based tasks.", 409)
@@ -744,19 +832,30 @@ class Service:
 
     def settings_view(self) -> dict:
         from .settings import view
-        return {"engine": self.engine.name, **view()}
+        return {**view(), "engine": self.engine.name}
 
     def update_settings(self, payload: dict) -> dict:
-        from .settings import apply_env, save, view
+        from .settings import SETTINGS_PATH, apply_env, load, save, view
         allowed = ("engine", "api_key", "base_url", "model",
                    "timeout_seconds", "writer_temperature")
         patch = {k: payload[k] for k in allowed if k in payload}
         if patch.get("engine") not in (None, "mock", "real"):
             raise ApiError("VALIDATION", "engine must be mock or real.")
+        previous = load()
         saved = save(patch)
         apply_env(saved)
-        self.engine = get_engine()      # hot-swap the adapter
-        return {"engine": self.engine.name, **view(saved)}
+        try:
+            self.engine = get_engine()      # hot-swap the adapter
+        except Exception as exc:
+            # never leave env/file switched to a config the server can't run
+            SETTINGS_PATH.write_text(
+                json.dumps({**previous, "engine": "mock"}, ensure_ascii=False),
+                encoding="utf-8")
+            apply_env(load())
+            self.engine = get_engine()
+            raise ApiError("SETTINGS_FAILED",
+                           f"引擎切换失败(已回退到 mock):{exc}", 500) from exc
+        return {**view(saved), "engine": self.engine.name}
 
     def list_providers(self) -> list[dict]:
         return list(settings_mod.PROVIDERS)
@@ -800,7 +899,18 @@ class Service:
             from .settings import _model_from_config_yaml
             model = _model_from_config_yaml() or ""
         if not key:
-            return {"ok": False, "error": "API key is empty — fill it in first."}
+            # local servers (Ollama/LM Studio) accept any non-empty key;
+            # match fetch_models' behavior — the UI says "可留空" for them
+            from .settings import PROVIDERS, LOCAL_KEY_PLACEHOLDER
+            b = base.rstrip("/")
+            is_local = ("127.0.0.1" in b or "localhost" in b
+                        or any(p["base_url"] and
+                               b.startswith(p["base_url"].rstrip("/"))
+                               for p in PROVIDERS if not p["needs_key"]))
+            if is_local:
+                key = LOCAL_KEY_PLACEHOLDER
+            else:
+                return {"ok": False, "error": "API key is empty — fill it in first."}
         if not model:
             return {"ok": False, "error": "Model name is empty — fill it in first."}
         try:

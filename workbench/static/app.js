@@ -172,11 +172,13 @@ function quickWrite() {
       const d = await api("GET", `/tasks/${t.id}`);
       if (d.factuality_warning &&
           !confirm("This topic may depend on factual claims.\n\n" +
-                   "确定 = 用通用知识继续(文章不会假装引用来源)\n取消 = 留在本页,可先添加素材做更紧的落地。\n\n" +
-                   "OK = continue with general knowledge; Cancel = stay and add sources.")) {
-        btn.disabled = false; btn.textContent = "Write"; return;
+                   "确定 = 用通用知识继续(文章不会假装引用来源)\n取消 = 进入该任务,可先添加素材做更紧的落地。\n\n" +
+                   "OK = continue with general knowledge; Cancel = open the task and add sources.")) {
+        btn.disabled = false; btn.textContent = "Write";
+        location.hash = `#/tasks/${t.id}`;   // don't orphan the created task
+        return;
       }
-      AUTOSTART = true;
+      AUTOSTART = t.id;
       location.hash = `#/tasks/${t.id}`;
     } catch (e) {
       toast(e.message || "Could not start.", true);
@@ -463,16 +465,20 @@ async function workspace(tid) {
   await reloadTask();
   renderWorkspace();
   if (AUTOSTART) {
-    AUTOSTART = false;
-    if (!WS.draft && WS.task.input_mode === "topic_only") generateDraft();
+    if (AUTOSTART === tid) {
+      AUTOSTART = false;
+      if (!WS.draft && WS.task.input_mode === "topic_only") generateDraft();
+    } else AUTOSTART = false;   // navigated elsewhere first: drop, don't misfire
   }
 }
 
 async function reloadTask() {
   WS.task = await api("GET", `/tasks/${WS.tid}`);
   WS.draft = WS.task.draft;
+  WS.dirty = false;
   WS.versions = WS.draft ? WS.task.draft.versions : [];
-  WS.proposals = [];
+  WS.proposals = (WS.task.pending_patches || [])
+    .filter(p => p.after);   // restorable after reload/refactor
   WS.meaning = null;
   if (WS.task.input_mode === "topic_only") {
     try { WS.meaning = await api("GET", `/tasks/${WS.tid}/meaning`); }
@@ -517,9 +523,10 @@ function renderWorkspace() {
   renderSources(); renderCenter(); renderPanel();
   $("#tab-draft").onclick = () => { WS.view = "draft"; renderWorkspace(); };
   $("#tab-map").onclick = async () => {
-    WS.view = "map";
-    WS.map = await api("GET", `/tasks/${WS.tid}/writing-map`);
-    renderWorkspace();
+    try {
+      const m = await api("GET", `/tasks/${WS.tid}/writing-map`);
+      WS.map = m; WS.view = "map"; renderWorkspace();
+    } catch (e) { toast(e.message || "No writing map available yet.", true); }
   };
   $("#add-src-btn").onclick = async () => {
     const body = $("#add-src").value.trim(); if (!body) return;
@@ -820,51 +827,91 @@ function stepsView(steps, angle, errMsg) {
 
 function openProgress(tid, onUpdate) {
   let es;
-  const state = { steps: [], angle: "", error: "", live: "" };
+  const state = { steps: [], angle: "", error: "", live: "", shown: "", seq: -1 };
   try { es = new EventSource(`/tasks/${tid}/progress`); }
   catch (e) { return { close() {}, alive: () => false }; }
   const push = () => onUpdate(state);
-  es.addEventListener("stage", ev => {
-    const s = JSON.parse(ev.data).data.stage;
-    if (!state.steps.includes(s)) { state.steps.push(s); push(); }
+  // Reconnect safety: the server replays full history from seq 0 after any
+  // EventSource reconnect; without seq dedupe the live text doubles.
+  const handle = (kind, fn) => es.addEventListener(kind, ev => {
+    let e; try { e = JSON.parse(ev.data); } catch (_) { return; }
+    if (typeof e.seq === "number" && e.seq <= state.seq) return;
+    if (typeof e.seq === "number") state.seq = e.seq;
+    fn(e.data || {});
   });
-  es.addEventListener("delta", ev => {
-    const d = JSON.parse(ev.data).data;
-    if (d.reset) state.live = "";
+  // Typewriter pacing: fast providers can dump the whole draft in ~1s;
+  // reveal at a readable rate instead of flashing text onto the screen.
+  const iv = setInterval(() => {
+    const behind = state.live.length - state.shown.length;
+    if (behind <= 0) return;
+    state.shown = state.live.slice(
+      0, state.shown.length + Math.max(2, Math.ceil(behind * 0.12)));
+    onUpdate(state);
+  }, 40);
+  handle("stage", d => {
+    if (!state.steps.includes(d.stage)) { state.steps.push(d.stage); push(); }
+  });
+  handle("delta", d => {
+    if (d.reset) { state.live = ""; state.shown = ""; }
     else state.live = (state.live || "") + (d.t || "");
     push();
   });
-  es.addEventListener("angle", ev => {
+  handle("angle", d => {
     if (!state.steps.includes("structure")) state.steps.push("structure");
-    state.angle = JSON.parse(ev.data).data.selected_angle || "";
+    state.angle = d.selected_angle || "";
     push();
   });
-  es.addEventListener("error", ev => {
-    try { state.error = JSON.parse(ev.data).data.message || ""; } catch (e) {}
-    if (state.error) { push(); es.close(); }
+  handle("error", d => {
+    state.error = d.message || "";
+    if (state.error) { clearInterval(iv); push(); es.close(); }
   });
-  es.addEventListener("done", () => es.close());
-  es.addEventListener("eof", () => es.close());
+  es.addEventListener("done", () => { es.close(); });
+  es.addEventListener("eof", () => { es.close(); });
   return {
-    close() { es.close(); },
+    close() { clearInterval(iv); es.close(); },
     alive: () => state.steps.length > 0,
   };
+}
+
+function collectPanelParams() {
+  const g = (id) => $(id);
+  const p = {};
+  if (g("#p-instr")) p.instruction = g("#p-instr").value;
+  for (const k of ["immersion", "explicitness", "intensity"])
+    if (g(`#p-${k}`)) p[k] = g(`#p-${k}`).value;
+  if (g("#p-len")) {
+    const n = parseInt(g("#p-len").value, 10);
+    if (Number.isFinite(n)) p.target_length = n;
+  }
+  return p;
 }
 
 async function generateDraft() {
   if (GENERATING) return;
   if (WS.draft && !confirm("Generate a new draft? Your current draft stays safe in version history."))
     return;
-  await runGeneration("generate", null, "Draft ready — 第一稿已生成。");
+  await runGeneration("generate", collectPanelParams(), "Draft ready — 第一稿已生成。");
 }
 
 async function retryGeneration(endpoint, label, body) {
   if (GENERATING) return;
   if (!confirm("Your current draft stays safe in version history.继续?")) return;
-  await runGeneration(endpoint, body || null, label.replace("…", "") + " — done.");
+  await runGeneration(endpoint, { ...collectPanelParams(), ...(body || {}) },
+                      label.replace("…", "") + " — done.");
+}
+
+async function flushAutosave() {
+  // Persist any in-flight editor text before a destructive generation, and
+  // snapshot it as a checkpoint so "your draft is safe in version history"
+  // is actually true for edits made since the last version.
+  clearTimeout(WS.saveTimer); WS.saveTimer = null;
+  if (!WS.draft) return;
+  if (WS.dirty) { await saveDraft(); WS.dirty = false; }
+  try { await api("POST", `/tasks/${WS.tid}/checkpoint`); } catch (e) { /* non-fatal */ }
 }
 
 async function runGeneration(endpoint, body, okMsg) {
+  const myTid = WS.tid;
   GENERATING = true;
   WS.panelTab = "goal";
   if (!WS.draft) renderWorkspace();
@@ -877,9 +924,9 @@ async function runGeneration(endpoint, body, okMsg) {
     const el = $("#gb-steps"); if (el) el.innerHTML = stepsView(st.steps, st.angle, st.error);
     const lv = $("#gb-live");
     if (lv) {
-      const showing = st.live && st.steps.includes("writing");
+      const showing = st.shown && st.steps.includes("writing");
       lv.style.display = showing ? "block" : "none";
-      if (showing) { lv.textContent = st.live; lv.scrollTop = lv.scrollHeight; }
+      if (showing) { lv.textContent = st.shown; lv.scrollTop = lv.scrollHeight; }
     }
     const ti = $("#gb-title");
     if (ti) {
@@ -891,7 +938,7 @@ async function runGeneration(endpoint, body, okMsg) {
       } else ti.textContent = "Working…";
     }
   };
-  const prog = openProgress(WS.tid, render);
+  const prog = openProgress(myTid, render);
   const timer = setInterval(() => {
     if (prog.alive()) return;             // real events win; rotate only as fallback
     i = Math.min(i + 1, STG.length - 1);
@@ -902,27 +949,34 @@ async function runGeneration(endpoint, body, okMsg) {
     const time = $("#gb-time");
     if (time) time.textContent = `已用时 ${Math.round((Date.now() - t0) / 1000)} 秒`;
   }, 1000);
+  const stillHere = () => WS.tid === myTid;
   try {
-    await api("POST", `/tasks/${WS.tid}/${endpoint}`, body);
-    await reloadTask();
-    WS.view = "draft"; renderWorkspace();
-    toast(okMsg);
+    await api("POST", `/tasks/${myTid}/${endpoint}`, body);
+    if (!stillHere()) { toast("Generation finished — open the task to view it."); }
+    else {
+      await reloadTask();
+      WS.view = "draft"; renderWorkspace();
+      toast(okMsg);
+    }
   } catch (e) {
-    renderWorkspace();  // clears banner, redraws current draft intact
-    const host = $("#center-body") || $("#app");
-    host?.insertAdjacentHTML?.("afterbegin",
-      `<div class="card" style="border-color:var(--warn)">
-        <b style="color:var(--warn)">生成失败 — 你的现有正文没有被改动</b>
-        <p class="small">${esc(e.message || "The draft could not be generated correctly.")}</p>
-        <button class="primary" id="gen-retry" data-tip="再试一次;现有正文与历史版本不受影响">重试 Retry</button></div>`);
-    const r = $("#gen-retry");
-    if (r) r.onclick = () => runGeneration(endpoint, body, okMsg);
-    toast(e.message || "Generation failed — your current draft is unchanged.", true);
+    if (!stillHere()) { toast(e.message || "Generation failed.", true); }
+    else {
+      renderWorkspace();  // clears banner, redraws current draft intact
+      const host = $("#center-body") || $("#app");
+      host?.insertAdjacentHTML?.("afterbegin",
+        `<div class="card" style="border-color:var(--warn)">
+          <b style="color:var(--warn)">生成失败 — 你的现有正文没有被改动</b>
+          <p class="small">${esc(e.message || "The draft could not be generated correctly.")}</p>
+          <button class="primary" id="gen-retry" data-tip="再试一次;现有正文与历史版本不受影响">重试 Retry</button></div>`);
+      const r = $("#gen-retry");
+      if (r) r.onclick = () => runGeneration(endpoint, body, okMsg);
+      toast(e.message || "Generation failed — your current draft is unchanged.", true);
+    }
   } finally {
     prog.close();
     clearInterval(timer); clearInterval(tick);
     GENERATING = false;
-    genBanner(false);
+    if (stillHere()) genBanner(false);
   }
 }
 
@@ -1037,6 +1091,12 @@ function diffHtml(a, b, flip = false) {
     } else {
       if (flip) out += `<div class="dline add">${esc(bl[j])}</div>`; j++;
     }
+  }
+  while (i < al.length) {                       // drain tail: deletions at end
+    if (!flip) out += `<div class="dline del">${esc(al[i])}</div>`; i++;
+  }
+  while (j < bl.length) {                       // drain tail: additions at end
+    if (flip) out += `<div class="dline add">${esc(bl[j])}</div>`; j++;
   }
   return out || '<span class="muted">(identical)</span>';
 }

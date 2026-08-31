@@ -106,20 +106,21 @@ def hard_gates(text: str | None, case: dict) -> dict:
 
     material = case.get("material") or ""
     fidelity_ok = True
-    new_digits = set(DIGITS.findall(body)) - set(DIGITS.findall(material))
-    if new_digits:
-        fidelity_ok = False
-        reasons.append(f"unsupported numerals: {sorted(new_digits)[:5]}")
-    new_names = (set(CAPITALIZED.findall(body)) - set(CAPITALIZED.findall(material))
-                 - LATIN_STOPLIST)
-    if new_names:
-        fidelity_ok = False
-        reasons.append(f"unsupported latin names: {sorted(new_names)[:5]}")
-    long_quotes = [q.strip() for q in QUOTE_SPANS.findall(body)]
-    fabricated = [q for q in long_quotes if q not in material]
-    if fabricated:
-        fidelity_ok = False
-        reasons.append(f"unsupported long quotation: {fabricated[0][:30]}…")
+    if not case.get("allow_new_facts"):
+        new_digits = set(DIGITS.findall(body)) - set(DIGITS.findall(material))
+        if new_digits:
+            fidelity_ok = False
+            reasons.append(f"unsupported numerals: {sorted(new_digits)[:5]}")
+        new_names = (set(CAPITALIZED.findall(body)) - set(CAPITALIZED.findall(material))
+                     - LATIN_STOPLIST)
+        if new_names:
+            fidelity_ok = False
+            reasons.append(f"unsupported latin names: {sorted(new_names)[:5]}")
+        long_quotes = [q.strip() for q in QUOTE_SPANS.findall(body)]
+        fabricated = [q for q in long_quotes if q not in material]
+        if fabricated:
+            fidelity_ok = False
+            reasons.append(f"unsupported long quotation: {fabricated[0][:30]}…")
 
     leaked = [m for m in LEAK_MARKERS if m in body]
     leakage_ok = not leaked

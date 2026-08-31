@@ -82,16 +82,16 @@ def create_app(service: Service | None = None) -> FastAPI:
                                      body.get("content", ""))
 
     @app.post("/tasks/{task_id}/generate")
-    def generate(task_id: str):
-        return svc().generate(task_id)
+    def generate(task_id: str, body: dict | None = None):
+        return svc().generate(task_id, body or {})
 
     @app.get("/tasks/{task_id}/meaning")
     def meaning(task_id: str):
         return svc().meaning_summary(task_id)
 
     @app.post("/tasks/{task_id}/rediscover-angle")
-    def rediscover_angle(task_id: str):
-        return svc().rediscover_angle(task_id)
+    def rediscover_angle(task_id: str, body: dict | None = None):
+        return svc().rediscover_angle(task_id, body or {})
 
     @app.post("/tasks/{task_id}/regenerate")
     def regenerate(task_id: str, body: dict | None = None):
@@ -105,39 +105,51 @@ def create_app(service: Service | None = None) -> FastAPI:
         then follows live until the channel closes.
         """
         svc().get_task(task_id)  # 404 guard
+        # Two situations involve a *closed* channel with events:
+        #  (a) a second run is about to start (client opens SSE a few ms
+        #      before POST resets the channel) -> we must NOT replay the
+        #      previous run; wait for the swap;
+        #  (b) a late subscriber after completion -> replay is desired.
+        # Distinguish by watching for the channel object to change; if no
+        # new run appears within the grace window, fall through to replay.
         ch = BROKER.channel(task_id)
-        if not ch.events and not ch.closed:
-            status = svc().get_task(task_id)["status"]
-            if status != "generating":
-                async def _eof():
-                    yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
-                return StreamingResponse(_eof(), media_type="text/event-stream",
-                                         headers={"Cache-Control": "no-cache"})
+        for _ in range(20):
+            cur = BROKER.channel(task_id)
+            if cur is not ch:
+                ch = cur
+            if not ch.closed and (ch.events or
+                                  svc().get_task(task_id)["status"] == "generating"):
+                break
+            time.sleep(0.1)
+        if not ch.events and svc().get_task(task_id)["status"] != "generating":
+            async def _eof():
+                yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
+            return StreamingResponse(_eof(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache"})
 
         def gen():
-            idx = 0
-            idle = 0.0
+            cur, idx = ch, 0
+            deadline = time.monotonic() + 300  # cap on a stuck channel
             while True:
-                with ch.cond:
-                    while idx >= len(ch.events) and not ch.closed:
-                        ch.cond.wait(0.5)
-                        idle += 0.5
-                        if idle > 300:  # 5-min cap on a stuck channel
-                            return
-                        break
-                    batch = ch.events[idx:]
-                    idx = len(ch.events)
-                    closed = ch.closed
-                if not batch:
-                    if closed:
-                        yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
-                        return
-                    continue
-                idle = 0.0
+                latest = BROKER.channel(task_id)
+                if latest is not cur:          # new run reset the channel
+                    cur, idx = latest, 0
+                with cur.cond:
+                    cur.cond.wait_for(
+                        lambda: idx < len(cur.events) or cur.closed
+                        or BROKER.channel(task_id) is not cur,
+                        timeout=0.5)
+                    batch = cur.events[idx:]
+                    idx = len(cur.events)
+                    closed = cur.closed
                 for ev in batch:
                     yield sse_format(ev)
-                if closed and idx >= len(ch.events):
+                if BROKER.channel(task_id) is not cur:
+                    continue                   # swapped mid-wait: follow the new run
+                if closed and idx >= len(cur.events):
                     yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
+                    return
+                if time.monotonic() > deadline:
                     return
 
         headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
