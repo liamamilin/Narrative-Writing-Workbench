@@ -67,6 +67,7 @@ class ArchitectAgent:
         instruction: str,
         task_type: str,
         constraints: dict | None = None,
+        on_delta=None,
     ) -> StageResult:
         return structured_call(
             self.client,
@@ -75,4 +76,5 @@ class ArchitectAgent:
             system_prompt=self.system_prompt(),
             user_message=self.build_user_message(material, instruction, task_type, constraints),
             validator=self.schemas.validate_wir,
+            on_delta=on_delta,
         )

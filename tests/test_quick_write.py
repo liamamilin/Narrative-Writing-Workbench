@@ -6,6 +6,7 @@ Covers the 14 required tests from QUICK_WRITE_IMPLEMENTATION_TASK.md.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -766,3 +767,281 @@ def test_test_connection_allows_empty_key_for_local_base():
     body = r.json()
     assert body.get("ok") is False
     assert "API key is empty" not in str(body.get("error", ""))  # connection err instead
+
+
+# --------------------------- 8. stage streaming (summary + debug deltas) ----
+
+def test_structured_call_forwards_on_delta():
+    from app.config import RoleConfig
+    from app.structured import structured_call
+
+    seen = []
+
+    class C:
+        def generate_structured(self, messages, *, role, role_cfg,
+                                on_delta=None):
+            from app.llm_client import GenerationResult
+            if on_delta:
+                on_delta('{"a": ')
+                on_delta('1}')
+            return GenerationResult(text='{"a": 1}', model="m")
+
+    st = structured_call(
+        C(), role="architect", role_cfg=RoleConfig(model="m"),
+        system_prompt="s", user_message="u",
+        validator=lambda o: [], on_delta=seen.append)
+    assert "".join(seen) == '{"a": 1}'
+    assert st.data == {"a": 1}
+
+
+def test_mock_client_structured_streams_deltas():
+    from app.config import RoleConfig
+    from app.llm_client import MockClient
+
+    mc = MockClient(responses={"architect": ['{"a": 1}' + "x" * 40]})
+    parts = []
+    mc.generate_structured([], role="architect",
+                           role_cfg=RoleConfig(model="m"),
+                           on_delta=parts.append)
+    assert "".join(parts) == '{"a": 1}' + "x" * 40
+
+
+def test_stage_summary_events_emitted(monkeypatch):
+    monkeypatch.setattr("workbench.service._debug_stream", lambda: False)
+    svc = _svc()
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    from workbench.progress import BROKER
+    kinds = [(e["kind"], e["data"]) for e in BROKER.channel(tid).events]
+    sums = [d for k, d in kinds if k == "stage_summary"]
+    assert any(d["stage"] == "discovery" and "找到可说的角度" in d["text"]
+               for d in sums)
+    assert any(d["stage"] == "structure" and d["text"].startswith("结构:")
+               for d in sums)
+    # summaries are human text; no raw JSON leaks into the UI events
+    assert not any(k == "stage_delta" for k, _ in kinds)
+
+
+def test_outline_summary_from_wir():
+    from workbench.engine.real import _outline_summary
+    txt = _outline_summary({"beats": [
+        {"meaning_gain": "处境被看见"}, {"meaning_gain": "张力被感到"},
+        {"function": {"primary": "turn"}}]})
+    assert txt == "结构:处境被看见 → 张力被感到 → turn"
+    assert _outline_summary({}) == "结构已确定。"
+
+
+def test_stage_delta_events_only_with_debug(monkeypatch):
+    monkeypatch.setattr("workbench.service._debug_stream", lambda: True)
+    svc = _svc()
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    from workbench.progress import BROKER
+    kinds = [(e["kind"], e["data"]) for e in BROKER.channel(tid).events]
+    deltas = [d for k, d in kinds if k == "stage_delta"]
+    assert {d["stage"] for d in deltas} == {"discovery", "structure"}
+
+
+def test_review_emits_progress_and_debug_stream(monkeypatch):
+    monkeypatch.setattr("workbench.service._debug_stream", lambda: True)
+    svc = _svc()
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    r = c.post(f"/tasks/{tid}/review")
+    assert r.status_code == 200
+    from workbench.progress import BROKER
+    evs = BROKER.channel(tid).events
+    kinds = [e["kind"] for e in evs]
+    assert "stage" in kinds and "stage_summary" in kinds and "done" in kinds
+    st = [e["data"] for e in evs if e["kind"] == "stage"]
+    assert st[-1] == {"stage": "review"}
+    summ = [e["data"] for e in evs if e["kind"] == "stage_summary"]
+    assert summ[-1]["stage"] == "review" and summ[-1]["text"].startswith("检查:")
+    assert [e["data"]["stage"] for e in evs
+            if e["kind"] == "stage_delta"] == ["review"]
+    assert evs[-1]["kind"] == "done"
+    assert BROKER.channel(tid).closed
+
+
+def test_stream_debug_setting_roundtrip(tmp_path, monkeypatch):
+    from workbench import settings as st
+    monkeypatch.setattr(st, "SETTINGS_PATH", tmp_path / "settings.json")
+    st.save({"stream_debug": True})
+    assert st.view()["stream_debug"] is True
+    st.save({"stream_debug": False})          # False must persist, not "keep"
+    assert st.load()["stream_debug"] is False
+    assert st.view()["stream_debug"] is False
+    st.save({"stream_debug": "truthy"})
+    assert st.load()["stream_debug"] is True
+
+
+# --------------------------- 9. bug regression (review race, stream fallback) ----
+
+def test_review_rejected_while_generating(monkeypatch):
+    """B1: review resets the task channel; must not run during generation."""
+    monkeypatch.setattr("workbench.service._debug_stream", lambda: False)
+    svc = _svc()
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    svc.db.exec("UPDATE tasks SET status='generating' WHERE id=?", (tid,))
+    r = c.post(f"/tasks/{tid}/review")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "GENERATING"
+
+
+def test_stream_rejection_falls_back_to_nonstream_json_mode(tmp_path, monkeypatch):
+    """B2: provider rejecting stream+response_format must keep the JSON
+    constraint in the non-streaming fallback (not silently drop it)."""
+    import httpx
+    import openai as oa
+    from types import SimpleNamespace
+    from app.config import RoleConfig
+    from app.llm_client import OpenAIClient
+
+    err = oa.APIStatusError(
+        "stream+json unsupported",
+        response=httpx.Response(400, request=httpx.Request("POST", "http://x")),
+        body=None)
+    calls = []
+
+    class Completions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("stream"):
+                raise err
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"a": 1}'))],
+                usage=None)
+
+    client = OpenAIClient(api_key="x", base_url="http://x")
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    parts = []
+    out = client.generate_structured([], role="architect",
+                                     role_cfg=RoleConfig(model="m"),
+                                     on_delta=parts.append)
+    assert calls[0].get("stream") is True
+    assert calls[0].get("response_format") == {"type": "json_object"}
+    assert len(calls) == 2 and not calls[1].get("stream")
+    assert calls[1].get("response_format") == {"type": "json_object"}
+    assert out.text == '{"a": 1}' and "".join(parts) == '{"a": 1}'
+
+
+def test_structured_repair_resets_debug_stream():
+    """B3: repair attempt must announce a reset, not concatenate onto attempt 1."""
+    from app.config import RoleConfig
+    from app.structured import structured_call
+    from app.llm_client import GenerationResult
+
+    seen = []
+
+    class C:
+        n = 0
+
+        def generate_structured(self, messages, *, role, role_cfg, on_delta=None):
+            C.n += 1
+            text = "{bad json" if C.n == 1 else '{"a": 1}'
+            if on_delta:
+                on_delta(text)
+            return GenerationResult(text=text, model="m")
+
+    st = structured_call(
+        C(), role="architect", role_cfg=RoleConfig(model="m"),
+        system_prompt="s", user_message="u",
+        validator=lambda o: [] if o == {"a": 1} else ["bad"],
+        on_delta=lambda d, reset=False: seen.append((d, reset)))
+    resets = [i for i, (d, r) in enumerate(seen) if r]
+    assert resets and seen[resets[0]][0] == ""
+    assert seen[-1] == ('{"a": 1}', False)          # attempt 2 streams after reset
+    assert st.data == {"a": 1} and st.repair_used
+
+
+def test_stage_stream_reset_clears_buffer():
+    """B3: _stage_stream forwards reset as a flagged event with cleared buffer."""
+    from workbench.service import _stage_stream
+    evs = []
+    cb = _stage_stream(lambda k, d: evs.append(d), "structure")
+    cb("x" * 20)
+    cb("", reset=True)
+    cb("y" * 20)
+    assert any(d.get("reset") for d in evs)
+    data = [d["t"] for d in evs if not d.get("reset")]
+    assert all("x" not in t for t in data[1:])       # buffer cleared at reset
+
+
+def test_settings_stream_debug_string_false(tmp_path, monkeypatch):
+    """B6: "false"/"0"/"no" strings must not coerce to True; "" keeps current."""
+    from workbench import settings as st
+    monkeypatch.setattr(st, "SETTINGS_PATH", tmp_path / "settings.json")
+    st.save({"stream_debug": True})
+    st.save({"stream_debug": "false"})
+    assert st.load()["stream_debug"] is False
+    st.save({"stream_debug": "0"})
+    assert st.load()["stream_debug"] is False
+    st.save({"stream_debug": True})
+    st.save({"stream_debug": ""})
+    assert st.load()["stream_debug"] is True         # empty keeps current
+
+
+def test_mock_discovery_no_delta_on_failure():
+    """B5: failed discovery must not emit debug tokens."""
+    seen = []
+    with pytest.raises(DiscoveryFailed):
+        MockWritingEngine().discover_meaning(
+            topic="   ", writing_mode="deep_narrative", angle_mode="auto",
+            custom_angle="", avoid=[], config={}, on_delta=seen.append)
+    assert seen == []
+
+
+def test_generate_rejected_while_reviewing(monkeypatch):
+    """B1 (reverse direction): an in-flight review owns the task channel."""
+    monkeypatch.setattr("workbench.service._debug_stream", lambda: False)
+    svc = _svc()
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+    svc._reviewing.add(tid)                       # simulate mid-review
+    r = c.post(f"/tasks/{tid}/generate", json={})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "REVIEWING"
+    r = c.post(f"/tasks/{tid}/regenerate", json={"preserve_angle": True})
+    assert r.status_code == 409                    # regenerate guarded too
+    r = c.post(f"/tasks/{tid}/rediscover-angle", json={})
+    assert r.status_code == 409                    # rediscover guarded too
+    svc._reviewing.discard(tid)
+    assert c.post(f"/tasks/{tid}/generate", json={}).status_code == 200
+
+
+def test_concurrent_reviews_rejected_and_flag_released(monkeypatch):
+    """Two simultaneous reviews: the second gets 409; flag always released."""
+    import threading
+    monkeypatch.setattr("workbench.service._debug_stream", lambda: False)
+
+    gate = threading.Event()
+
+    class BlockingReviewEngine(MockWritingEngine):
+        def review(self, **kw):
+            gate.wait(5)
+            return super().review(**kw)
+
+    svc = _svc(BlockingReviewEngine())
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+    c.post(f"/tasks/{tid}/generate", json={})
+
+    first = threading.Thread(target=lambda: c.post(f"/tasks/{tid}/review"))
+    first.start()
+    for _ in range(100):
+        if tid in svc._reviewing:
+            break
+        time.sleep(0.02)
+    assert tid in svc._reviewing
+    r = c.post(f"/tasks/{tid}/review")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "REVIEWING"
+    gate.set()
+    first.join(6)
+    assert not svc._reviewing                      # released after completion

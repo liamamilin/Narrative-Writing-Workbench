@@ -150,3 +150,17 @@ h1{font-size:1.6rem} h2{font-size:1.15rem} h3{font-size:1rem}
   color:var(--ink);background:rgba(0,0,0,.03);border-radius:8px;padding:14px 16px}
 .live-text::after{content:"▍";opacity:.55;animation:blink 1s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
+#gb-proc{margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+#gb-proc>summary{cursor:pointer;list-style:none}
+#gb-proc>summary::-webkit-details-marker{display:none}
+#gb-proc>summary::before{content:"▸ ";opacity:.6}
+#gb-proc[open]>summary::before{content:"▾ "}
+.sum-lines:empty{display:none}
+.sum-line{font-size:13px;line-height:1.7;color:var(--ink);margin-top:4px}
+.sum-line b{color:var(--muted);font-weight:600;font-size:12px;margin-right:6px}
+.raw-lbl{font-size:11px;color:var(--muted);margin:8px 0 2px;text-transform:uppercase;
+  letter-spacing:.04em}
+.raw-pane{max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-all;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+  line-height:1.55;color:var(--muted);background:rgba(0,0,0,.045);
+  border-radius:7px;padding:8px 10px;margin:0}

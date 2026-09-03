@@ -105,6 +105,7 @@ class CriticAgent:
         instruction: str,
         wir: dict,
         draft: str,
+        on_delta=None,
     ) -> StageResult:
         stage = structured_call(
             self.client,
@@ -113,6 +114,7 @@ class CriticAgent:
             system_prompt=self.system_prompt(),
             user_message=self.build_user_message(material, instruction, wir, draft),
             validator=self.schemas.validate_critique,
+            on_delta=on_delta,
         )
         critique = stage.data
         model_decision = critique.get("decision")

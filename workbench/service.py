@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -92,6 +93,59 @@ def _delta_stream(ch):
     return cb
 
 
+def _stage_stream(emit, stage: str, min_chars: int = 16):
+    """Batch intermediate-stage deltas into SSE 'stage_delta' events.
+
+    Only wired when settings.stream_debug is on; the UI renders these as a
+    raw-token debug preview (the JSON is engine-internal, not user copy).
+    """
+    buf = []
+    size = [0]
+    last = [time.monotonic()]
+
+    def cb(delta, reset=False):
+        if reset:
+            buf.clear()
+            size[0] = 0
+            emit("stage_delta", {"stage": stage, "t": "", "reset": True})
+            return
+        buf.append(delta)
+        size[0] += len(delta)
+        if size[0] >= min_chars or (time.monotonic() - last[0]) >= 0.3:
+            emit("stage_delta", {"stage": stage, "t": "".join(buf)})
+            buf.clear()
+            size[0] = 0
+            last[0] = time.monotonic()
+
+    def flush():
+        if buf:
+            emit("stage_delta", {"stage": stage, "t": "".join(buf)})
+            buf.clear()
+            size[0] = 0
+
+    cb.flush = flush
+    return cb
+
+
+def _debug_stream() -> bool:
+    return bool(settings_mod.load().get("stream_debug", False))
+
+
+_REVIEW_DIM_ZH = {"progression": "推进", "meaning_density": "意义密度",
+                  "immersion": "沉浸", "restraint": "克制",
+                  "coherence": "连贯"}
+_REVIEW_LABEL_ZH = {"strong": "强", "good": "良",
+                    "needs_attention": "需加强"}
+
+
+def _review_summary_text(payload: dict) -> str:
+    parts = [f"{_REVIEW_DIM_ZH.get(k, k)}:{_REVIEW_LABEL_ZH.get(v, v)}"
+             for k, v in (payload.get("summary") or {}).items()]
+    n = len(payload.get("issues") or [])
+    return ("检查:" + " · ".join(parts)
+            + (f";{n} 个可改进点" if n else ";未发现明显问题"))
+
+
 class ApiError(Exception):
     def __init__(self, code: str, message: str, status: int = 400,
                  retryable: bool = False):
@@ -141,6 +195,10 @@ class Service:
     def __init__(self, db: Database | None = None, engine=None):
         self.db = db or Database()
         self.engine = engine or get_engine()
+        # In-flight reviews per task (in-memory: dies with the process, so a
+        # crash can never wedge it; generation uses the DB stale flag instead).
+        self._reviewing: set[str] = set()
+        self._reviewing_lock = threading.Lock()
 
     # ------------------------------------------------------------- project ----
 
@@ -435,8 +493,17 @@ class Service:
             raise ApiError("GENERATING", "Generation is already running.", 409)
         # stale generating flag (client/server died): allow retry
 
+    def _guard_not_reviewing(self, tid: str) -> None:
+        """Reject generation starts while a review holds the task channel."""
+        with self._reviewing_lock:
+            if tid in self._reviewing:
+                raise ApiError("REVIEWING",
+                               "A review is running. Wait for it to finish.",
+                               409)
+
     def generate(self, tid: str, payload: dict | None = None) -> dict:
         self._guard_not_generating(self.get_task(tid))
+        self._guard_not_reviewing(tid)
         task = self._apply_param_overrides(self.get_task(tid), payload or {})
         ch = BROKER.channel(tid, reset=True)
         ch.emit("stage", {"stage": "queued"})
@@ -465,12 +532,14 @@ class Service:
         avoid = avoid if avoid is not None else self._past_angle_labels(tid)
         self.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
                      (now(), tid))
+        stage_cb = _stage_stream(emit, "discovery") if (emit and _debug_stream()) else None
         try:
             data = self.engine.discover_meaning(
                 topic=task["topic"], writing_mode=task.get("writing_mode") or "deep_narrative",
                 angle_mode=task.get("angle_mode") or "auto",
                 custom_angle=task.get("custom_angle") or "",
-                avoid=avoid, config=self._config_dict(task), emit=emit)
+                avoid=avoid, config=self._config_dict(task), emit=emit,
+                on_delta=stage_cb)
         except EngineError as exc:
             self._persist_discovery(tid, task["topic"], None, "failed",
                                     {"error": str(exc)})
@@ -492,6 +561,9 @@ class Service:
             raise ApiError("DISCOVERY_FAILED",
                            f"寻找角度失败:{type(exc).__name__} — 请重试。",
                            500, retryable=True) from exc
+        finally:
+            if stage_cb:
+                stage_cb.flush()
         errors = meaning_schema.validate_meaning(data)
         if errors:
             self._persist_discovery(tid, task["topic"], None, "failed",
@@ -505,6 +577,12 @@ class Service:
                            500, retryable=True)
         if emit:
             emit("angle", meaning_schema.product_safe_summary(data))
+            sel = meaning_schema.selected_angle(data).get("label", "")
+            cq = (data.get("core_question") or "").strip()
+            emit("stage_summary", {
+                "stage": "discovery",
+                "text": (f"找到可说的角度:{sel}" if sel else "找到可说的角度")
+                        + (f" —— 核心问题:{cq}" if cq else "")})
         return self._persist_discovery(tid, task["topic"],
                                        data.get("selected_angle_id"), "ready", data)
 
@@ -547,6 +625,8 @@ class Service:
         ch = BROKER.channel(tid)
         emit = ch.emit
         stream = _delta_stream(ch)
+        struct_cb = (_stage_stream(emit, "structure")
+                     if _debug_stream() else None)
         if material is None:
             material = self._material(task)
         self.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
@@ -556,7 +636,7 @@ class Service:
                 material=material, instruction=task["instruction"],
                 task_type=task["type"], config=self._config_dict(task),
                 meaning=(meaning or {}).get("data") if meaning else None,
-                emit=emit, on_delta=stream)
+                emit=emit, on_delta=stream, on_struct_delta=struct_cb)
         except EngineError as exc:
             # failure safety: previous draft/versions untouched
             self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?",
@@ -573,6 +653,9 @@ class Service:
             raise ApiError("GENERATION_FAILED",
                            f"生成失败:{type(exc).__name__} — 请重试或调整参数。",
                            500, retryable=True) from exc
+        finally:
+            if struct_cb:
+                struct_cb.flush()
         ts = now()
         plan_id = new_id("plan")
         self.db.exec(
@@ -602,23 +685,55 @@ class Service:
 
     def review(self, tid: str) -> dict:
         task = self.get_task(tid)
+        # Review resets the task's SSE channel; running it mid-generation would
+        # orphan the live stream. Serialize against in-flight generation.
+        self._guard_not_generating(task)
         draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
         if not draft or not draft["working_content"].strip():
             raise ApiError("NO_DRAFT", "Generate a draft before review.", 409)
-        plan = self._latest_plan(tid)
+        with self._reviewing_lock:
+            if tid in self._reviewing:
+                raise ApiError("REVIEWING", "Review is already running.", 409)
+            self._reviewing.add(tid)
         try:
-            payload = self.engine.review(
-                content=draft["working_content"], material=self._material(task),
-                instruction=task["instruction"], plan=plan,
-                config=self._config_dict(task))
-        except EngineError as exc:
-            raise ApiError("REVIEW_FAILED", str(exc), 500, retryable=True) from exc
-        rid = new_id("rev")
-        self.db.exec("INSERT INTO reviews VALUES(?,?,?,?,?,?)",
-                     (rid, draft["id"], draft["current_version_id"],
-                      json.dumps(payload["summary"], ensure_ascii=False),
-                      json.dumps(payload["issues"], ensure_ascii=False), now()))
-        return payload
+            return self._review_inner(tid, task, draft)
+        finally:
+            with self._reviewing_lock:
+                self._reviewing.discard(tid)
+
+    def _review_inner(self, tid: str, task: dict, draft: dict) -> dict:
+        plan = self._latest_plan(tid)
+        ch = BROKER.channel(tid, reset=True)
+        rev_cb = _stage_stream(ch.emit, "review") if _debug_stream() else None
+        ch.emit("stage", {"stage": "review"})
+        try:
+            try:
+                payload = self.engine.review(
+                    content=draft["working_content"], material=self._material(task),
+                    instruction=task["instruction"], plan=plan,
+                    config=self._config_dict(task), on_delta=rev_cb)
+            except EngineError as exc:
+                ch.emit("error", {"message": str(exc) or "Review failed."})
+                raise ApiError("REVIEW_FAILED", str(exc), 500, retryable=True) from exc
+            except Exception as exc:
+                log.exception("ungrouped review error for %s", tid)
+                ch.emit("error", {"message": "Review failed."})
+                raise ApiError("REVIEW_FAILED",
+                               f"检查失败:{type(exc).__name__} — 请重试。",
+                               500, retryable=True) from exc
+            rid = new_id("rev")
+            self.db.exec("INSERT INTO reviews VALUES(?,?,?,?,?,?)",
+                         (rid, draft["id"], draft["current_version_id"],
+                          json.dumps(payload["summary"], ensure_ascii=False),
+                          json.dumps(payload["issues"], ensure_ascii=False), now()))
+            ch.emit("stage_summary", {"stage": "review",
+                                      "text": _review_summary_text(payload)})
+            ch.emit("done", {"review_id": rid})
+            return payload
+        finally:
+            if rev_cb:
+                rev_cb.flush()
+            ch.close()
 
     def _latest_plan(self, tid: str) -> dict | None:
         row = self.db.q1("SELECT data_json FROM engine_plans WHERE task_id=?"
@@ -783,6 +898,7 @@ class Service:
         avoid-list of every previously selected angle.
         """
         self._guard_not_generating(self.get_task(tid))
+        self._guard_not_reviewing(tid)
         task = self._apply_param_overrides(self.get_task(tid), payload or {})
         if task.get("input_mode") != "topic_only":
             raise ApiError("VALIDATION",
@@ -800,6 +916,7 @@ class Service:
     def regenerate(self, tid: str, payload: dict) -> dict:
         """Rewrite Same Angle: preserve the selected meaning, rerun downstream."""
         self._guard_not_generating(self.get_task(tid))
+        self._guard_not_reviewing(tid)
         task = self._apply_param_overrides(self.get_task(tid), payload)
         if task.get("input_mode") != "topic_only":
             raise ApiError("VALIDATION",
@@ -837,7 +954,7 @@ class Service:
     def update_settings(self, payload: dict) -> dict:
         from .settings import SETTINGS_PATH, apply_env, load, save, view
         allowed = ("engine", "api_key", "base_url", "model",
-                   "timeout_seconds", "writer_temperature")
+                   "timeout_seconds", "writer_temperature", "stream_debug")
         patch = {k: payload[k] for k in allowed if k in payload}
         if patch.get("engine") not in (None, "mock", "real"):
             raise ApiError("VALIDATION", "engine must be mock or real.")

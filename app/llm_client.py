@@ -52,11 +52,15 @@ class LLMClient(ABC):
         *,
         role: str,
         role_cfg: RoleConfig,
+        on_delta=None,
     ) -> GenerationResult:
         """Generation constrained to a single JSON object.
 
         Callers must still validate the parsed JSON against their schema;
         the provider constraint is best-effort, validation is authoritative.
+
+        ``on_delta(delta: str)`` streams raw tokens while generating
+        (transport only; validation semantics unchanged).
         """
 
 
@@ -102,7 +106,11 @@ class OpenAIClient(LLMClient):
             if not isinstance(exc, APIStatusError):
                 raise
             dropped = False
-            if json_mode and mode == "auto" and "response_format" in kwargs:
+            # While streaming, do NOT silently drop the JSON constraint: a
+            # stream+response_format rejection must propagate so
+            # generate_structured can fall back to non-streaming JSON mode.
+            if (json_mode and mode == "auto" and "response_format" in kwargs
+                    and not stream):
                 kwargs.pop("response_format")
                 dropped = True
             if "extra_body" in kwargs:
@@ -145,11 +153,35 @@ class OpenAIClient(LLMClient):
             latency_seconds=time.monotonic() - start)
 
     def generate_structured(
-        self, messages, *, role: str, role_cfg: RoleConfig
+        self, messages, *, role: str, role_cfg: RoleConfig, on_delta=None
     ) -> GenerationResult:
         start = time.monotonic()
-        resp = self._create(messages, role_cfg, json_mode=True)
-        return self._to_result(resp, role_cfg, time.monotonic() - start)
+        if on_delta is None:
+            resp = self._create(messages, role_cfg, json_mode=True)
+            return self._to_result(resp, role_cfg, time.monotonic() - start)
+        from openai import APIStatusError
+
+        try:
+            resp = self._create(messages, role_cfg, json_mode=True, stream=True)
+        except APIStatusError:
+            # Provider rejected stream + JSON constraint combination.
+            result = self._create(messages, role_cfg, json_mode=True)
+            out = self._to_result(result, role_cfg, time.monotonic() - start)
+            if out.text:
+                on_delta(out.text)
+            return out
+        parts: list[str] = []
+        for chunk in resp:
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            piece = (getattr(choices[0].delta, "content", None) or "")
+            if piece:
+                parts.append(piece)
+                on_delta(piece)
+        return GenerationResult(
+            text="".join(parts), model=role_cfg.model,
+            latency_seconds=time.monotonic() - start)
 
 
 class MockClient(LLMClient):
@@ -193,9 +225,13 @@ class MockClient(LLMClient):
         return result
 
     def generate_structured(
-        self, messages, *, role: str, role_cfg: RoleConfig
+        self, messages, *, role: str, role_cfg: RoleConfig, on_delta=None
     ) -> GenerationResult:
-        return self._next(role, "structured", messages, role_cfg)
+        result = self._next(role, "structured", messages, role_cfg)
+        if on_delta is not None and result.text:
+            for i in range(0, len(result.text), 24):
+                on_delta(result.text[i:i + 24])
+        return result
 
 
 def build_client(config: Config) -> LLMClient:

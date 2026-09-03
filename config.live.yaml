@@ -12,9 +12,9 @@ roles:
   architect:
     model: deepseek-v4-flash
     temperature: 0.2
-    max_output_tokens: 4000
+    max_output_tokens: 6000
     timeout_seconds: 150
-    structured_mode: none
+    structured_mode: auto
     reasoning_effort: low
   writer:
     model: deepseek-v4-flash
@@ -25,9 +25,9 @@ roles:
   critic:
     model: deepseek-v4-flash
     temperature: 0.1
-    max_output_tokens: 4000
+    max_output_tokens: 6000
     timeout_seconds: 150
-    structured_mode: none
+    structured_mode: auto
     reasoning_effort: low
   patcher:
     model: deepseek-v4-flash

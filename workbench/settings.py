@@ -14,7 +14,7 @@ from pathlib import Path
 SETTINGS_PATH = Path(__file__).resolve().parent / "settings.json"
 
 FIELDS = ("engine", "api_key", "base_url", "model", "timeout_seconds",
-          "writer_temperature")
+          "writer_temperature", "stream_debug")
 
 # Preset providers for the Settings dropdown (OpenAI-compatible endpoints).
 PROVIDERS = [
@@ -51,7 +51,12 @@ def save(patch: dict) -> dict:
         if key not in patch:
             continue
         value = patch[key]
-        if isinstance(value, str):
+        if key == "stream_debug":
+            if isinstance(value, str) and value.strip().lower() in ("false", "0", "no", "off"):
+                value = False
+            elif value != "":              # "" keeps the current value
+                value = bool(value)
+        elif isinstance(value, str):
             value = value.strip()
         if value == "" or value is None:      # empty means "keep current"
             continue
@@ -96,6 +101,7 @@ def view(s: dict | None = None) -> dict:
         "model": s.get("model") or "",
         "timeout_seconds": s.get("timeout_seconds"),
         "writer_temperature": s.get("writer_temperature"),
+        "stream_debug": bool(s.get("stream_debug", False)),
     }
     if not out["model"]:
         out["model"] = _model_from_config_yaml() or ""

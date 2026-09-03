@@ -93,7 +93,8 @@ class RealWritingEngine:
     # ----------------------------------------------------------- generate ----
 
     def discover_meaning(self, *, topic, writing_mode, angle_mode,
-                         custom_angle, avoid, config, emit=None) -> dict:
+                         custom_angle, avoid, config, emit=None,
+                         on_delta=None) -> dict:
         if emit:
             emit("stage", {"stage": "discovery"})
         sys_prompt = _load_prompt(self.config.prompts_dir, "meaning_discovery")
@@ -117,14 +118,15 @@ class RealWritingEngine:
                 self.client, role="meaning_discovery",
                 role_cfg=self.config.role("architect"),
                 system_prompt=sys_prompt, user_message=user,
-                validator=validate_meaning)
+                validator=validate_meaning, on_delta=on_delta)
         except StructuredOutputError as exc:
             raise DiscoveryFailed(
                 "We couldn't find a strong angle. Please retry.") from exc
         return stage.data
 
     def generate(self, *, material, instruction, task_type, config,
-                 meaning=None, emit=None, on_delta=None) -> GenerateResult:
+                 meaning=None, emit=None, on_delta=None,
+                 on_struct_delta=None) -> GenerateResult:
         allow_new_facts = bool(meaning) or not bool(
             config.get("locks", {}).get("facts", True))
         expected = resolve_language_for(config, material, instruction,
@@ -142,10 +144,14 @@ class RealWritingEngine:
         if emit:
             emit("stage", {"stage": "structure"})
         try:
-            arch = self.architect.run(material, instruction, engine_type, constraints)
+            arch = self.architect.run(material, instruction, engine_type,
+                                      constraints, on_delta=on_struct_delta)
         except StructuredOutputError as exc:
             raise GenerationFailed("The draft could not be generated correctly.") from exc
         wir = arch.data
+        if emit:
+            emit("stage_summary", {"stage": "structure",
+                                   "text": _outline_summary(wir)})
         if meaning:
             wir.setdefault("task", {})["meaning"] = meaning_to_wir_block(meaning)
         target = config.get("target_length")
@@ -171,9 +177,11 @@ class RealWritingEngine:
 
     # -------------------------------------------------------------- review ----
 
-    def review(self, *, content, material, instruction, plan, config) -> dict:
+    def review(self, *, content, material, instruction, plan, config,
+               on_delta=None) -> dict:
         wir = (plan or {}).get("wir") or self._minimal_wir(material, instruction, config)
-        stage = self.critic.run(material, instruction, wir, content)
+        stage = self.critic.run(material, instruction, wir, content,
+                                on_delta=on_delta)
         critique = stage.data
         q = critique.get("quality", {})
         summary = {
@@ -315,6 +323,19 @@ def _gate_message(reasons: list[str]) -> str:
                 out.append(zh)
                 break
     return "、".join(out) or "未通过检查"
+
+
+def _outline_summary(wir: dict) -> str:
+    """Product-safe one-line outline preview (no raw WIR JSON to the UI)."""
+    beats = (wir or {}).get("beats") or []
+    gains = [(b.get("meaning_gain") or b.get("function", {}).get("primary")
+              or "").strip() for b in beats]
+    gains = [g for g in gains if g]
+    if not gains:
+        return "结构已确定。"
+    shown = gains[:4]
+    tail = f" 等 {len(gains)} 步" if len(gains) > 4 else ""
+    return "结构:" + " → ".join(shown) + tail
 
 
 def _dial_block(config: dict) -> str:

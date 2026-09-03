@@ -48,11 +48,14 @@ class MockWritingEngine:
     simulate_repair = False    # tests flip this to exercise the reset path
 
     def discover_meaning(self, *, topic, writing_mode, angle_mode,
-                         custom_angle, avoid, config, emit=None) -> dict:
+                         custom_angle, avoid, config, emit=None,
+                         on_delta=None) -> dict:
         if emit:
             emit("stage", {"stage": "discovery"})
         if not topic.strip():
             raise DiscoveryFailed("Enter a topic to write about.")
+        if on_delta:
+            on_delta("{\"topic\": …}  # mock discovery")
         if angle_mode == "custom":
             candidates = [dict(_MOCK_CANDIDATES[0])]
             candidates[0].update({"id": "A0", "label": custom_angle})
@@ -80,9 +83,14 @@ class MockWritingEngine:
         }
 
     def generate(self, *, material, instruction, task_type, config,
-                 meaning=None, emit=None, on_delta=None) -> GenerateResult:
+                 meaning=None, emit=None, on_delta=None,
+                 on_struct_delta=None) -> GenerateResult:
         if emit:
             emit("stage", {"stage": "structure"})
+            if on_struct_delta:
+                on_struct_delta("{\"beats\": […]}  # mock structure")
+            emit("stage_summary", {"stage": "structure",
+                                   "text": "结构:铺垫 → 张力显形 → 转折 → 收束"})
             emit("stage", {"stage": "writing"})
         topic = (instruction or material or "the subject").strip().split("\n")[0][:40]
         if meaning and meaning.get("selected_angle"):
@@ -115,7 +123,10 @@ class MockWritingEngine:
                     _t.sleep(0.005)
         return GenerateResult(text=text, plan=plan)
 
-    def review(self, *, content, material, instruction, plan, config) -> dict:
+    def review(self, *, content, material, instruction, plan, config,
+               on_delta=None) -> dict:
+        if on_delta:
+            on_delta("{\"quality\": {…}}  # mock review")
         paras = split_paragraphs(content)
         issues = []
         for i, p in enumerate(paras, 1):

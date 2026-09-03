@@ -281,3 +281,87 @@ test_connection accepts empty keys for local providers, pending patches
 (before/after) survive reload, AUTOSTART is bound to its target task, the
 writing-map tab handles errors, and cancelling the fact-heavy confirm opens
 the created task instead of orphaning it. 194 tests pass (16 new).
+
+## Addendum (2026-08-31): intermediate-stage token streaming
+
+User request: discovery/structure/review each call the LLM and previously
+showed only a static stage line. Approved third engine-freeze exception
+("unless explicitly requested", AGENTS.md): `app/llm_client.py`
+(`generate_structured` gains `on_delta`; OpenAI path streams with automatic
+non-stream fallback on provider rejection of stream+response_format),
+`app/structured.py` (`structured_call` forwards `on_delta`, incl. the repair
+attempt; omitted kwarg for legacy fakes), and `app/architect.py` /
+`app/critic.py` (`run(..., on_delta=None)` pass-through). All additive,
+default-preserving; 201 tests pass (7 new).
+
+Product layer: new SSE kinds `stage_summary` (always on) and `stage_delta`
+(only when `settings.stream_debug` is on, default off). `stage_summary`
+carries human-readable Chinese lines derived from validated structures —
+discovery (angle + core question), structure (beat `meaning_gain` chain via
+`_outline_summary`), review (dimension labels + issue count). UI shows them
+in a collapsible 过程流 section; the raw-JSON token panes sit behind the
+调试原始流 checkbox.
+
+Spec judgment recorded: Product V0 says UI must not expose WIR/Critic
+internals. Plain-text previews (angle, outline gains, quality labels) are
+treated as user-facing summaries, not internal leakage; raw JSON reaches the
+UI only through the explicit debug switch, mirroring the existing
+draft-stream behavior. Review now runs on the task SSE channel
+(reset per review; done/error/close semantics identical to generate).
+
+## Addendum (2026-08-31): intermittent architect failures — root cause fix
+
+Symptom: generations intermittently died at the WIR stage with
+"The draft could not be generated correctly."; logs showed repeated
+`architect: invalid structured output`.
+
+Root cause: `config.live.yaml` set `structured_mode: none` for
+architect/critic — a V1.2-era workaround for a gateway stall with
+reasoning models under `response_format: json_object`
+(V1_IMPLEMENTATION_REPORT.md §4). In free-text mode deepseek-v4-flash
+intermittently emits invalid/schema-violating WIR JSON; the single
+spec-mandated repair (docs/01 §7) sometimes still fails → GenerationFailed.
+
+Fix (config only, no code): live probe confirmed the gateway now handles
+`json_object` for deepseek-v4-flash (valid JSON, faster than plain), so
+architect/critic moved to `structured_mode: auto` (provider rejection
+still falls back automatically). `max_output_tokens` 4000→6000 as
+truncation insurance. Verified: 2/2 architect runs clean without repair;
+full generate+review e2e green (one schema-repair cycle exercised and
+recovered).
+
+## Addendum (2026-09-03): bug sweep of the stage-streaming work
+
+B1 (race, both directions): `Service.review()` reset the task SSE channel
+without checking for an in-flight generation; a review started during
+generate (second tab or direct API) orphaned the generation stream — and
+vice versa, since review never sets the DB status the generate guard could
+not see it. Fixed: review calls `_guard_not_generating` (409 GENERATING)
+and registers the task in an in-memory `_reviewing` set (crash-safe: dies
+with the process); generate/rediscover/regenerate reject while a review is
+in flight (409 REVIEWING). The UI disables #r-run during generation and
+the generate buttons during review.
+
+B2 (fallback preemption): with `structured_mode: auto`, `_create`'s internal
+APIStatusError handler dropped `response_format` while still streaming, so
+`generate_structured`'s non-streaming JSON fallback never ran — debug
+streaming silently lost the JSON constraint. Fixed: response_format is only
+dropped by the internal handler for non-stream calls; stream rejections now
+propagate to the outer fallback (non-stream + json_object).
+
+B3 (concatenated debug panes): the schema-repair attempt streamed into the
+same sink as the invalid first attempt. Fixed with the established
+`on_delta("", reset=True)` protocol (app/language.py): structured_call
+announces the reset, `_stage_stream` emits a flagged `stage_delta` and
+clears its buffer, the UI raw pane clears on reset. Single-arg sinks keep
+working (TypeError fallback).
+
+B5/B6 (hygiene): mock discovery no longer emits debug tokens before raising
+DiscoveryFailed; `stream_debug` now parses "false"/"0"/"no"/"off" as False
+and "" as keep-current (was `bool(value)`, where "false" → True).
+
+Not fixed (documented, low impact): streaming GenerationResult carries no
+usage tokens (B4, debug path only); the SSE grace loop waits 2s before
+replaying a fast completed review (B7, mock-only latency, replay correct);
+runReview's EventSource is not closed on navigation (B8, self-terminates on
+eof/300s cap). 209 tests pass (8 new).

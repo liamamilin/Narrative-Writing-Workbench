@@ -796,6 +796,7 @@ const STEP_LABELS = {
   discovery: ["Finding something worth saying", "寻找值得说的意义"],
   structure: ["Designing the progression", "设计读者理解推进"],
   writing: ["Writing the draft", "撰写正文"],
+  review: ["Reviewing", "检查中"],
 };
 
 function genBanner(on, stg, stgZh) {
@@ -809,7 +810,67 @@ function genBanner(on, stg, stgZh) {
          <span class="muted small" id="gb-time">已用时 0 秒</span></p>
       <div id="gb-steps" class="steps"></div>
       <pre id="gb-live" class="live-text" style="display:none"></pre>
+      <details id="gb-proc">
+        <summary class="muted small">过程流 · 阶段摘要 <span id="gb-proc-n"></span></summary>
+        <div id="gb-sums" class="sum-lines"></div>
+        <p class="muted small" style="margin:8px 0 2px">
+          <label><input type="checkbox" id="gb-dbg"
+            data-tip="开启后,各阶段模型的原始输出(JSON)会逐 token 显示在下方;仅调试用,下次生成起生效">
+            调试原始流 raw tokens<span class="muted">(下次生成起生效)</span></label></p>
+        <div id="gb-raw"></div>
+      </details>
     </div>`);
+  const dbg = $("#gb-dbg");
+  if (dbg) {
+    api("GET", "/settings").then(s => { dbg.checked = !!s.stream_debug; })
+      .catch(() => {});
+    dbg.onchange = async () => {
+      try {
+        await api("POST", "/settings", { stream_debug: dbg.checked });
+        toast(dbg.checked ? "调试原始流已开启 — 下次生成起生效。"
+                          : "调试原始流已关闭。");
+      } catch (e) { dbg.checked = !dbg.checked; toast(e.message, true); }
+    };
+  }
+}
+
+/* Shared banner renderer for generation and review progress. */
+function renderBanner(st) {
+  const el = $("#gb-steps");
+  if (el) el.innerHTML = stepsView(st.steps, st.angle, st.error);
+  const lv = $("#gb-live");
+  if (lv) {
+    const showing = st.shown && st.steps.includes("writing");
+    lv.style.display = showing ? "block" : "none";
+    if (showing) { lv.textContent = st.shown; lv.scrollTop = lv.scrollHeight; }
+  }
+  const ti = $("#gb-title");
+  if (ti) {
+    if (st.error) ti.textContent = "Failed";
+    else if (st.steps.length) {
+      const last = st.steps[st.steps.length - 1];
+      const lbl = STEP_LABELS[last] || [last, ""];
+      ti.innerHTML = `${esc(lbl[0])} <span class="muted small">${esc(lbl[1])}</span>`;
+    } else ti.textContent = "Working…";
+  }
+  const n = $("#gb-proc-n");
+  if (n) n.textContent = st.sums.length ? `(${st.sums.length})` : "";
+  const su = $("#gb-sums");
+  if (su) su.innerHTML = st.sums.map(s => {
+    const lbl = STEP_LABELS[s.stage] || [s.stage, ""];
+    return `<div class="sum-line"><b>${esc(lbl[1] || lbl[0])}</b> ${esc(s.text)}</div>`;
+  }).join("");
+  const rw = $("#gb-raw");
+  if (rw) {
+    const stages = Object.keys(st.raw);
+    rw.innerHTML = stages.map(s =>
+      `<div class="raw-lbl">${esc((STEP_LABELS[s] || [s, ""])[1] || s)}</div>
+       <pre class="raw-pane" id="raw-${esc(s)}">${esc(st.raw[s])}</pre>`).join("");
+    stages.forEach(s => {
+      const p = document.getElementById("raw-" + s);
+      if (p) p.scrollTop = p.scrollHeight;
+    });
+  }
 }
 
 function stepsView(steps, angle, errMsg) {
@@ -827,7 +888,8 @@ function stepsView(steps, angle, errMsg) {
 
 function openProgress(tid, onUpdate) {
   let es;
-  const state = { steps: [], angle: "", error: "", live: "", shown: "", seq: -1 };
+  const state = { steps: [], angle: "", error: "", live: "", shown: "",
+                  seq: -1, sums: [], raw: {} };
   try { es = new EventSource(`/tasks/${tid}/progress`); }
   catch (e) { return { close() {}, alive: () => false }; }
   const push = () => onUpdate(state);
@@ -859,6 +921,15 @@ function openProgress(tid, onUpdate) {
   handle("angle", d => {
     if (!state.steps.includes("structure")) state.steps.push("structure");
     state.angle = d.selected_angle || "";
+    push();
+  });
+  handle("stage_summary", d => {
+    if (d.stage && d.text) { state.sums.push(d); push(); }
+  });
+  handle("stage_delta", d => {
+    if (!d.stage) return;
+    const cur = d.reset ? "" : (state.raw[d.stage] || "");
+    state.raw[d.stage] = (cur.length > 6000 ? cur.slice(-4000) : cur) + (d.t || "");
     push();
   });
   handle("error", d => {
@@ -917,27 +988,11 @@ async function runGeneration(endpoint, body, okMsg) {
   if (!WS.draft) renderWorkspace();
   const [STG, STG_ZH] = stagesForTask();
   genBanner(true);
-  const btns = [$("#p-gen"), $("#gen-now"), $("#p-another"), $("#p-same")].filter(Boolean);
+  const btns = [$("#p-gen"), $("#gen-now"), $("#p-another"), $("#p-same"),
+                $("#r-run")].filter(Boolean);
   btns.forEach(b => { b.disabled = true; });
   let i = 0, t0 = Date.now();
-  const render = st => {
-    const el = $("#gb-steps"); if (el) el.innerHTML = stepsView(st.steps, st.angle, st.error);
-    const lv = $("#gb-live");
-    if (lv) {
-      const showing = st.shown && st.steps.includes("writing");
-      lv.style.display = showing ? "block" : "none";
-      if (showing) { lv.textContent = st.shown; lv.scrollTop = lv.scrollHeight; }
-    }
-    const ti = $("#gb-title");
-    if (ti) {
-      if (st.error) ti.textContent = "Failed";
-      else if (st.steps.length) {
-        const last = st.steps[st.steps.length - 1];
-        const lbl = STEP_LABELS[last] || [last, ""];
-        ti.innerHTML = `${esc(lbl[0])} <span class="muted small">${esc(lbl[1])}</span>`;
-      } else ti.textContent = "Working…";
-    }
-  };
+  const render = renderBanner;
   const prog = openProgress(myTid, render);
   const timer = setInterval(() => {
     if (prog.alive()) return;             // real events win; rotate only as fallback
@@ -982,11 +1037,25 @@ async function runGeneration(endpoint, body, okMsg) {
 
 /* review */
 async function runReview() {
+  if (GENERATING) { toast("Generation is already running.", true); return; }
   const btn = $("#r-run"); btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Reviewing…';
+  const genBtns = [$("#p-gen"), $("#gen-now"), $("#p-another"), $("#p-same")].filter(Boolean);
+  genBtns.forEach(b => { b.disabled = true; });
+  genBanner(true);
+  const prog = openProgress(WS.tid, renderBanner);
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    const time = $("#gb-time");
+    if (time) time.textContent = `已用时 ${Math.round((Date.now() - t0) / 1000)} 秒`;
+  }, 1000);
   try {
     WS.review = await api("POST", `/tasks/${WS.tid}/review`);
   } catch (e) { toast(e.message, true); WS.review = null; }
-  finally { btn.disabled = false; renderPanel(); }
+  finally {
+    prog.close(); clearInterval(tick); genBanner(false);
+    btn.disabled = false; genBtns.forEach(b => { b.disabled = false; });
+    renderPanel();
+  }
 }
 
 function reviewView(r) {
