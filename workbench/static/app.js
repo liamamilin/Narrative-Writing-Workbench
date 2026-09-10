@@ -463,6 +463,10 @@ const WS = {
 async function workspace(tid) {
   WS.tid = tid; WS.sel.clear(); WS.proposals = []; WS.review = null; WS.map = null;
   await reloadTask();
+  if (WS.task.status === "generating" && !GENERATING) {
+    resumeInProgressGeneration();
+    return;
+  }
   renderWorkspace();
   if (AUTOSTART) {
     if (AUTOSTART === tid) {
@@ -496,6 +500,7 @@ function renderWorkspace() {
       <h3>Sources</h3><div id="sources"></div>
       <label class="small muted">Add source</label>
       <textarea id="add-src" rows="3" placeholder="Paste more material…"></textarea>
+      <p class="small muted" style="margin-top:4px">粘贴更多素材(故事、笔记、观点),它会与原素材合并成 "Source Material",在下一次生成与检查时使用。</p>
       <p><button id="add-src-btn" class="small" data-tip="追加素材,将影响下一次生成或检查">Add</button></p>
     </section>
     <section id="pane-center">
@@ -709,8 +714,13 @@ function renderPanel() {
         <p class="small">${esc(WS.meaning.core_question)}</p>
         <p class="small muted">Reader leaves with: ${esc(WS.meaning.reader_end_state)}</p>
       </div>` : ""}
-    <label class="small muted">Intent</label>
+    <label class="small muted" data-tip="你要这篇文字做到什么。它作为『写作指令』进入生成管线:同时指导结构设计与正文写作。">Intent</label>
     <textarea id="p-instr" rows="4">${esc(t.instruction)}</textarea>
+    <p class="small muted" style="margin-top:4px">你要这篇文字做到什么?写下核心意思、语气和读者读完该带走什么。可留空,但写清意图,成稿更贴近你想要的效果。<br>
+      示例:"情感要克制,不出现『想念』『温暖』这类总结词,让物件和动作承担情绪。"(小说场景)<br>
+      或:"分析『英雄远行-归来』为什么反复打动观众,讲机制,不要罗列术语。"(叙事分析)</p>
+    <p style="margin-top:8px"><button id="p-suggest" data-tip="让模型根据素材/话题与你现在的意图起草一版,再点『使用』填回(可先修改)。仅作为草稿,由你决定。">AI 帮我写/改进 Intent</button></p>
+    <div id="suggest-out"></div>
     <div class="trio" style="margin-top:10px">
       ${[["immersion", "高=偏场景呈现,让读者“身临其境”;低=偏概述与说明"],
          ["explicitness", "高=主题直说;低=意义藏在画面里,靠读者推断"],
@@ -764,6 +774,7 @@ function renderPanel() {
     $("#p-instr").onchange = async () => {
       await api("PATCH", `/tasks/${WS.tid}`, { instruction: $("#p-instr").value });
     };
+    $("#p-suggest").onclick = suggestIntent;
   }
   if (WS.panelTab === "review") $("#r-run").onclick = runReview;
   if (WS.panelTab === "locks") {
@@ -775,6 +786,48 @@ function renderPanel() {
       toast("Locks saved.");
     });
   }
+}
+
+/* AI intent suggestion (AI proposes, user accepts) */
+const priorSuggestions = [];
+async function suggestIntent() {
+  const btn = $("#p-suggest");
+  const label = btn ? btn.textContent : "AI 帮我写/改进 Intent";
+  if (btn) { btn.disabled = true; btn.textContent = "生成中…"; }
+  try {
+    const data = await api("POST", `/tasks/${WS.tid}/suggest-intent`,
+      priorSuggestions.length ? { avoid: priorSuggestions.slice(-3) } : {});
+    const s = (data.suggestion || "").trim();
+    if (!s) throw new Error("The model returned an empty suggestion.");
+    priorSuggestions.push(s);
+    if (priorSuggestions.length > 5) priorSuggestions.shift();
+    showSuggestion(s);
+  } catch (err) {
+    toast(err.message || "Could not draft an instruction. Please retry.", true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+function showSuggestion(s) {
+  const out = $("#suggest-out");
+  if (!out) return;
+  out.innerHTML = `<div class="proposal-src" style="margin-top:6px">
+    <p class="small muted">这是草稿,可改;满意再点『使用』</p>
+    <p class="small" style="white-space:pre-wrap">${esc(s)}</p>
+    <p class="row" style="gap:8px;margin-top:8px">
+      <button class="primary" id="s-use" style="flex:1">使用</button>
+      <button id="s-again" style="flex:1">再换一个</button>
+    </p></div>`;
+  $("#s-use").onclick = async () => {
+    try {
+      $("#p-instr").value = s;
+      await api("PATCH", `/tasks/${WS.tid}`, { instruction: s });
+      WS.task.instruction = s;
+      out.innerHTML = "";
+      toast("Intent 已更新,下次生成生效");
+    } catch (err) { toast(err.message, true); }
+  };
+  $("#s-again").onclick = suggestIntent;
 }
 
 /* generation */
@@ -886,10 +939,51 @@ function stepsView(steps, angle, errMsg) {
   return rows + a + e;
 }
 
-function openProgress(tid, onUpdate) {
+function renderProgressState(st) {
+  const el = $("#gb-steps"); if (el) el.innerHTML = stepsView(st.steps, st.angle, st.error);
+  const lv = $("#gb-live");
+  if (lv) {
+    const showing = st.shown && st.steps.includes("writing");
+    lv.style.display = showing ? "block" : "none";
+    if (showing) { lv.textContent = st.shown; lv.scrollTop = lv.scrollHeight; }
+  }
+  const ti = $("#gb-title");
+  if (ti) {
+    if (st.error) ti.textContent = "Failed";
+    else if (st.steps.length) {
+      const last = st.steps[st.steps.length - 1];
+      const lbl = STEP_LABELS[last] || [last, ""];
+      ti.innerHTML = `${esc(lbl[0])} <span class="muted small">${esc(lbl[1])}</span>`;
+    } else ti.textContent = "Working…";
+  }
+}
+
+function genFailureCard(errMsg, endpoint, body, okMsg) {
+  const host = $("#center-body") || $("#app");
+  host?.insertAdjacentHTML?.("afterbegin",
+    `<div class="card" style="border-color:var(--warn)">
+      <b style="color:var(--warn)">生成失败 — 你的现有正文没有被改动</b>
+      <p class="small">${esc(errMsg || "The draft could not be generated correctly.")}</p>
+      <button class="primary" id="gen-retry" data-tip="再试一次;现有正文与历史版本不受影响">重试 Retry</button></div>`);
+  const r = $("#gen-retry");
+  if (r) r.onclick = () => runGeneration(
+    endpoint || "generate", body || {},
+    okMsg || "Draft ready — 第一稿已生成。");
+}
+
+function openProgress(tid, onUpdate, onEnd) {
   let es;
-  const state = { steps: [], angle: "", error: "", live: "", shown: "",
+const state = { steps: [], angle: "", error: "", live: "", shown: "",
                   seq: -1, sums: [], raw: {} };
+  let ended = false;
+  const finish = (errMsg) => {
+    if (ended) return;
+    ended = true;
+    if (errMsg) state.error = errMsg;
+    clearInterval(iv);
+    es.close();
+    if (onEnd) onEnd(errMsg || null);
+  };
   try { es = new EventSource(`/tasks/${tid}/progress`); }
   catch (e) { return { close() {}, alive: () => false }; }
   const push = () => onUpdate(state);
@@ -934,10 +1028,10 @@ function openProgress(tid, onUpdate) {
   });
   handle("error", d => {
     state.error = d.message || "";
-    if (state.error) { clearInterval(iv); push(); es.close(); }
+    if (state.error) { push(); finish(d.message || ""); }
   });
-  es.addEventListener("done", () => { es.close(); });
-  es.addEventListener("eof", () => { es.close(); });
+  es.addEventListener("done", () => finish(null));
+  es.addEventListener("eof", () => finish(null));
   return {
     close() { clearInterval(iv); es.close(); },
     alive: () => state.steps.length > 0,
@@ -992,7 +1086,7 @@ async function runGeneration(endpoint, body, okMsg) {
                 $("#r-run")].filter(Boolean);
   btns.forEach(b => { b.disabled = true; });
   let i = 0, t0 = Date.now();
-  const render = renderBanner;
+const render = renderBanner;
   const prog = openProgress(myTid, render);
   const timer = setInterval(() => {
     if (prog.alive()) return;             // real events win; rotate only as fallback
@@ -1017,14 +1111,7 @@ async function runGeneration(endpoint, body, okMsg) {
     if (!stillHere()) { toast(e.message || "Generation failed.", true); }
     else {
       renderWorkspace();  // clears banner, redraws current draft intact
-      const host = $("#center-body") || $("#app");
-      host?.insertAdjacentHTML?.("afterbegin",
-        `<div class="card" style="border-color:var(--warn)">
-          <b style="color:var(--warn)">生成失败 — 你的现有正文没有被改动</b>
-          <p class="small">${esc(e.message || "The draft could not be generated correctly.")}</p>
-          <button class="primary" id="gen-retry" data-tip="再试一次;现有正文与历史版本不受影响">重试 Retry</button></div>`);
-      const r = $("#gen-retry");
-      if (r) r.onclick = () => runGeneration(endpoint, body, okMsg);
+      genFailureCard(e.message, endpoint, body, okMsg);
       toast(e.message || "Generation failed — your current draft is unchanged.", true);
     }
   } finally {
@@ -1033,6 +1120,50 @@ async function runGeneration(endpoint, body, okMsg) {
     GENERATING = false;
     if (stillHere()) genBanner(false);
   }
+}
+
+/* Page refresh mid-generation: the generation runs server-side; reattach to
+   the progress stream so the UI shows the in-progress state again (and
+   refreshes the draft when it finishes). */
+function resumeInProgressGeneration() {
+  const myTid = WS.tid;
+  if (GENERATING) return;
+  GENERATING = true;
+  WS.panelTab = "goal";
+  renderWorkspace();
+  const [STG, STG_ZH] = stagesForTask();
+  genBanner(true);
+  const btns = [$("#p-gen"), $("#gen-now"), $("#p-another"), $("#p-same")].filter(Boolean);
+  btns.forEach(b => { b.disabled = true; });
+  let i = 0, t0 = Date.now();
+  const stillHere = () => WS.tid === myTid;
+  const prog = openProgress(myTid, renderProgressState, (errMsg) => {
+    prog.close();
+    clearInterval(timer); clearInterval(tick);
+    GENERATING = false;
+    if (!stillHere()) { genBanner(false); toast(errMsg || "Generation finished.", true); return; }
+    genBanner(false);
+    reloadTask().then(() => {
+      WS.view = "draft";
+      renderWorkspace();
+      if (errMsg) {
+        genFailureCard(errMsg);
+        toast(errMsg || "Generation failed.", true);
+      } else {
+        toast("Generation finished — 生成完成。");
+      }
+    }).catch(e => toast(e.message || "Reload failed.", true));
+  });
+  const timer = setInterval(() => {
+    if (prog.alive()) return;             // real events win; rotate only as fallback
+    i = Math.min(i + 1, STG.length - 1);
+    const ti = $("#gb-title");
+    if (ti) ti.innerHTML = `${STG[i]} <span class="muted small">${STG_ZH[i]}</span>`;
+  }, 9000);
+  const tick = setInterval(() => {
+    const time = $("#gb-time");
+    if (time) time.textContent = `已用时 ${Math.round((Date.now() - t0) / 1000)} 秒`;
+  }, 1000);
 }
 
 /* review */
@@ -1115,34 +1246,127 @@ async function versions(tid) {
   const task = await api("GET", `/tasks/${tid}`);
   if (!task.draft) { $("#app").innerHTML = '<p class="muted">No draft yet.</p>'; return; }
   const vs = await api("GET", `/drafts/${task.draft.id}/versions`);
-  const contents = {};
-  for (const v of vs.versions) contents[v.id] = (await api("GET", `/versions/${v.id}`)).content;
+  const rows = vs.versions.slice().reverse();            // newest first
+  const cont = new Map();                                // id -> full content (lazy)
+  const open = new Set();                                // expanded ids
+  const sel = [];                                        // selected ids (max 2)
+  const curId = task.draft.current_version_id;
+  const byId = new Map(rows.map(v => [v.id, v]));
+  const shortId = id => (id.length > 12 ? "…" + id.slice(-6) : id);
+  const short = s => {
+    const t = (s || "").replace(/\s+/g, " ").trim();
+    return t.length > 160 ? t.slice(0, 160) + "…" : (t || "(empty)");
+  };
+
   $("#app").innerHTML = `
     <h1>Version History</h1>
-    <p class="muted small">Current: ${esc(task.draft.current_version_id)}</p>
-    ${vs.versions.slice().reverse().map(v => `
-      <div class="vrow">
-        <input type="checkbox" class="cmp" data-tip="勾选两个版本后点 Compare 看差异" data-v="${v.id}">
-        <span class="grow"><b>${esc(v.origin)}</b>
-          ${v.instruction ? `<span class="muted small"> · "${esc(v.instruction)}"</span>` : ""}
-          <span class="muted small"> · ${esc(v.created_at)}</span></span>
-        <button class="small" data-restore="${v.id}" data-tip="恢复此版本(恢复本身也是新版本,可再反悔)">Restore</button>
-      </div>`).join("")}
-    <p><button id="do-compare" data-tip="逐段对比两个版本的差异">Compare selected</button>
-       <a href="#/tasks/${tid}" style="margin-left:12px">Back to draft</a></p>
-    <div id="compare"></div>`;
-  $("#do-compare").onclick = () => {
-    const picked = [...document.querySelectorAll(".cmp:checked")].map(x => x.dataset.v);
-    if (picked.length !== 2) { toast("Select two versions to compare.", true); return; }
-    const [x, y] = picked;
+    <p class="muted small">点行选中最多两个版本自动出对比;点正文预览展开/收起全文;Restore 恢复本身也是新版本,永远可再反悔。</p>
+    <div id="vlist">${rows.map(rowHtml).join("")}</div>
+    <div id="vctrl"><p class="muted small">未选择:点任意版本行开始选择对比。</p></div>
+    <div id="compare"></div>
+    <p style="margin-top:10px"><a href="#/tasks/${tid}">Back to draft</a></p>`;
+
+  function rowHtml(v) {
+    const isCur = v.id === curId;
+    const instr = v.instruction
+      ? ` · <span class="muted small">"${esc(v.instruction)}"</span>` : "";
+    return `
+    <div class="vrow${isCur ? " cur" : ""}" data-v="${v.id}">
+      <span class="vpick"></span>
+      <div class="grow">
+        <div class="vhead"><b>${esc(v.origin)}</b><span class="muted small">· ${esc(v.created_at)} · ${esc(shortId(v.id))}${instr}</span>${isCur ? '<span class="vtag">当前</span>' : ""}</div>
+        <div class="vprev" data-v="${v.id}">载入预览…</div>
+      </div>
+      <div class="vacts">
+        ${isCur ? "" : `<button class="small va-cur" data-v="${v.id}" data-tip="对比此版本与当前草稿">vs 当前</button>`}
+        <button class="small va-restore" data-v="${v.id}" data-tip="恢复此版本为当前草稿(恢复本身也是新版本,可再反悔)">Restore</button>
+      </div>
+    </div>`;
+  }
+
+  // lazy-load contents in parallel; each preview fills as it arrives
+  rows.forEach(v => api("GET", `/versions/${v.id}`)
+    .then(d => cont.set(v.id, d.content))
+    .catch(() => cont.set(v.id, ""))
+    .finally(() => paintPreview(v.id)));
+
+  function paintPreview(id) {
+    const el = document.querySelector(`.vprev[data-v="${id}"]`);
+    if (!el) return;
+    const full = (cont.get(id) || "").trim();
+    el.textContent = open.has(id) ? "▴ " + (full || "(empty)") : "▸ " + short(full);
+  }
+
+  function updatePicks() {
+    document.querySelectorAll(".vrow").forEach(r => {
+      const i = sel.indexOf(r.dataset.v);
+      r.classList.toggle("picked", i >= 0);
+      r.querySelector(".vpick").textContent = i >= 0 ? ["①", "②"][i] : "";
+    });
+  }
+  function updateCtrl() {
+    const c = $("#vctrl");
+    if (sel.length === 1) {
+      c.innerHTML = `<p class="muted small">已选 ① 一个版本,再点行选一个即可对比。</p>`;
+    } else if (sel.length === 2) {
+      const [aId, bId] = sel.slice().sort(
+        (x, y) => byId.get(x).created_at.localeCompare(byId.get(y).created_at));
+      const a = byId.get(aId), b = byId.get(bId);
+      c.innerHTML = `<p class="row"><span class="vtag">旧版</span> <b>${esc(a.origin)}</b>
+        <span class="muted small">${esc(shortId(aId))}</span> <span class="muted">→</span>
+        <span class="vtag">新版</span> <b>${esc(b.origin)}</b>
+        <span class="muted small">${esc(shortId(bId))}</span>
+        <button id="do-compare">对比这① ②</button>
+        <button id="clear-sel" class="small">清空选择</button></p>`;
+      $("#do-compare").onclick = () => renderDiff(aId, bId);
+      $("#clear-sel").onclick = () => {
+        sel.length = 0; updatePicks(); updateCtrl(); $("#compare").innerHTML = "";
+      };
+    } else {
+      c.innerHTML = `<p class="muted small">未选择:点任意版本行开始选择对比。</p>`;
+    }
+  }
+
+  async function ensure(id) {
+    if (!cont.has(id)) {
+      try { cont.set(id, ((await api("GET", `/versions/${id}`)).content) || ""); }
+      catch { cont.set(id, ""); }
+      paintPreview(id);
+    }
+  }
+  async function renderDiff(aId, bId) {
+    await Promise.all([ensure(aId), ensure(bId)]);
+    const a = byId.get(aId), b = byId.get(bId);
     $("#compare").innerHTML = `<div class="diff">
-      <div><div class="h muted">Before</div>${diffHtml(contents[x], contents[y])}</div>
-      <div><div class="h muted">After</div>${diffHtml(contents[y], contents[x], true)}</div></div>`;
-  };
-  document.querySelectorAll("[data-restore]").forEach(b => b.onclick = async () => {
-    await api("POST", `/versions/${b.dataset.restore}/restore`);
-    toast("Restored — the previous state is kept as its own version.");
-    versions(tid);
+      <div><div class="h muted">旧版 · ${esc(a.origin)}</div>${diffHtml(cont.get(aId), cont.get(bId))}</div>
+      <div><div class="h muted">新版 · ${esc(b.origin)}</div>${diffHtml(cont.get(bId), cont.get(aId), true)}</div></div>`;
+  }
+
+  $("#vlist").addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    const row = e.target.closest(".vrow");
+    if (!row) return;
+    const id = row.dataset.v;
+    if (e.target.closest(".vprev")) {
+      if (open.has(id)) open.delete(id); else open.add(id);
+      paintPreview(id);
+    } else {
+      const i = sel.indexOf(id);
+      if (i >= 0) sel.splice(i, 1);
+      else if (sel.length >= 2) { toast("已选两个版本,先取消一个再换。", true); return; }
+      else sel.push(id);
+      updatePicks(); updateCtrl();
+    }
+  });
+
+  document.querySelectorAll(".va-cur").forEach(b => b.onclick = () => renderDiff(b.dataset.v, curId));
+  document.querySelectorAll(".va-restore").forEach(b => b.onclick = async () => {
+    if (!confirm("把此版本恢复为当前草稿?(恢复会生成一个新版本,之前的当前状态仍保留在历史里)")) return;
+    try {
+      await api("POST", `/versions/${b.dataset.v}/restore`);
+      toast("Restored — the previous state is kept as its own version.");
+      versions(tid);
+    } catch (err) { toast(err.message, true); }
   });
 }
 
@@ -1276,7 +1500,7 @@ function guide() {
 
     <h2>⑦ 版本与写作地图</h2>
     <div class="card">每次生成、接受的修改、手动 Checkpoint、恢复都会存为版本
-    (自动保存不算)。Versions 页可勾选两个版本 <b>Compare</b> 差异,或 <b>Restore</b>
+    (自动保存不算)。Versions 页点行选中两个版本即可自动对比差异,或 <b>Restore</b>
     ——恢复本身也是新版本,可再恢复回去,永远不丢内容。
     <b>Writing Map</b> 标签展示文章的理解推进(每一步读者从哪想到哪),点击可定位段落,只读不编辑。</div>
 

@@ -97,6 +97,10 @@ def create_app(service: Service | None = None) -> FastAPI:
     def regenerate(task_id: str, body: dict | None = None):
         return svc().regenerate(task_id, body or {})
 
+    @app.post("/tasks/{task_id}/suggest-intent")
+    def suggest_intent(task_id: str, body: dict | None = None):
+        return svc().suggest_instruction(task_id, body or {})
+
     @app.get("/tasks/{task_id}/progress")
     def progress(task_id: str):
         """Server-Sent Events stream of generation stage/angle events.

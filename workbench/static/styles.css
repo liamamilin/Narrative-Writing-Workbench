@@ -101,8 +101,17 @@ h1{font-size:1.6rem} h2{font-size:1.15rem} h3{font-size:1rem}
 .beat .arrow{color:var(--muted)}
 
 /* versions */
-.vrow{display:flex;gap:10px;align-items:center;border-bottom:1px solid var(--line);
-  padding:8px 2px}
+#vlist{display:flex;flex-direction:column;gap:4px;margin:10px 0}
+.vrow{display:flex;gap:12px;align-items:center;border:1px solid var(--line);
+  border-radius:10px;padding:10px 12px;cursor:pointer;transition:box-shadow .15s,background .15s}
+.vrow:hover{background:var(--panel)}
+.vrow.picked{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.vrow.cur{background:var(--panel)}
+.vpick{width:20px;text-align:center;flex:none;font-weight:bold;color:var(--accent)}
+.vhead{display:flex;gap:6px;flex-wrap:wrap;align-items:baseline}
+.vtag{background:var(--accent);color:#fff;border-radius:5px;padding:0 6px;font-size:11px;font-weight:bold}
+.vprev{cursor:pointer;margin-top:4px;white-space:pre-wrap}
+.vacts{display:flex;gap:8px;flex:none}
 .diff{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .diff>div{border:1px solid var(--line);border-radius:8px;padding:10px;
   white-space:pre-wrap;font-size:.88rem;background:var(--panel)}

@@ -558,8 +558,12 @@ class Service:
                          (now(), tid))
             if emit:
                 emit("error", {"message": "Discovery failed."})
+            detail = str(exc) or type(exc).__name__
             raise ApiError("DISCOVERY_FAILED",
-                           f"寻找角度失败:{type(exc).__name__} — 请重试。",
+                           f"寻找角度失败: {detail}\n"
+                           "可能原因: 模型名称错误、API 地址不可达、或 API Key 无效。\n"
+                           "请在 Settings 中检查 Model 名称是否正确，"
+                           "以及 Base URL 和 API Key 是否匹配。",
                            500, retryable=True) from exc
         finally:
             if stage_cb:
@@ -650,8 +654,12 @@ class Service:
             self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?",
                          (now(), tid))
             emit("error", {"message": "Generation failed."})
+            detail = str(exc) or type(exc).__name__
             raise ApiError("GENERATION_FAILED",
-                           f"生成失败:{type(exc).__name__} — 请重试或调整参数。",
+                           f"生成失败: {detail}\n"
+                           "可能原因: 模型名称错误、API 地址不可达、或 API Key 无效。\n"
+                           "请在 Settings 中检查 Model 名称是否正确，"
+                           "以及 Base URL 和 API Key 是否匹配。",
                            500, retryable=True) from exc
         finally:
             if struct_cb:
@@ -937,6 +945,43 @@ class Service:
         finally:
             ch.close()
 
+    def suggest_instruction(self, tid: str, payload: dict | None = None) -> dict:
+        """Draft/sharpen the task's Intent via the model.
+
+        AI proposes, user accepts: this never writes the field. It only
+        returns a suggestion the frontend may fill in on the user's click.
+        """
+        task = self.get_task(tid)
+        material = self._material(task) or task.get("topic") or ""
+        if not material and not task["instruction"]:
+            raise ApiError("VALIDATION",
+                           "先给素材或话题,我才能帮你提一个意图.", 409)
+        config = self._config_dict(task)
+        meaning = self._latest_discovery(tid)
+        avoid = [str(x).strip() for x in (payload or {}).get("avoid") or []
+                 if str(x).strip()]
+        try:
+            suggestion = self.engine.suggest_instruction(
+                material=material, topic=task.get("topic") or "",
+                task_type=task["type"], instruction=task["instruction"],
+                config=config, language=config.get("expected_language") or "auto",
+                meaning=(meaning or {}).get("data") if meaning else None,
+                avoid=avoid)
+        except EngineError as exc:
+            raise ApiError("INTENT_SUGGEST_FAILED",
+                           str(exc) or "Could not draft an instruction. Please retry.",
+                           500, retryable=True) from exc
+        except Exception as exc:            # transport errors, poisoned config…
+            log.exception("intent suggestion failed for %s", tid)
+            detail = str(exc) or type(exc).__name__
+            raise ApiError("INTENT_SUGGEST_FAILED",
+                           f"意图建议失败: {detail}\n"
+                           "可能原因: 模型名称错误、API 地址不可达、或 API Key 无效。\n"
+                           "请在 Settings 中检查 Model 名称是否正确，"
+                           "以及 Base URL 和 API Key 是否匹配。",
+                           500, retryable=True) from exc
+        return {"suggestion": suggestion}
+
     def meaning_summary(self, tid: str) -> dict:
         """Product-safe view of the latest discovery (4 fields; no reasoning)."""
         self.get_task(tid)  # 404 guard
@@ -995,7 +1040,8 @@ class Service:
             return {"ok": False, "error": "API key is empty."}
         try:
             from openai import OpenAI
-            cli = OpenAI(api_key=key, base_url=base, timeout=15)
+            cli = OpenAI(api_key=key, base_url=base, timeout=15,
+                         default_headers=_session_headers())
             data = cli.models.list()
             models = sorted(getattr(m, "id", str(m)) for m in (data.data or []))
             return {"ok": True, "models": models}
@@ -1032,7 +1078,8 @@ class Service:
             return {"ok": False, "error": "Model name is empty — fill it in first."}
         try:
             from openai import OpenAI
-            cli = OpenAI(api_key=key, base_url=base or None, timeout=30)
+            cli = OpenAI(api_key=key, base_url=base or None, timeout=30,
+                         default_headers=_session_headers())
             t0 = _time.time()
             r = cli.chat.completions.create(
                 model=model, max_tokens=8,
@@ -1055,6 +1102,22 @@ class Service:
         beats = self.engine.writing_map(plan=self._latest_plan(tid),
                                         content=draft["working_content"])
         return {"beats": beats}
+
+
+def _session_headers() -> dict[str, str]:
+    """Send a stable session id so OpenCode Go can optimize routing/caching."""
+    import os as _os
+    import uuid
+
+    _os.environ.setdefault(
+        "OPENCODE_SESSION_ID",
+        f"{_now_like()}-{uuid.uuid4().hex}")
+    return {"x-opencode-session": _os.environ["OPENCODE_SESSION_ID"]}
+
+
+def _now_like() -> str:
+    import time as _t
+    return _t.strftime("%Y%m%d", _t.localtime())
 
 
 _ORIGINS = {

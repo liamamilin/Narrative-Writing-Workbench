@@ -35,6 +35,19 @@ _TASK_TYPE_MAP = {
     "free_writing": "narrative_commentary",
 }
 
+# Bilingual hints for the Intent Coach (model-facing).
+_TASK_DESCRIPTIONS = {
+    "fiction_scene": "写一个具体场景的小说片段(场景、动作、对话)",
+    "narrative_analysis": "分析故事的叙事机制:视角、信息释放、推进",
+    "character_analysis": "剖析一个人物:行为、动机、矛盾",
+    "essay": "观点性散文:论点要有推进与重量",
+    "emotional_retelling": "带着情感重述一段事件/记忆",
+    "free_writing": "放松随笔,结构约束最弱",
+}
+
+# Cap source material fed to the lightweight Intent Coach call.
+_MATERIAL_CAP = 8000
+
 
 def _extract_json(text: str) -> dict:
     for candidate in (text, text.strip()):
@@ -242,6 +255,47 @@ class RealWritingEngine:
     def writing_map(self, *, plan, content) -> list[dict]:
         beats = ((plan or {}).get("wir") or {}).get("beats", [])
         return map_beats_to_paragraphs(beats, content)
+
+    # ----------------------------------------------------- suggest intent ----
+
+    def suggest_instruction(self, *, material, topic, task_type,
+                            instruction, config, language,
+                            meaning=None, avoid=None) -> str:
+        """Draft/sharpen ONE writing-instruction (Intent) via the model."""
+        sys_prompt = _load_prompt(self.config.prompts_dir, "suggest_instruction")
+        type_label = _TASK_DESCRIPTIONS.get(task_type, task_type)
+        parts = [f"## Task type\n\n{task_type} — {type_label}",
+                 f"## Source material\n\n{material[:_MATERIAL_CAP] or '(none)'}"]
+        if topic:
+            parts.append(f"## Topic (idea-based)\n\n{topic}")
+        if meaning:
+            block = meaning_to_wir_block(meaning)
+            parts.append(
+                "## Selected angle / core question\n\n"
+                f"Selected angle: {block['selected_angle']}\n"
+                f"Core question: {block['core_question']}")
+        instr = instruction or "(empty — draft from scratch)"
+        parts.append(f"## Current instruction\n\n{instr}")
+        dial = _dial_block(config)
+        parts.append(dial or "## Experience settings\n\n(defaults)")
+        if config.get("target_length"):
+            parts.append(f"## Target length\n\nabout {config['target_length']} characters")
+        lang = language or "auto"
+        parts.append(f"## Expected language\n\n{lang}")
+        if avoid:
+            parts.append(
+                "## Avoid (genuinely different from these)\n\n"
+                + "\n".join(f"- {a}" for a in avoid[:3]))
+        user = "\n\n".join(parts)
+        result = self.client.generate_text(
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user}],
+            role="suggest_instruction",
+            role_cfg=self.config.role("writer"))
+        text = (result.text or "").strip()
+        if not text:
+            raise GenerationFailed("We couldn't draft an instruction. Please retry.")
+        return text
 
     # --------------------------------------------------------------- util ----
 

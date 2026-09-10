@@ -56,6 +56,11 @@ class WritingEngine(Protocol):
 
     def writing_map(self, *, plan: dict | None, content: str) -> list[dict]: ...
 
+    def suggest_instruction(self, *, material: str, topic: str,
+                            task_type: str, instruction: str, config: dict,
+                            language: str, meaning: dict | None = None,
+                            avoid: list[str] | None = None) -> str: ...
+
 
 # --------------------------------------------------------------- helpers ----
 

@@ -163,3 +163,16 @@ class MockWritingEngine:
     def writing_map(self, *, plan, content) -> list[dict]:
         beats = (plan or {}).get("beats", _MOCK_WIR["beats"])
         return map_beats_to_paragraphs(beats, content)
+
+    def suggest_instruction(self, *, material, topic, task_type,
+                            instruction, config, language,
+                            meaning=None, avoid=None) -> str:
+        if instruction:
+            return ("精炼现有写作意图:保留你的观点与事实主张,收紧语言,"
+                    "并明确读者读完后应产生的具体感受。")
+        if topic:
+            return f"围绕“{topic}”,用具体细节而非抽象口号,让读者自己感到其中的分量。"
+        if material:
+            return ("从一个具体细节出发,把素材里最反常的事情推到读者面前,"
+                    "不直接说出结论。")
+        return "给出一个具体场景,让读者感到这次经历的分量,不直接说出结论。"

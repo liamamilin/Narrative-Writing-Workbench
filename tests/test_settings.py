@@ -117,9 +117,11 @@ def test_fetch_models_local_ollama_gets_placeholder_key(monkeypatch):
             return D()
 
     class FakeOpenAI:
-        def __init__(self, api_key=None, base_url=None, timeout=None):
+        def __init__(self, api_key=None, base_url=None, timeout=None,
+                     default_headers=None):
             captured["api_key"] = api_key
             captured["base_url"] = base_url
+            captured["default_headers"] = default_headers
         models = FakeModels()
 
     monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)

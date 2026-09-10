@@ -7,6 +7,7 @@ No agent module imports a provider SDK.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -69,11 +70,12 @@ class OpenAIClient(LLMClient):
     local servers exposing the OpenAI chat-completions API)."""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
-                 max_retries: int = 3):
+                 max_retries: int = 3, default_headers: dict[str, str] | None = None):
         from openai import OpenAI  # imported lazily; keeps MockClient dependency-free
 
         self._client = OpenAI(api_key=api_key, base_url=base_url or None,
-                              max_retries=max_retries)
+                              max_retries=max_retries,
+                              default_headers=default_headers or {})
 
     def _create(
         self,
@@ -117,6 +119,8 @@ class OpenAIClient(LLMClient):
                 kwargs.pop("extra_body")
                 dropped = True
             if dropped:
+                logger.warning("API rejected optional params (%s), retrying without: %s",
+                               getattr(exc, "status_code", "?"), exc)
                 return self._client.chat.completions.create(**kwargs)
             raise
 
@@ -239,5 +243,17 @@ def build_client(config: Config) -> LLMClient:
     if config.provider == "mock":
         return MockClient()
     if config.provider == "openai":
-        return OpenAIClient(api_key=config.api_key, base_url=config.base_url)
+        return OpenAIClient(
+            api_key=config.api_key, base_url=config.base_url,
+            default_headers=_opencode_session_headers())
     raise ValueError(f"unknown provider: {config.provider}")
+
+
+def _opencode_session_headers() -> dict[str, str]:
+    """Send a stable session id so OpenCode Go can optimize routing/caching."""
+    import uuid
+
+    ts = time.strftime("%Y%m%d", time.localtime())
+    sid = os.environ.get("OPENCODE_SESSION_ID") or f"{ts}-{uuid.uuid4().hex}"
+    os.environ.setdefault("OPENCODE_SESSION_ID", sid)
+    return {"x-opencode-session": sid}
