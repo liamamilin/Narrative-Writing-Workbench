@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Thesis Judge Verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "sharpness", "checks", "weakest", "hint"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "borderline", "fail"],
+      "description": "pass = sharp enough to write; borderline = marginal, allowed; fail = mediocre, must not reach the writer"
+    },
+    "sharpness": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "description": "overall sharpness per the seven-point test"
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["crack_real", "counterexample_strong", "boundary_clear", "frame_migrated"],
+      "properties": {
+        "crack_real": {
+          "type": "boolean",
+          "description": "crack names where the default reading concretely fails, not a restatement of it"
+        },
+        "counterexample_strong": {
+          "type": "boolean",
+          "description": "the counterexample is one a thoughtful opponent would actually raise, not a straw man"
+        },
+        "boundary_clear": {
+          "type": "boolean",
+          "description": "boundary states when the thesis holds and when it does not"
+        },
+        "frame_migrated": {
+          "type": "boolean",
+          "description": "refined_thesis is a genuinely different frame from common_reading, not a paraphrase"
+        }
+      }
+    },
+    "weakest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "the single weakest point, named; \"none\" only when verdict is pass and nothing is weak"
+    },
+    "hint": {
+      "type": "string",
+      "minLength": 1,
+      "description": "one concrete direction to sharpen: which frame to switch to, which mechanism to attach; when pass, an optional way to make it even sharper"
+    }
+  }
+}

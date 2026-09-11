@@ -149,11 +149,15 @@ _REVIEW_LABEL_ZH = {"strong": "强", "good": "良",
 
 
 def _review_summary_text(payload: dict) -> str:
-    parts = [f"{_REVIEW_DIM_ZH.get(k, k)}:{_REVIEW_LABEL_ZH.get(v, v)}"
-             for k, v in (payload.get("summary") or {}).items()]
+    s = payload.get("summary") or {}
+    parts = [f"{_REVIEW_DIM_ZH[k]}:{_REVIEW_LABEL_ZH.get(s.get(k), s.get(k))}"
+             for k in _REVIEW_DIM_ZH if s.get(k)]
     n = len(payload.get("issues") or [])
-    return ("检查:" + " · ".join(parts)
+    base = ("检查:" + " · ".join(parts)
             + (f";{n} 个可改进点" if n else ";未发现明显问题"))
+    if s.get("decision") == "PATCH_REQUIRED":
+        base += "。⚠ 未通过检查——这篇还没有兑现命题,建议针对性修订或换角度重写"
+    return base
 
 
 class ApiError(Exception):

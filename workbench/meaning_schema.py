@@ -38,6 +38,14 @@ with open(SCHEMA_PATH, "r", encoding="utf-8") as fh:
 Draft202012Validator.check_schema(MEANING_SCHEMA)
 _VALIDATOR = Draft202012Validator(MEANING_SCHEMA)
 
+JUDGE_SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "thesis_judge.schema.json"
+
+with open(JUDGE_SCHEMA_PATH, "r", encoding="utf-8") as fh:
+    JUDGE_SCHEMA = json.load(fh)
+
+Draft202012Validator.check_schema(JUDGE_SCHEMA)
+_JUDGE_VALIDATOR = Draft202012Validator(JUDGE_SCHEMA)
+
 _WS = re.compile(r"[\s，。、,.!?；;：:'\"“”‘’()（）\-—]+")
 
 
@@ -78,7 +86,24 @@ def validate_meaning(obj) -> list[str]:
     if _normalize(obj.get("refined_thesis")) == _normalize(obj.get("common_reading")):
         errors.append("refined_thesis must differ from common_reading "
                       "(no frame migration detected)")
+
+    # a crack that restates the default reading is not a crack (chain step 3)
+    if _normalize(obj.get("crack")) == _normalize(obj.get("common_reading")):
+        errors.append("crack must differ from common_reading "
+                      "(a crack that restates the default reading is no crack)")
     return errors
+
+
+def validate_judge(obj) -> list[str]:
+    """Return a list of error strings for a Thesis Judge verdict; empty = valid."""
+    if not isinstance(obj, dict):
+        return ["thesis judge verdict must be a JSON object"]
+    return [_format_error(e) for e in _JUDGE_VALIDATOR.iter_errors(obj)]
+
+
+def judge_failed(verdict: dict) -> bool:
+    """True when the judge rejects the package outright (not borderline)."""
+    return isinstance(verdict, dict) and verdict.get("verdict") == "fail"
 
 
 def selected_angle(obj: dict) -> dict:

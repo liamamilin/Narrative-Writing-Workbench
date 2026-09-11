@@ -727,3 +727,35 @@ all chain fields (crack: 主动性的定义由系统改写; counterexample: 财�
 derivation (§2), faced the counterexample head-on (§3), stated the
 boundary (§4), landed the implication (§5). ~3:47 total, meaning card
 shows the refined thesis.
+
+## Addendum (2026-09-11): Thesis judge — brutal filter + honest failure signals
+
+User sharpened the goal: the value is not "can it produce good things" but
+"produce good things with high probability, and KNOW when it did not".
+Focus: the article pipeline (topic selection untouched). Chain:
+insight discovery → sharp thesis → brutal selection → thesis evolution.
+
+1. Thesis judge (thesis_judge.md + schemas/thesis_judge.schema.json).
+   Independent second-eyes review after Meaning Discovery — same
+   seven-point ruler, different judge. Verdict {pass|borderline|fail,
+   sharpness 1-5, checks{crack_real, counterexample_strong,
+   boundary_clear, frame_migrated}, weakest, hint}. RealWritingEngine.
+   discover_meaning: fail → ONE retry with feedback (weakest+hint
+   injected into the discovery prompt; rejected angle label joins avoid
+   so the retry cannot parrot it); two fails → DiscoveryFailed (honest
+   failure: better to fail than ship mediocre); judge itself broken →
+   degrade to accept (never blocks writing). Uses the architect role.
+2. Review gate wiring (zero model cost). app/critic.py already computed
+   a deterministic PASS/PATCH_REQUIRED decision (docs/05 §7) but
+   RealWritingEngine.review discarded it. Now summary carries decision
+   + wq (reviews table unchanged); _review_summary_text renders
+   "⚠ 未通过检查——这篇还没有兑现命题,建议针对性修订或换角度重写"
+   on PATCH_REQUIRED and hides internal keys.
+3. validate_meaning semantic rule: crack must differ from common_reading
+   (a crack that restates the default reading is no crack).
+Mock engine unaffected (no judge). 12 new tests (verdict schema, pass/
+borderline/fail-retry/two-fail/crash-degrade paths, crack rule, review
+decision, gate text). 260 tests.
+Live smoke (mimo, AA制 topic): 3:57 total (~+10s = judge call), meaning
+5 fields intact, review returned decision=PASS wq=30, no degrade
+warnings in log.

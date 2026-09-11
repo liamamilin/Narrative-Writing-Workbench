@@ -22,7 +22,9 @@ from app.llm_client import build_client
 from app.models import StructuredOutputError
 from app.schemas import SchemaSet
 from app.structured import structured_call
-from ..meaning_schema import MEANING_SCHEMA, validate_meaning, meaning_to_wir_block
+from ..meaning_schema import (JUDGE_SCHEMA, MEANING_SCHEMA, judge_failed,
+                              selected_angle, validate_judge, validate_meaning,
+                              meaning_to_wir_block)
 from ..topic_schema import validate_topics
 from . import (DiscoveryFailed, GenerationFailed, GenerateResult,
                LockConflict, map_beats_to_paragraphs, split_paragraphs)
@@ -109,8 +111,39 @@ class RealWritingEngine:
     def discover_meaning(self, *, topic, writing_mode, angle_mode,
                          custom_angle, avoid, config, emit=None,
                          on_delta=None) -> dict:
+        """Run the ten-step thinking chain, then the independent sharpness
+        review (thesis judge). One retry with feedback on fail; two fails =
+        honest failure rather than shipping a mediocre thesis. A judge that
+        is itself unavailable degrades to accept (never blocks writing)."""
         if emit:
             emit("stage", {"stage": "discovery"})
+        base_avoid = list(avoid or [])
+        data = self._discover_once(
+            topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
+            custom_angle=custom_angle, avoid=base_avoid, feedback=None,
+            on_delta=on_delta)
+        verdict = self._judge_meaning(topic, data, on_delta=on_delta)
+        if not judge_failed(verdict):
+            return data
+        # Brutal filter said no: retry once with feedback; the rejected
+        # angle joins the avoid list so the retry cannot parrot it.
+        label = selected_angle(data).get("label", "")
+        retry_avoid = [a for a in base_avoid + [label] if a]
+        feedback = verdict
+        data = self._discover_once(
+            topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
+            custom_angle=custom_angle, avoid=retry_avoid, feedback=feedback,
+            on_delta=on_delta)
+        verdict = self._judge_meaning(topic, data, on_delta=on_delta)
+        if judge_failed(verdict):
+            hint = (verdict.get("hint") or verdict.get("weakest") or "").strip()
+            raise DiscoveryFailed(
+                "两次锋利评审都否决了这个命题——这次没有产出足够好的东西。"
+                "请重试或换个角度。" + (f"评审方向:{hint}" if hint else ""))
+        return data
+
+    def _discover_once(self, *, topic, writing_mode, angle_mode, custom_angle,
+                       avoid, feedback, on_delta) -> dict:
         sys_prompt = _load_prompt(self.config.prompts_dir, "meaning_discovery")
         user = (
             f"## Topic\n\n{topic}\n\n"
@@ -122,6 +155,14 @@ class RealWritingEngine:
         if avoid:
             user += "\n## Avoid (already-tried angles; propose genuinely different ones)\n\n"
             user += "\n".join(f"- {a}" for a in avoid) + "\n"
+        if feedback:
+            user += (
+                "\n## Previous attempt rejected by the sharpness review\n\n"
+                f"Weakest point: {feedback.get('weakest', '')}\n"
+                f"Reviewer direction: {feedback.get('hint', '')}\n\n"
+                "Produce a genuinely sharper, structurally different attempt. "
+                "Do not restate the rejected angle.\n"
+            )
         user += (
             "\n## Required Output Schema (JSON Schema draft 2020-12)\n\n"
             f"```json\n{json.dumps(MEANING_SCHEMA, ensure_ascii=False)}\n```\n\n"
@@ -137,6 +178,44 @@ class RealWritingEngine:
             raise DiscoveryFailed(
                 "We couldn't find a strong angle. Please retry.") from exc
         return stage.data
+
+    def _judge_meaning(self, topic: str, data: dict, on_delta=None) -> dict | None:
+        """Independent second-eyes review of the discovery output.
+
+        Returns the verdict dict, or None when the judge itself is
+        unavailable (network/schema failure) — degrade to accept so a
+        broken judge never blocks writing.
+        """
+        sel = selected_angle(data)
+        compact = {
+            "topic": data.get("topic", ""),
+            "common_reading": data.get("common_reading", ""),
+            "crack": data.get("crack", ""),
+            "selected_angle": sel.get("label", ""),
+            "mechanism": sel.get("mechanism", ""),
+            "refined_thesis": data.get("refined_thesis", ""),
+            "strongest_counterexample": data.get("strongest_counterexample", ""),
+            "boundary": data.get("boundary", ""),
+        }
+        user = (
+            f"## Topic\n\n{topic}\n\n"
+            "## Meaning Discovery output (chain products to judge)\n\n"
+            f"```json\n{json.dumps(compact, ensure_ascii=False)}\n```\n\n"
+            "## Required Output Schema (JSON Schema draft 2020-12)\n\n"
+            f"```json\n{json.dumps(JUDGE_SCHEMA, ensure_ascii=False)}\n```\n\n"
+            "Return JSON only."
+        )
+        try:
+            stage = structured_call(
+                self.client, role="thesis_judge",
+                role_cfg=self.config.role("architect"),
+                system_prompt=_load_prompt(self.config.prompts_dir, "thesis_judge"),
+                user_message=user, validator=validate_judge, on_delta=on_delta)
+            return stage.data
+        except Exception:
+            log.warning("thesis judge unavailable; accepting discovery",
+                        exc_info=True)
+            return None
 
     def generate(self, *, material, instruction, task_type, config,
                  meaning=None, emit=None, on_delta=None,
@@ -198,12 +277,17 @@ class RealWritingEngine:
                                 on_delta=on_delta)
         critique = stage.data
         q = critique.get("quality", {})
+        detail = getattr(stage, "decision_detail", None) or {}
         summary = {
             "progression": _label(q.get("progression")),
             "meaning_density": _label(q.get("meaning_density")),
             "immersion": _label(q.get("immersion")),
             "restraint": _label(q.get("restraint")),
             "coherence": _label(q.get("coherence")),
+            # deterministic gate recomputed in app/critic.py (docs/05 §7):
+            # PASS | PATCH_REQUIRED — "did not produce something good" signal
+            "decision": critique.get("decision", ""),
+            "wq": detail.get("wq"),
         }
         beat_map = {b["id"]: r for b, r in
                     zip(wir.get("beats", []), map_beats_to_paragraphs(wir.get("beats", []), content))}
