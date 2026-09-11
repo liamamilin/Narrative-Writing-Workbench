@@ -1,14 +1,14 @@
 """Validation for topic-suggestion structured output (product-safe view).
 
-Shape: {"topics": [{"text": str, "hook": str}, ...]} — exactly 3 items,
-distinct, single-sentence, non-filler.
+Shape: {"topics": [{"text": str, "hook": str}, ...]} — a batch of 3–12
+items, distinct, single-sentence, non-filler.
 """
 
 from __future__ import annotations
 
-_TOPICS_MIN, _TOPICS_MAX = 3, 3
+_TOPICS_MIN, _TOPICS_MAX = 3, 12
 _TEXT_MIN, _TEXT_MAX = 6, 80
-_HOOK_MIN, _HOOK_MAX = 2, 24
+_HOOK_MIN, _HOOK_MAX = 2, 30
 _BANNED = ("谈谈", "浅析", "感人", "深刻", "有意义", "引人深思", "值得思考")
 
 

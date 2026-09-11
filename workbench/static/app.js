@@ -120,20 +120,16 @@ function quickWrite() {
     <textarea id="qw-topic" rows="2" placeholder="e.g. 谈谈失败。"></textarea>
     <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
       `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
-    <label style="margin-top:14px">没有头绪?选个领域,让我来提</label>
-    <input id="qw-tax-search" placeholder="🔍 搜索领域 / 对象 / 张力,如 教育 / 学历 / 自由"
-           data-tip="输入即过滤下方三个下拉的选项">
-    <div class="trio">
-      <div><span class="muted small">领域</span>
-        <select id="qw-tax-domain" data-tip="话题的现实入口(可不限)"></select></div>
-      <div><span class="muted small">对象</span>
-        <select id="qw-tax-object" data-tip="具体对象/锚点 — 深刻不等于抽象,越具体越有力(可不限)"></select></div>
-      <div><span class="muted small">张力</span>
-        <select id="qw-tax-tension" data-tip="跨领域的目标冲突轴,如 自由↔安全(可不限)"></select></div>
-    </div>
+    <label style="margin-top:14px">没有头绪?选个领域,我来批量生产</label>
+    <input id="qw-tax-search" placeholder="🔍 搜索领域,如 教育 / 职场 / AI"
+           data-tip="输入即过滤领域选项">
+    <div><span class="muted small">领域</span>
+      <select id="qw-tax-domain" data-tip="话题的现实入口(可不限)"></select></div>
+    <input id="qw-tax-hint" placeholder="方向提示(可选),如 关注外卖骑手 / 只看平台经济"
+           data-tip="想聚焦时填;空着则按领域全面铺开" style="margin-top:8px">
     <p class="row" style="margin:10px 0 0">
-      <button id="qw-topic-suggest" data-tip="按所选领域生成 3 个可争论的话题,点击候选即可填入;可换一批">✦ 给我一个话题</button>
-      <button id="qw-topic-more" style="display:none" data-tip="避开刚看过的,再提 3 个">换一批</button>
+      <button id="qw-topic-suggest" data-tip="生成一批可争论的话题(8条,覆盖领域不同侧面),点击候选即可填入;再点会累加不重复的一批">✦ 生成一批话题</button>
+      <button id="qw-topic-clear" style="display:none" data-tip="清空候选列表与去重记录">清空</button>
       <span class="muted small" id="qw-tax-sel"></span></p>
     <div class="chips" id="qw-sug" style="margin-top:8px"></div>
     <label>Writing mode</label>
@@ -169,8 +165,9 @@ function quickWrite() {
     $("#qw-topic").value = b.dataset.v;
   };
 
-  /* topic suggestion: search+selects -> suggest -> candidates -> fill */
-  const TX = { tax: null, domain: "", object: "", tension: "", seen: [] };
+  /* topic suggestion: search+domain -> batch suggest -> accumulate -> fill.
+     Objects/tensions stay engine-internal production resources (v4). */
+  const TX = { tax: null, domain: "", batch: [], seen: [] };
   const fillSelect = (sel, items, current) => {
     const q = ($("#qw-tax-search").value || "").trim().toLowerCase();
     const hit = s => !q || s.name.toLowerCase().includes(q)
@@ -180,52 +177,37 @@ function quickWrite() {
     sel.innerHTML = opts.map(s =>
       `<option value="${esc(s.id)}"${s.id === current ? " selected" : ""}>${esc(s.name)}</option>`).join("");
   };
-  const fillObjectSelect = () => {
-    const t = TX.tax, sel = $("#qw-tax-object"); if (!t || !sel) return;
-    const q = ($("#qw-tax-search").value || "").trim().toLowerCase();
-    const hit = s => !q || s.toLowerCase().includes(q);
-    sel.innerHTML = `<option value=""${!TX.object ? " selected" : ""}>不限</option>`
-      + t.objects.map(g => {
-          const items = g.items.filter(s => hit(s) || s === TX.object);
-          if (!items.length) return "";
-          return `<optgroup label="${esc(g.name)}">` + items.map(o =>
-            `<option value="${esc(o)}"${o === TX.object ? " selected" : ""}>${esc(o)}</option>`).join("")
-            + `</optgroup>`;
-        }).join("");
-  };
   const renderTax = () => {
     const t = TX.tax; if (!t) return;
     fillSelect($("#qw-tax-domain"), t.domains, TX.domain);
-    fillObjectSelect();
-    fillSelect($("#qw-tax-tension"), t.tensions, TX.tension);
     const dn = (t.domains.find(d => d.id === TX.domain) || {}).name || "";
-    $("#qw-tax-sel").textContent = [dn, TX.object, TX.tension && (t.tensions.find(s => s.id === TX.tension) || {}).name]
-      .filter(Boolean).join(" · ");
+    $("#qw-tax-sel").textContent = dn ? `领域: ${dn}` : "";
   };
   $("#qw-tax-search").oninput = renderTax;
   $("#qw-tax-domain").onchange = e => { TX.domain = e.target.value; renderTax(); };
-  $("#qw-tax-object").onchange = e => { TX.object = e.target.value; renderTax(); };
-  $("#qw-tax-tension").onchange = e => { TX.tension = e.target.value; renderTax(); };
-  const renderSug = topics => {
-    $("#qw-sug").innerHTML = topics.map(t =>
+  const renderSug = () => {
+    $("#qw-sug").innerHTML = TX.batch.map(t =>
       `<button class="chip-sug" data-tip="点击填入;仍需你自己点 Write" data-v="${esc(t.text)}">
          <b>${esc(t.text)}</b><span class="sub">${esc(t.hook)}</span></button>`).join("");
-    $("#qw-topic-more").style.display = topics.length ? "" : "none";
+    $("#qw-topic-clear").style.display = TX.batch.length ? "" : "none";
   };
   const suggestTopics = async () => {
     const btn = $("#qw-topic-suggest");
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Thinking…';
     try {
       const r = await api("POST", "/topics/suggest",
-        { domain: TX.domain || null, object: TX.object || null,
-          tension: TX.tension || null, avoid: TX.seen });
-      TX.seen = [...TX.seen, ...r.topics.map(t => t.text)].slice(-9);
-      renderSug(r.topics);
+        { domain: TX.domain || null, count: 8,
+          hint: ($("#qw-tax-hint").value || "").trim() || null,
+          avoid: TX.seen });
+      TX.batch = [...TX.batch, ...r.topics];
+      TX.seen = [...TX.seen, ...r.topics.map(t => t.text)].slice(-40);
+      renderSug();
+      $("#qw-sug").scrollTop = $("#qw-sug").scrollHeight;
     } catch (e) { toast(e.message || "Could not suggest topics.", true); }
-    finally { btn.disabled = false; btn.textContent = "✦ 给我一个话题"; }
+    finally { btn.disabled = false; btn.textContent = "✦ 生成一批话题"; }
   };
-  $("#qw-topic-suggest").onclick = () => { TX.seen = []; suggestTopics(); };
-  $("#qw-topic-more").onclick = () => suggestTopics();
+  $("#qw-topic-suggest").onclick = suggestTopics;
+  $("#qw-topic-clear").onclick = () => { TX.batch = []; TX.seen = []; renderSug(); };
   $("#qw-sug").onclick = e => {
     const b = e.target.closest(".chip-sug"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;

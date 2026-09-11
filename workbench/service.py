@@ -1018,11 +1018,19 @@ class Service:
             raise ApiError("VALIDATION", f"unknown tension: {tension}")
         avoid = [str(x).strip() for x in payload.get("avoid") or []
                  if str(x).strip()]
+        count = payload.get("count", 8)
+        if isinstance(count, bool) or not isinstance(count, int) \
+                or not 3 <= count <= 12:
+            raise ApiError("VALIDATION", "count must be an integer in 3..12")
+        hint = str(payload.get("hint") or "").strip() or None
+        if hint and len(hint) > 100:
+            raise ApiError("VALIDATION", "hint must be at most 100 characters")
         try:
             data = self.engine.suggest_topics(domain=domain,
                                               object_name=object_name,
                                               tension=tension,
-                                              avoid=avoid, config=None)
+                                              avoid=avoid, config=None,
+                                              count=count, hint=hint)
         except EngineError as exc:
             raise ApiError("TOPIC_SUGGEST_FAILED",
                            str(exc) or "Could not suggest topics. Please retry.",

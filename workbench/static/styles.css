@@ -44,9 +44,10 @@ h1{font-size:1.6rem} h2{font-size:1.15rem} h3{font-size:1rem}
 .chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .tax-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 2px}
 #qw-tax-search{width:100%;margin-bottom:6px}
+#qw-sug{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow:auto}
 .chip-sug{display:flex;flex-direction:column;align-items:flex-start;gap:2px;
   border:1px solid var(--line);border-radius:12px;padding:8px 12px;background:var(--panel);
-  text-align:left;max-width:100%}
+  text-align:left;max-width:100%;width:100%;cursor:pointer}
 .chip-sug .sub{color:var(--muted);font-size:12px}
 .chip-sug:hover{border-color:var(--accent)}
 .trio{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}

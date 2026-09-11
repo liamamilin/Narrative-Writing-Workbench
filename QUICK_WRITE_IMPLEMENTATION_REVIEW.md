@@ -483,3 +483,49 @@ hard cap 70. Live smoke: object=算法 / 大学 both return Pattern-hooked
 trios (Goodhart / Individual Rationality Trap / Hidden Beneficiary).
 Note: "加班"/"学生" are not in the source Object list (§2) and are
 correctly rejected by validation — pick from the 313 anchors.
+
+## Addendum (2026-09-11): Topic Picker v4 — domain is the only UI facet;
+topics are batch-produced
+
+User simplified the model after seeing v3: objects and tensions are
+*production resources*, not UI facets. The picker now exposes only the
+domain (49 Surface Domains); taxonomy v3 stays in-repo as the engine's
+production vocabulary.
+
+Design:
+- **Batch generation**: one click produces `count` topics (default 8,
+  API allows 3..12). New topics APPEND to the list (user's revised
+  choice; a 清空 button resets list + dedup memory). Already-shown texts
+  accumulate into `avoid[]` (capped 40 client-side, 16 injected into
+  the prompt) so every batch is genuinely new.
+- **Coverage enforcement** (source doc §0 "Taxonomy 负责不遗漏世界"):
+  (1) prompt hard-requires a different Concrete Anchor per topic and
+  batch-wide spread across the domain's sub-areas — no eight rewrites
+  of one object; (2) the real engine samples `count` distinct tension
+  axes from taxonomy §6 and assigns one per topic; (3) a batch-level
+  soft hint lists the M1–M10 mechanism families so the batch's "why"
+  shapes differ too (soft, not per-topic assignment — three hard
+  constraints per topic proved over-constraining in design review).
+- **User steer**: optional 方向提示 input (`hint`, ≤100 chars) feeds
+  generation without letting the whole batch collapse onto one object.
+- **API**: POST /topics/suggest gains `count` (int 3..12, else 400) and
+  `hint`; `object`/`tension` remain accepted for compatibility (UI no
+  longer sends them). Engine protocol gains count/hint.
+- **Schema**: topics 3–12 (was exactly 3), distinct-text check kept,
+  text 6–80, hook 2–30 (headroom; prompt still prefers ≤20).
+- **Mock**: serves `count` from the canned pool with rotation, capped
+  at pool size so a batch never self-repeats; 4 canned hooks exceeded
+  24 chars (English Pattern names) and were shortened.
+- Engine imports its own taxonomy loader (no upward service import).
+
+Live smoke (real engine): education batch 1 = 8 topics on 8 distinct
+sub-areas (分科/手机禁令/导师制/成绩问责/小组作业/学区房/集体备课/重点校
+经费), 8 distinct axes; batch 2 (avoid batch 1) zero overlap and new
+sub-areas; labor+hint 关注外卖骑手 honored without collapsing the batch.
+Occasional single-schema-error reruns remain possible (retryable UX);
+hook headroom reduced their rate.
+
+Docs: docs/TOPIC_TAXONOMY.md == world_topic_taxonomy_v1.md (verified
+byte-identical); taxonomy.json v3 verified anchor-exact against the
+source (49 domains / 18 groups / 313 anchors / 33 tensions).
+235 tests pass.

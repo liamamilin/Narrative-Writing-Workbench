@@ -299,9 +299,17 @@ class RealWritingEngine:
         return text
 
     def suggest_topics(self, *, domain=None, object_name=None, tension=None,
-                       avoid=None, config=None) -> dict:
-        """Propose 3 discussable topics. AI proposes; nothing is persisted."""
+                       avoid=None, config=None, count=8, hint=None) -> dict:
+        """Propose a batch of discussable topics (default 8).
+
+        The UI exposes only the domain; objects/tensions are engine-side
+        production resources. Coverage is enforced two ways: the prompt
+        demands a different Concrete Anchor per topic, and the engine
+        samples `count` distinct tension axes (taxonomy §6) requiring
+        one topic per axis.
+        """
         import dataclasses
+        import random
         # Reasoning models + long prompt + json_object intermittently return
         # empty content on this gateway (V1 report §4 family of bugs); a
         # short creative task needs no reasoning anyway — use a lite cfg.
@@ -309,15 +317,23 @@ class RealWritingEngine:
                                    reasoning_effort="",
                                    max_output_tokens=3000,
                                    temperature=0.6)
+        count = max(3, min(12, int(count or 8)))
+        tax = _load_topic_taxonomy()
+        axes = random.sample([t["name"] for t in tax["tensions"]], count)
         sys_prompt = _load_prompt(self.config.prompts_dir, "topic_suggest")
         parts = [
+            f"## Batch size\n\n{count}",
             f"## Domain\n\n{domain or '(不限 — roam across all domains)'}",
             f"## Object (Concrete Anchor)\n\n"
-            f"{object_name or '(不限 — pick your own concrete anchor)'}",
-            f"## Tension\n\n{tension or '(不限 — any goal-conflict axis)'}"]
+            f"{object_name or '(不限 — 每条话题自选一个不同的具体锚点)'}",
+            f"## Tension\n\n{tension or '(不限 — 使用下方指定轴)'}",
+            "## Required tension axes (one per topic, in order)\n\n"
+            + "\n".join(f"- {a}" for a in axes)]
+        if hint:
+            parts.append(f"## User steer (optional direction)\n\n{hint[:100]}")
         if avoid:
             parts.append("## Avoid (genuinely different from these)\n\n"
-                         + "\n".join(f"- {a}" for a in avoid[:8]))
+                         + "\n".join(f"- {a}" for a in avoid[:16]))
         parts.append("## Language\n\nChinese (zh)")
         try:
             stage = structured_call(
@@ -359,6 +375,22 @@ def _load_product_patch_prompt(prompts_dir):
 def _load_prompt(prompts_dir, name):
     from app.prompts import load_prompt
     return load_prompt(prompts_dir, name)
+
+
+def _load_topic_taxonomy():
+    """Static, versioned topic taxonomy (workbench/taxonomy.json).
+
+    Loaded here rather than via the service layer: the engine sits below
+    the product service and must not import upward.
+    """
+    from functools import lru_cache
+    from pathlib import Path
+
+    @lru_cache(maxsize=1)
+    def _read():
+        p = Path(__file__).resolve().parent.parent / "taxonomy.json"
+        return json.loads(p.read_text(encoding="utf-8"))
+    return _read()
 
 
 _DIAL_GUIDANCE = {

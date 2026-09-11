@@ -35,7 +35,7 @@ _MOCK_TOPICS = [
      "domains": ["labor", "business", "economy"], "tensions": ["t05", "t21"]},
     {"text": "学历是正在通胀的货币。", "hook": "Goodhart Trap:学历失真",
      "domains": ["education", "labor", "class"], "tensions": ["t26", "t05"]},
-    {"text": "没人敢第一个给孩子减负。", "hook": "Individual Rationality Trap",
+    {"text": "没人敢第一个给孩子减负。", "hook": "个体理性陷阱",
      "domains": ["education", "parenting", "class"], "tensions": ["t28", "t06"]},
     {"text": "补习越多,越不知道自己喜欢什么。", "hook": "培训偷走了什么",
      "domains": ["education", "parenting", "psychology"], "tensions": ["t26", "t16"]},
@@ -47,7 +47,7 @@ _MOCK_TOPICS = [
      "domains": ["internet", "socialmedia", "ai"], "tensions": ["t07", "t28"]},
     {"text": "免费的产品里,你才是被卖的东西。", "hook": "Hidden Cost Bearer",
      "domains": ["internet", "media", "business"], "tensions": ["t17", "t16"]},
-    {"text": "信息越多,越难知道真相。", "hook": "Information Abundance Paradox",
+    {"text": "信息越多,越难知道真相。", "hook": "信息越多越糟",
      "domains": ["media", "socialmedia", "psychology"], "tensions": ["t30", "t16"]},
     {"text": "热搜不是新闻,是注意力的期货。", "hook": "流量在交易什么",
      "domains": ["media", "entertainment", "economy"], "tensions": ["t20"]},
@@ -191,7 +191,7 @@ _MOCK_TOPICS = [
      "domains": ["crime", "city", "tech"], "tensions": ["t03", "t17"]},
     {"text": "慈善越透明,善款越难筹。", "hook": "Transparency Paradox",
      "domains": ["governance", "finance", "class"], "tensions": ["t17", "t15"]},
-    {"text": "对个人理性的选择,正在集体埋单。", "hook": "Individual Rationality Trap",
+    {"text": "对个人理性的选择,正在集体埋单。", "hook": "个体理性陷阱",
      "domains": ["economy", "environment", "class"], "tensions": ["t01", "t28"]},
     {"text": "自愿的加班,抬高所有人的门槛。", "hook": "个人的理性集体的坏",
      "domains": ["labor", "education", "business"], "tensions": ["t01", "t28"]},
@@ -209,7 +209,7 @@ _MOCK_TOPICS = [
      "domains": ["industry", "tech", "intl"], "tensions": ["t21", "t33"]},
     {"text": "转型越急,旧资产越顽固。", "hook": "Lock-in 的阻力",
      "domains": ["energy", "finance", "industry"], "tensions": ["t11", "t20"]},
-    {"text": "风口越多,越没人做慢生意。", "hook": "Signal/Substance Divergence",
+    {"text": "风口越多,越没人做慢生意。", "hook": "信号背离实质",
      "domains": ["startup", "business", "finance"], "tensions": ["t20", "t26"]},
     {"text": "信仰越便利,敬畏越稀薄。", "hook": "祛魅的另一面",
      "domains": ["religion", "internet", "psychology"], "tensions": ["t32", "t16"]},
@@ -384,14 +384,16 @@ class MockWritingEngine:
         return "给出一个具体场景,让读者感到这次经历的分量,不直接说出结论。"
 
     def suggest_topics(self, *, domain=None, object_name=None, tension=None,
-                       avoid=None, config=None) -> dict:
+                       avoid=None, config=None, count=8, hint=None) -> dict:
         """Deterministic canned candidates (LLM-free), avoid-list honored.
 
         Entries carry multiple domain tags; object filtering matches the
         object name as a substring of the canned text (Concrete Anchor
         heuristic; unmatched objects roam the whole pool). The pool start
         rotates per call so an immediate re-roll (without avoid) still
-        yields a new trio.
+        yields a fresh slice. `hint` is a real-engine-only steer and is
+        ignored here. Effective count is capped at the pool size so a
+        batch never repeats within itself.
         """
         pool = [t for t in _MOCK_TOPICS
                 if (not domain or domain in t["domains"])
@@ -404,5 +406,6 @@ class MockWritingEngine:
         start = _MockTopicState.next_start()
         rotated = pool[start % len(pool):] + pool[:start % len(pool)]
         picks = [t for t in rotated if t["text"] not in banned]
+        n = max(3, min(int(count or 8), len(picks) or 1))
         return {"topics": [{"text": t["text"], "hook": t["hook"]}
-                           for t in picks[:3]]}
+                           for t in picks[:n]]}
