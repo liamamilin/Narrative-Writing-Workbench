@@ -233,6 +233,25 @@ def test_real_engine_count_and_tension_params():
     assert "t08" in user and "算法" in user
 
 
+def test_real_engine_avoid_injection_cap():
+    """v5: the UI sends the whole library as avoid; prompt injects 24 max."""
+    from app.config import Config
+    from app.llm_client import MockClient
+    from workbench.engine.real import RealWritingEngine
+
+    good = json.dumps({"topics": [
+        {"text": f"可争论话题编号{i}。", "hook": f"钩子{i}"}
+        for i in range(1, 6)]}, ensure_ascii=False)
+    eng = RealWritingEngine.__new__(RealWritingEngine)
+    eng.config = Config.default()
+    eng.client = MockClient({"topic_suggest": [good]})
+    eng.suggest_topics(avoid=[f"已看过的话题{i}" for i in range(40)])
+    user = eng.client.calls[0]["messages"][1]["content"]
+    block = user.split("## Avoid")[1].split("##")[0]
+    listed = [l for l in block.splitlines() if l.strip().startswith("- ")]
+    assert len(listed) == 24
+
+
 def test_schema_rejects_pseudo_depth_and_oversize():
     assert validate_topics({"topics": [
         {"text": "谈谈失败。", "hook": "话题太轻"},

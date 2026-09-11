@@ -48,6 +48,8 @@ function route() {
   for (const [re, name] of routes) {
     const m = h.match(re);
     if (m) {
+      document.querySelectorAll("#topbar nav a").forEach(a =>
+        a.classList.toggle("on", a.getAttribute("href") === h));
       Promise.resolve(SCREENS[name](...m.slice(1).map(decodeURIComponent)))
         .catch(e => toast(e.message || "Something went wrong.", true));
       return;
@@ -62,42 +64,42 @@ async function home() {
   const [tasks, projects] = await Promise.all([api("GET", "/tasks"), api("GET", "/projects")]);
   $("#app").innerHTML = `
     <div class="hero">
-      <h1>What do you want to do?</h1>
+      <h1>你想写点什么?</h1>
       <div class="entries">
         <a class="entry" href="#/quickwrite" data-tip="只有一个话题也行:系统先找到值得说的角度再写">
-          <b>Start with an idea</b>
+          <b>从一个话题开始</b>
           <span class="muted small">Turn a topic into a strong piece of writing</span></a>
         <a class="entry" href="#/tasks/new" data-tip="粘贴笔记、素材、观点,生成初稿">
-          <b>Write from material</b>
+          <b>从素材写起</b>
           <span class="muted small">Turn notes and sources into a draft</span></a>
         <a class="entry" href="#/revise" data-tip="贴入你的旧稿,只做局部修改,不重写全文">
-          <b>Improve a draft</b>
+          <b>改一篇旧稿</b>
           <span class="muted small">Revise without rewriting everything</span></a>
       </div>
       <div class="cta">
-        <button onclick="newProjectPrompt()" data-tip="项目用来把相关素材与任务归堆(可选)">New Project</button>
+        <button onclick="newProjectPrompt()" data-tip="项目用来把相关素材与任务归堆(可选)">新建项目</button>
       </div>
     </div>
     <div class="cols">
-      <section class="card"><h3>Recent Tasks</h3>${
+      <section class="card"><h3>最近任务</h3>${
         tasks.tasks.length ? tasks.tasks.slice(0, 8).map(t => `
           <div class="vrow"><a class="grow" href="#/tasks/${t.id}">
             <b>${esc(t.title || t.topic || t.instruction.slice(0, 40) || "Untitled")}</b>
             <span class="muted small"> · ${esc(t.status)}</span></a>
-            <a class="small" href="#/tasks/${t.id}" data-tip="在新标签页打开此任务">Open</a></div>`).join("")
-        : `<p class="muted">Nothing yet. Start with an idea or some material.</p>`}
+            <a class="small" href="#/tasks/${t.id}" data-tip="在新标签页打开此任务">打开</a></div>`).join("")
+        : `<p class="muted">还没有任务。从一个话题或一批素材开始。</p>`}
       </section>
-      <section class="card"><h3>Recent Projects</h3>${
+      <section class="card"><h3>最近项目</h3>${
         projects.projects.length ? projects.projects.slice(0, 8).map(p => `
           <div class="vrow"><a class="grow" href="#/projects/${p.id}"><b>${esc(p.name)}</b></a>
-          <a class="small" href="#/projects/${p.id}" data-tip="在新标签页打开此项目">Open</a></div>`).join("")
-        : `<p class="muted">Projects group related sources and tasks (optional).</p>`}
+          <a class="small" href="#/projects/${p.id}" data-tip="在新标签页打开此项目">打开</a></div>`).join("")
+        : `<p class="muted">项目用于把相关素材与任务归堆(可选)。</p>`}
       </section>
     </div>`;
 }
 
 async function newProjectPrompt() {
-  const name = prompt("Project name:");
+  const name = prompt("项目名称:");
   if (!name) return;
   const p = await api("POST", "/projects", { name });
   location.hash = `#/projects/${p.id}`;
@@ -105,122 +107,244 @@ async function newProjectPrompt() {
 
 /* --------------------------------------------------------- quick write */
 const QW_EXAMPLES = [
-  "谈谈失败。",
   "为什么越想摆脱一个人,反而越像他?",
   "为什么知道结局的故事仍然有悬念?",
   "为什么人会怀念已经结束的关系?",
+  "为什么所有人都理性,合起来却是坏结果?",
 ];
 let AUTOSTART = false;
 
+/* topic library + compose state persist client-side only; the server never
+   stores suggestions, so "AI proposes, user accepts" stays untouched. */
+const LIB_KEY = "qw_topic_lib_v1", COMPOSE_KEY = "qw_compose_v1", LIB_MAX = 200;
+const loadLib = () => {
+  try { return JSON.parse(localStorage.getItem(LIB_KEY) || "[]") || []; }
+  catch { return []; }
+};
+const saveLib = lib => {
+  try {
+    localStorage.setItem(LIB_KEY, JSON.stringify(lib.slice(-LIB_MAX)));
+  } catch { /* private mode: degrade to session-only */ }
+};
+const loadCompose = () => {
+  try { return JSON.parse(localStorage.getItem(COMPOSE_KEY) || "{}") || {}; }
+  catch { return {}; }
+};
+const saveCompose = st => {
+  try { localStorage.setItem(COMPOSE_KEY, JSON.stringify(st)); }
+  catch { /* private mode: degrade to session-only */ }
+};
+
 function quickWrite() {
+  const saved = loadCompose();
   $("#app").innerHTML = `
-  <div class="form">
-    <h1>Start with an idea</h1>
-    <label>What do you want to talk about?</label>
-    <textarea id="qw-topic" rows="2" placeholder="e.g. 谈谈失败。"></textarea>
-    <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
-      `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
-    <label style="margin-top:14px">没有头绪?选个领域,我来批量生产</label>
-    <input id="qw-tax-search" placeholder="🔍 搜索领域,如 教育 / 职场 / AI"
-           data-tip="输入即过滤领域选项">
-    <div><span class="muted small">领域</span>
-      <select id="qw-tax-domain" data-tip="话题的现实入口(可不限)"></select></div>
-    <input id="qw-tax-hint" placeholder="方向提示(可选),如 关注外卖骑手 / 只看平台经济"
-           data-tip="想聚焦时填;空着则按领域全面铺开" style="margin-top:8px">
-    <p class="row" style="margin:10px 0 0">
-      <button id="qw-topic-suggest" data-tip="生成一批可争论的话题(8条,覆盖领域不同侧面),点击候选即可填入;再点会累加不重复的一批">✦ 生成一批话题</button>
-      <button id="qw-topic-clear" style="display:none" data-tip="清空候选列表与去重记录">清空</button>
-      <span class="muted small" id="qw-tax-sel"></span></p>
-    <div class="chips" id="qw-sug" style="margin-top:8px"></div>
-    <label>Writing mode</label>
-    <select id="qw-mode" data-tip="Deep Narrative=先体验后领悟、延迟解释、克制收束(旗舰模式);Clear Essay=观点清晰直给;Fiction=以故事呈现;Free Writing=放松随笔">
-      <option value="deep_narrative" selected>Deep Narrative (recommended)</option>
-      <option value="clear_essay">Clear Essay</option>
-      <option value="fiction">Fiction</option>
-      <option value="free_writing">Free Writing</option>
-    </select>
-    <label>Angle</label>
-    <select id="qw-angle" data-tip="Auto Discover=系统找最有意义、最能推进的切入角度;不满意可生成后点 Try another angle 换">
-      <option value="auto" selected>Auto Discover</option>
-      <option value="custom">I have an angle in mind</option>
-    </select>
-    <textarea id="qw-custom" rows="2" placeholder="Your angle — the system will refine, not replace it." style="display:none"></textarea>
-    <div class="trio" style="margin-top:10px">
-      <div data-tip="正文目标字数,模型会在 ±20% 内调节">
-        <span class="muted small">Target length</span>
-        <input id="qw-length" type="number" min="200" step="50" value="900"></div>
-      <div data-tip="正文输出语言;auto = 跟随话题语言">
-        <span class="muted small">Language</span>
-        <select id="qw-lang"><option value="auto">auto</option><option value="zh">中文</option><option value="en">English</option></select></div>
-    </div>
-    <p class="row" style="margin-top:22px">
-      <button class="primary" id="qw-go" data-tip="先找意义,再写初稿;完成后进入工作台">Write</button>
-      <button onclick="location.hash='#/'">Cancel</button>
-    </p>
-    <p class="muted small">The workbench first finds something worth saying — a real angle and
-    a reader journey — before it writes. You'll land in the same workspace to review and revise.</p>
+  <div class="qw-grid">
+    <section class="card qw-col qw-left">
+      <h1 class="qw-title">从一个值得说的话题开始</h1>
+      <p class="muted small qw-sub">左栏发现可争论的话题,点选填入右栏;开始写仍由你自己按下。</p>
+      <input id="qw-tax-search" placeholder="🔍 搜索领域,如 教育 / 职场 / AI"
+             data-tip="输入即过滤领域 chips">
+      <div class="tax-row" id="qw-tax-domains" data-tip="点选一个领域;不限 = 全领域漫游"></div>
+      <input id="qw-tax-hint" placeholder="方向提示(可选),如 关注外卖骑手 / 只看平台经济"
+             data-tip="想聚焦时填;空着则按领域全面铺开">
+      <p class="row">
+        <button id="qw-topic-suggest" data-tip="生成一批可争论的话题(8条,覆盖领域不同侧面);再点会累加不重复的一批">✦ 生成一批话题</button>
+        <span class="muted small" id="qw-tax-sel"></span></p>
+      <div class="qw-lib-head">
+        <h3>已生成话题 <span class="muted small" id="qw-lib-stats"></span></h3>
+        <button class="ghost" id="qw-topic-clear" style="display:none"
+                data-tip="清空整个话题库与去重记录">清空</button>
+      </div>
+      <div id="qw-lib"></div>
+      <div id="qw-skel" style="display:none">
+        <div class="qw-card qw-skel"></div><div class="qw-card qw-skel"></div>
+        <div class="qw-card qw-skel"></div>
+      </div>
+    </section>
+    <section class="card qw-col qw-right">
+      <label>你要谈的话题</label>
+      <textarea id="qw-topic" rows="3"
+                placeholder="在这里写下话题,或点选左侧任意一条">${esc(saved.topic || "")}</textarea>
+      <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
+        `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
+      <label>写作模式</label>
+      <select id="qw-mode" data-tip="Deep Narrative=先体验后领悟、延迟解释、克制收束(旗舰模式);Clear Essay=观点清晰直给;Fiction=以故事呈现;Free Writing=放松随笔">
+        <option value="deep_narrative" selected>Deep Narrative(推荐)</option>
+        <option value="clear_essay">Clear Essay(观点直给)</option>
+        <option value="fiction">Fiction(以故事呈现)</option>
+        <option value="free_writing">Free Writing(放松随笔)</option>
+      </select>
+      <label>切入角度</label>
+      <select id="qw-angle" data-tip="Auto Discover=系统找最有意义、最能推进的切入角度;不满意可生成后换">
+        <option value="auto" selected>Auto Discover(自动发现)</option>
+        <option value="custom">I have an angle in mind(自己定)</option>
+      </select>
+      <textarea id="qw-custom" rows="2" placeholder="你的角度 — 系统会提炼,不会替换。" style="display:none"></textarea>
+      <div class="qw-duo">
+        <div data-tip="正文目标字数,模型会在 ±20% 内调节">
+          <span class="muted small">目标字数</span>
+          <input id="qw-length" type="number" min="200" step="50" value="900"></div>
+        <div data-tip="正文输出语言;auto = 跟随话题语言">
+          <span class="muted small">语言</span>
+          <select id="qw-lang"><option value="auto">auto</option><option value="zh">中文</option><option value="en">English</option></select></div>
+      </div>
+      <p class="row qw-cta">
+        <button class="primary" id="qw-go" data-tip="先找意义,再写初稿;完成后进入工作台(⌘/Ctrl+Enter 同效)">开始写</button>
+        <button onclick="location.hash='#/'">取消</button>
+      </p>
+      <p class="muted small">系统先找到值得说的角度与读者旅程,再动笔;写完进入同一工作台审阅修改。</p>
+    </section>
   </div>`;
+  if (saved.mode) $("#qw-mode").value = saved.mode;
+  if (saved.angle) $("#qw-angle").value = saved.angle;
+  if (saved.custom) $("#qw-custom").value = saved.custom;
+  if (saved.angle === "custom") $("#qw-custom").style.display = "";
+  if (saved.length) $("#qw-length").value = saved.length;
+  if (saved.lang) $("#qw-lang").value = saved.lang;
   $("#qw-ex").onclick = e => {
     const b = e.target.closest(".chip"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;
+    saveComposeNow();
   };
 
-  /* topic suggestion: search+domain -> batch suggest -> accumulate -> fill.
-     Objects/tensions stay engine-internal production resources (v4). */
-  const TX = { tax: null, domain: "", batch: [], seen: [] };
-  const fillSelect = (sel, items, current) => {
-    const q = ($("#qw-tax-search").value || "").trim().toLowerCase();
-    const hit = s => !q || s.name.toLowerCase().includes(q)
-                  || s.id.toLowerCase().includes(q);
-    const opts = [{ id: "", name: "不限" }, ...items]
-      .filter(s => hit(s) || s.id === current);
-    sel.innerHTML = opts.map(s =>
-      `<option value="${esc(s.id)}"${s.id === current ? " selected" : ""}>${esc(s.name)}</option>`).join("");
+  /* topic suggestion v5: domain chips -> batch generate -> grouped library
+     (localStorage). Objects/tensions stay engine-internal resources. */
+  const TX = { tax: null, domain: "", lib: loadLib(), selected: saved.topic || "" };
+  const composeState = () => ({
+    topic: $("#qw-topic").value, mode: $("#qw-mode").value,
+    angle: $("#qw-angle").value, custom: $("#qw-custom").value,
+    length: $("#qw-length").value, lang: $("#qw-lang").value });
+  const saveComposeNow = () => saveCompose(composeState());
+  const domainName = id => {
+    const d = ((TX.tax || {}).domains || []).find(x => x.id === id);
+    return d ? d.name : (id ? id : "不限领域");
   };
-  const renderTax = () => {
+  const renderDomains = () => {
     const t = TX.tax; if (!t) return;
-    fillSelect($("#qw-tax-domain"), t.domains, TX.domain);
-    const dn = (t.domains.find(d => d.id === TX.domain) || {}).name || "";
-    $("#qw-tax-sel").textContent = dn ? `领域: ${dn}` : "";
+    const q = ($("#qw-tax-search").value || "").trim().toLowerCase();
+    const hit = d => !q || d.name.toLowerCase().includes(q)
+                  || d.id.toLowerCase().includes(q);
+    $("#qw-tax-domains").innerHTML =
+      [{ id: "", name: "不限" }, ...t.domains].filter(hit).map(d =>
+        `<button class="chip${d.id === TX.domain ? " on" : ""}" data-v="${esc(d.id)}">${esc(d.name)}</button>`).join("");
+    $("#qw-tax-sel").textContent =
+      TX.domain ? `领域: ${esc(domainName(TX.domain))}` : "";
   };
-  $("#qw-tax-search").oninput = renderTax;
-  $("#qw-tax-domain").onchange = e => { TX.domain = e.target.value; renderTax(); };
-  const renderSug = () => {
-    $("#qw-sug").innerHTML = TX.batch.map(t =>
-      `<button class="chip-sug" data-tip="点击填入;仍需你自己点 Write" data-v="${esc(t.text)}">
-         <b>${esc(t.text)}</b><span class="sub">${esc(t.hook)}</span></button>`).join("");
-    $("#qw-topic-clear").style.display = TX.batch.length ? "" : "none";
+  $("#qw-tax-search").oninput = renderDomains;
+  $("#qw-tax-domains").onclick = e => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    TX.domain = b.dataset.v;
+    renderDomains();
+  };
+  const renderLib = (freshTs = 0, freshDomain = "") => {
+    const lib = TX.lib;
+    $("#qw-topic-clear").style.display = lib.length ? "" : "none";
+    const doms = [...new Set(lib.map(t => t.domainName))];
+    $("#qw-lib-stats").textContent =
+      lib.length ? `${lib.length} 条 · ${doms.length} 个领域` : "";
+    if (!lib.length) {
+      $("#qw-lib").innerHTML = `<div class="qw-empty">还没有生成过话题。选个领域(或不限),
+        点「✦ 生成一批话题」—— 每批 8 条,覆盖领域不同侧面;点任意一条填到右侧开始写。</div>`;
+      return;
+    }
+    const prevOpen = new Set(
+      [...document.querySelectorAll("#qw-lib details.qw-group")]
+        .filter(d => d.open).map(d => d.dataset.d));
+    $("#qw-lib").innerHTML = doms.map(dn => {
+      const items = lib.map((t, i) => ({ t, i }))
+        .filter(x => x.t.domainName === dn);
+      const open = prevOpen.has(dn) || dn === freshDomain ||
+                   !prevOpen.size;
+      return `<details class="qw-group"${open ? " open" : ""} data-d="${esc(dn)}">
+        <summary><b>${esc(dn)}</b><span class="qw-count">${items.length}</span>
+          <span class="grow"></span>
+          <button class="ghost qw-more" data-d="${esc(items[0].t.domain)}"
+                  data-tip="该领域再来一批(避开全部已生成话题)">再来一批</button></summary>
+        <div class="qw-cards">${items.map(({t, i}) => `
+          <div class="qw-card${t.text === TX.selected ? " sel" : ""}${t.ts >= freshTs ? " fresh" : ""}" data-i="${i}">
+            <b>${esc(t.text)}</b>
+            <span class="sub">${esc(t.hook)}
+              <button class="qw-del" data-i="${i}"
+                      title="移除这条(${new Date(t.ts).toLocaleTimeString()})">✕</button></span>
+          </div>`).join("")}</div>
+      </details>`;
+    }).join("");
+  };
+  $("#qw-lib").onclick = e => {
+    const del = e.target.closest(".qw-del");
+    if (del) {
+      TX.lib.splice(+del.dataset.i, 1);
+      saveLib(TX.lib);
+      renderLib();
+      return;
+    }
+    const more = e.target.closest(".qw-more");
+    if (more) {
+      e.preventDefault();          // keep the group open while re-rolling
+      TX.domain = more.dataset.d;
+      renderDomains();
+      suggestTopics();
+      return;
+    }
+    const card = e.target.closest(".qw-card"); if (!card) return;
+    TX.selected = TX.lib[+card.dataset.i].text;
+    $("#qw-topic").value = TX.selected;
+    saveComposeNow();
+    renderLib();
+    $("#qw-topic").focus();
   };
   const suggestTopics = async () => {
     const btn = $("#qw-topic-suggest");
-    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Thinking…';
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span> 正在生产 8 条话题…(约半分钟)';
+    $("#qw-skel").style.display = "";
     try {
       const r = await api("POST", "/topics/suggest",
         { domain: TX.domain || null, count: 8,
           hint: ($("#qw-tax-hint").value || "").trim() || null,
-          avoid: TX.seen });
-      TX.batch = [...TX.batch, ...r.topics];
-      TX.seen = [...TX.seen, ...r.topics.map(t => t.text)].slice(-40);
-      renderSug();
-      $("#qw-sug").scrollTop = $("#qw-sug").scrollHeight;
-    } catch (e) { toast(e.message || "Could not suggest topics.", true); }
-    finally { btn.disabled = false; btn.textContent = "✦ 生成一批话题"; }
+          avoid: TX.lib.map(t => t.text) });
+      const now = Date.now(), dname = domainName(TX.domain);
+      TX.lib = [...TX.lib, ...r.topics.map(t => ({
+        domain: TX.domain, domainName: dname,
+        text: t.text, hook: t.hook, ts: now }))];
+      saveLib(TX.lib);
+      renderLib(now - 1, dname);
+      const el = $("#qw-lib .qw-card.fresh");
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      btn.disabled = false; btn.textContent = "✦ 生成一批话题";
+    } catch (e) {
+      $("#qw-skel").style.display = "none";
+      toast(e.message || "生成失败,请重试。", true);
+      btn.disabled = false; btn.textContent = "↻ 重试";
+    }
   };
   $("#qw-topic-suggest").onclick = suggestTopics;
-  $("#qw-topic-clear").onclick = () => { TX.batch = []; TX.seen = []; renderSug(); };
-  $("#qw-sug").onclick = e => {
-    const b = e.target.closest(".chip-sug"); if (!b) return;
-    $("#qw-topic").value = b.dataset.v;
-    $("#qw-topic").focus();
+  $("#qw-topic-clear").onclick = () => {
+    TX.lib = []; saveLib(TX.lib); TX.selected = ""; renderLib();
   };
-  api("GET", "/taxonomy").then(t => { TX.tax = t; renderTax(); }).catch(() => {});
-  $("#qw-angle").onchange = e =>
-    ($("#qw-custom").style.display = e.target.value === "custom" ? "" : "none");
+  api("GET", "/taxonomy").then(t => {
+    TX.tax = t; renderDomains();
+    if (TX.lib.length) renderLib();
+  }).catch(() => {});
+  $("#qw-angle").onchange = e => {
+    $("#qw-custom").style.display = e.target.value === "custom" ? "" : "none";
+    saveComposeNow();
+  };
+  $("#qw-topic").oninput = saveComposeNow;
+  $("#qw-mode").onchange = saveComposeNow;
+  $("#qw-length").oninput = saveComposeNow;
+  $("#qw-lang").onchange = saveComposeNow;
+  $("#qw-topic").addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      $("#qw-go").click();
+    }
+  });
   $("#qw-go").onclick = async () => {
     const btn = $("#qw-go");
     const topic = $("#qw-topic").value.trim();
     if (!topic) { toast("先写下你想谈的话题。", true); return; }
-    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Writing…';
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> 写作中…';
     try {
       const t = await api("POST", "/tasks", {
         input_mode: "topic_only", topic,
@@ -233,18 +357,18 @@ function quickWrite() {
       });
       const d = await api("GET", `/tasks/${t.id}`);
       if (d.factuality_warning &&
-          !confirm("This topic may depend on factual claims.\n\n" +
-                   "确定 = 用通用知识继续(文章不会假装引用来源)\n取消 = 进入该任务,可先添加素材做更紧的落地。\n\n" +
-                   "OK = continue with general knowledge; Cancel = open the task and add sources.")) {
-        btn.disabled = false; btn.textContent = "Write";
+          !confirm("这个话题可能依赖具体事实。\n\n确定 = 用通用知识继续(文章不会假装引用来源)\n"
+                   + "取消 = 进入该任务,可先添加素材做更紧的落地。")) {
+        btn.disabled = false; btn.textContent = "开始写";
         location.hash = `#/tasks/${t.id}`;   // don't orphan the created task
         return;
       }
+      saveComposeNow();
       AUTOSTART = t.id;
       location.hash = `#/tasks/${t.id}`;
     } catch (e) {
       toast(e.message || "Could not start.", true);
-      btn.disabled = false; btn.textContent = "Write";
+      btn.disabled = false; btn.textContent = "开始写";
     }
   };
 }

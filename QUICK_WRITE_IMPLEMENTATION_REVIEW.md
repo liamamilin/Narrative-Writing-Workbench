@@ -529,3 +529,36 @@ Docs: docs/TOPIC_TAXONOMY.md == world_topic_taxonomy_v1.md (verified
 byte-identical); taxonomy.json v3 verified anchor-exact against the
 source (49 domains / 18 groups / 313 anchors / 33 tensions).
 235 tests pass.
+
+## Addendum (2026-09-11): Quick Write v5 — two-pane redesign + client-side
+topic library
+
+User review of the v4 page found the core content (generated topics)
+buried mid-form. v5 restructures the page around the discovery flow:
+
+- **Two-pane layout**: left = discovery (searchable domain chips cloud +
+  optional steer + generate button + topic library, independently
+  scrollable); right = compose (topic textarea, writing mode, angle,
+  length, language, 开始写) as a sticky column. <1000px collapses to one
+  column with compose first.
+- **Topic library (client-side)**: generated topics persist in
+  localStorage (`qw_topic_lib_v1`, FIFO 200, degrade gracefully in
+  private mode). Items carry {domain, domainName, text, hook, ts}; the
+  library renders grouped by domain in collapsible sections ("挂在领域
+  后面"), each with a count badge and a per-domain 再来一批 button
+  (avoid stays global). Server storage remains zero — "AI proposes,
+  user accepts" untouched; Write still requires the user's click.
+- **Curation & feedback**: click card fills the right pane + selected
+  state (+✓); hover ✕ removes a single topic (title shows its
+  timestamp); stats header (n 条 · m 个领域); empty-state guidance;
+  skeleton shimmer cards during generation; failed button becomes ↻ 重试;
+  new batch fades in and scrolls into view.
+- **avoid = whole library** (was last 40): engine prompt injection cap
+  raised 16→24; mock already filtered by the full list.
+- **Compose state persists** (`qw_compose_v1`): topic/mode/angle/length/
+  language survive reloads; ⌘/Ctrl+Enter triggers 开始写.
+- **Copy unified to Chinese** across Quick Write and Home (hero, entries,
+  Recent Tasks/Projects); examples replaced — "谈谈失败。" violated the
+  anti-pseudo-depth filter the coach itself enforces; nav gets an active
+  state. Cache-bust app.js?v=32 / styles.css?v=11.
+236 tests pass.

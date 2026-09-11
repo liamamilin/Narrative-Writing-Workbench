@@ -333,7 +333,7 @@ class RealWritingEngine:
             parts.append(f"## User steer (optional direction)\n\n{hint[:100]}")
         if avoid:
             parts.append("## Avoid (genuinely different from these)\n\n"
-                         + "\n".join(f"- {a}" for a in avoid[:16]))
+                         + "\n".join(f"- {a}" for a in avoid[:24]))
         parts.append("## Language\n\nChinese (zh)")
         try:
             stage = structured_call(
