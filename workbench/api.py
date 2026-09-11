@@ -101,6 +101,14 @@ def create_app(service: Service | None = None) -> FastAPI:
     def suggest_intent(task_id: str, body: dict | None = None):
         return svc().suggest_instruction(task_id, body or {})
 
+    @app.get("/taxonomy")
+    def taxonomy():
+        return svc().taxonomy()
+
+    @app.post("/topics/suggest")
+    def suggest_topics(body: dict | None = None):
+        return svc().suggest_topics(body or {})
+
     @app.get("/tasks/{task_id}/progress")
     def progress(task_id: str):
         """Server-Sent Events stream of generation stage/angle events.

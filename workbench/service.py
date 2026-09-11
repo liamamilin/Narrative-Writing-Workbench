@@ -16,6 +16,8 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
+from pathlib import Path
 
 from . import meaning_schema
 from . import settings as settings_mod
@@ -25,6 +27,14 @@ from .engine import (EngineError, GenerationFailed, LockConflict,
 from .progress import BROKER
 
 log = logging.getLogger("workbench.service")
+
+_TAXONOMY_PATH = Path(__file__).resolve().parent / "taxonomy.json"
+
+
+@lru_cache(maxsize=1)
+def _load_taxonomy() -> dict:
+    """Two-level topic taxonomy (static, versioned in-repo)."""
+    return json.loads(_TAXONOMY_PATH.read_text(encoding="utf-8"))
 
 TASK_TYPES = {"fiction_scene", "narrative_analysis", "character_analysis",
               "essay", "emotional_retelling", "free_writing"}
@@ -981,6 +991,41 @@ class Service:
                            "以及 Base URL 和 API Key 是否匹配。",
                            500, retryable=True) from exc
         return {"suggestion": suggestion}
+
+    def taxonomy(self) -> dict:
+        """Two-level topic taxonomy for the Quick Write topic picker."""
+        return _load_taxonomy()
+
+    def suggest_topics(self, payload: dict | None = None) -> dict:
+        """Propose discussable topics. AI proposes, user accepts: nothing is
+        persisted; the frontend only fills the topic input on a click."""
+        payload = payload or {}
+        taxonomy = _load_taxonomy()
+        domain = str(payload.get("domain") or "").strip() or None
+        sub = str(payload.get("sub") or "").strip() or None
+        known_domains = {d["id"] for d in taxonomy["domains"]}
+        known_subs = {s["id"] for d in taxonomy["domains"] for s in d["subs"]}
+        if domain is not None and domain not in known_domains:
+            raise ApiError("VALIDATION", f"unknown domain: {domain}")
+        if sub is not None and sub not in known_subs:
+            raise ApiError("VALIDATION", f"unknown sub: {sub}")
+        if sub and domain and not sub.startswith(domain + "."):
+            raise ApiError("VALIDATION", f"sub {sub} does not belong to {domain}.")
+        avoid = [str(x).strip() for x in payload.get("avoid") or []
+                 if str(x).strip()]
+        try:
+            data = self.engine.suggest_topics(domain=domain, sub=sub,
+                                              avoid=avoid, config=None)
+        except EngineError as exc:
+            raise ApiError("TOPIC_SUGGEST_FAILED",
+                           str(exc) or "Could not suggest topics. Please retry.",
+                           500, retryable=True) from exc
+        except Exception as exc:            # transport errors, poisoned config…
+            log.exception("topic suggestion failed")
+            raise ApiError("TOPIC_SUGGEST_FAILED",
+                           f"话题建议失败:{type(exc).__name__} — 请重试。",
+                           500, retryable=True) from exc
+        return {"topics": list(data.get("topics") or [])}
 
     def meaning_summary(self, tid: str) -> dict:
         """Product-safe view of the latest discovery (4 fields; no reasoning)."""

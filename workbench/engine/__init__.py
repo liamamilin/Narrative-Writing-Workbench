@@ -61,6 +61,11 @@ class WritingEngine(Protocol):
                             language: str, meaning: dict | None = None,
                             avoid: list[str] | None = None) -> str: ...
 
+    def suggest_topics(self, *, domain: str | None = None,
+                       sub: str | None = None,
+                       avoid: list[str] | None = None,
+                       config: dict | None = None) -> dict: ...
+
 
 # --------------------------------------------------------------- helpers ----
 

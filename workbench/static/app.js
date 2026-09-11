@@ -120,6 +120,13 @@ function quickWrite() {
     <textarea id="qw-topic" rows="2" placeholder="e.g. 谈谈失败。"></textarea>
     <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
       `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
+    <label style="margin-top:14px">没有头绪?选个领域,让我来提</label>
+    <div id="qw-tax"></div>
+    <p class="row" style="margin:10px 0 0">
+      <button id="qw-topic-suggest" data-tip="按所选领域生成 3 个可争论的话题,点击候选即可填入;可换一批">✦ 给我一个话题</button>
+      <button id="qw-topic-more" style="display:none" data-tip="避开刚看过的,再提 3 个">换一批</button>
+      <span class="muted small" id="qw-tax-sel"></span></p>
+    <div class="chips" id="qw-sug" style="margin-top:8px"></div>
     <label>Writing mode</label>
     <select id="qw-mode" data-tip="Deep Narrative=先体验后领悟、延迟解释、克制收束(旗舰模式);Clear Essay=观点清晰直给;Fiction=以故事呈现;Free Writing=放松随笔">
       <option value="deep_narrative" selected>Deep Narrative (recommended)</option>
@@ -152,6 +159,54 @@ function quickWrite() {
     const b = e.target.closest(".chip"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;
   };
+
+  /* topic suggestion: taxonomy chips -> suggest -> candidates -> fill */
+  const TX = { tax: null, domain: "", sub: "", seen: [] };
+  const renderTax = () => {
+    const t = TX.tax; if (!t) return;
+    const dom = t.domains.find(d => d.id === TX.domain);
+    $("#qw-tax").innerHTML = `
+      <div class="tax-row">${[{ id: "", name: "不限" }, ...t.domains].map(d =>
+        `<button class="chip ${d.id === TX.domain ? "on" : ""}" data-dom="${esc(d.id)}">${esc(d.name)}</button>`).join("")}</div>
+      ${dom ? `<div class="tax-row">${[{ id: "", name: "不限张力" }, ...dom.subs].map(s =>
+        `<button class="chip ${s.id === TX.sub ? "on" : ""}" data-sub="${esc(s.id)}">${esc(s.name)}</button>`).join("")}</div>` : ""}`;
+    $("#qw-tax-sel").textContent = TX.domain
+      ? `${dom.name}${TX.sub ? " · " + dom.subs.find(s => s.id === TX.sub).name : ""}` : "";
+  };
+  $("#qw-tax").onclick = e => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    if (b.dataset.dom !== undefined) {
+      TX.domain = b.dataset.dom; TX.sub = "";
+    } else if (b.dataset.sub !== undefined) {
+      TX.sub = b.dataset.sub;
+    }
+    renderTax();
+  };
+  const renderSug = topics => {
+    $("#qw-sug").innerHTML = topics.map(t =>
+      `<button class="chip-sug" data-tip="点击填入;仍需你自己点 Write" data-v="${esc(t.text)}">
+         <b>${esc(t.text)}</b><span class="sub">${esc(t.hook)}</span></button>`).join("");
+    $("#qw-topic-more").style.display = topics.length ? "" : "none";
+  };
+  const suggestTopics = async () => {
+    const btn = $("#qw-topic-suggest");
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Thinking…';
+    try {
+      const r = await api("POST", "/topics/suggest",
+        { domain: TX.domain || null, sub: TX.sub || null, avoid: TX.seen });
+      TX.seen = [...TX.seen, ...r.topics.map(t => t.text)].slice(-9);
+      renderSug(r.topics);
+    } catch (e) { toast(e.message || "Could not suggest topics.", true); }
+    finally { btn.disabled = false; btn.textContent = "✦ 给我一个话题"; }
+  };
+  $("#qw-topic-suggest").onclick = () => { TX.seen = []; suggestTopics(); };
+  $("#qw-topic-more").onclick = () => suggestTopics();
+  $("#qw-sug").onclick = e => {
+    const b = e.target.closest(".chip-sug"); if (!b) return;
+    $("#qw-topic").value = b.dataset.v;
+    $("#qw-topic").focus();
+  };
+  api("GET", "/taxonomy").then(t => { TX.tax = t; renderTax(); }).catch(() => {});
   $("#qw-angle").onchange = e =>
     ($("#qw-custom").style.display = e.target.value === "custom" ? "" : "none");
   $("#qw-go").onclick = async () => {

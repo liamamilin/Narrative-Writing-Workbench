@@ -378,3 +378,50 @@ poll = clamp(timeout/4, 1s, 15s), exit via SIGINT to self (uvicorn graceful,
 shows the mode. Engine/product logic untouched. 213 tests pass (4 new) +
 live smoke: request refreshes the clock, server self-exits with a visible
 message.
+
+## Addendum (2026-09-11): topic suggestion on Quick Write (design review)
+
+User request: on the Quick Write page ("What do you want to talk about?"),
+help the user arrive at a high-value topic (e.g. 勤劳是奴隶的道德), fill
+it in, then hit Write. Decisions confirmed with the user: 3 candidates per
+click, two-level taxonomy, each candidate shown with a one-line hook,
+implement now.
+
+Research grounding (taxonomy design, not copied): NYT Learning Network
+prompt collections classify by surface domain (Technology & Social Media /
+School / Identity & Family / Arts / Health / Ethics); IELTS Task-2 families
+(Education, Technology, Society, Work, Media, …); philosophy's perennial
+questions (self, justice, truth, beauty, time); the Chinese essay tradition
+of 人与自我 / 人与社会 / 人与自然. Key insight for this product: a topic
+like 勤劳是奴隶的道德 is not a subject, it is an *inversion* of a virtue
+inside a domain — so the taxonomy's second level must be the debatable
+*tension* (张力轴), not a topic list. Hybrid scheme: 一级=生活领域
+(recognizable anchor), 二级=领域内的张力轴.
+
+Data model: static `workbench/taxonomy.json` (versioned in-repo, no admin
+UI; 8 domains × 6 tensions, ascii ids). Served at GET /taxonomy; POST
+/topics/suggest {domain?, sub?, avoid[]} → {topics:[{text, hook}]} ×3.
+Taskless endpoints (suggestion happens before task creation). Mock engine
+serves deterministic canned candidates so the flow works keyless; real
+engine runs a structured call (prompts/topic_suggest.md, schema-validated
+with one repair, avoid honored). Hard rule preserved: AI proposes, user
+accepts — candidates only fill the topic input on click; Write still
+requires the user's own click. UI: two-level chips (一级 chips + 二级
+chips + 不限 default), candidate chips with hook subtitles, 换一批
+accumulates avoid; no framework dependencies, vanilla chips per existing
+styles.css.
+
+Implemented (2026-09-11): `workbench/taxonomy.json` (8 domains × 6 tensions,
+ascii ids), `prompts/topic_suggest.md` (3 debatable single sentences + hooks,
+filler/inversion/safety rules), `workbench/topic_schema.py` (exactly 3,
+distinct, 4-40 chars, hook 2-24, banned filler), engine protocol
+`suggest_topics(domain, sub, avoid, config)` — mock serves a 48-item canned
+pool with per-call rotation and strict avoid filtering; real engine runs a
+schema-validated structured call (role topic_suggest, architect cfg, one
+repair). Service validates category ids against the taxonomy and wraps
+engine failures as retryable TOPIC_SUGGEST_FAILED. Endpoints: GET /taxonomy,
+POST /topics/suggest (taskless, nothing persisted). UI: two-level chips
+(不限 default; sub row appears on domain pick), 给我一个话题 → candidate
+chips (text + hook subtitle) that fill the topic input on click, 换一批
+keeps a 9-item seen window as avoid. 226 tests pass (7 new); live smoke
+against the real engine returned valid trios for 不限 and work/diligence.

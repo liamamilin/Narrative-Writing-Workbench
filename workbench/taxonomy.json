@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "note": "两级话题分类:一级=生活领域(锚点),二级=领域内的张力轴(可争论处)。id 供 API 使用,不可随意改名。",
+  "domains": [
+    {
+      "id": "self", "name": "自我",
+      "subs": [
+        {"id": "self.freedom", "name": "自由与纪律"},
+        {"id": "self.meaning", "name": "意义与空虚"},
+        {"id": "self.desire", "name": "欲望与节制"},
+        {"id": "self.solitude", "name": "孤独与联结"},
+        {"id": "self.identity", "name": "身份与扮演"},
+        {"id": "self.growth", "name": "成长与代价"}
+      ]
+    },
+    {
+      "id": "relations", "name": "他人与关系",
+      "subs": [
+        {"id": "relations.love", "name": "爱与依赖"},
+        {"id": "relations.friendship", "name": "友谊与利益"},
+        {"id": "relations.family", "name": "家庭与边界"},
+        {"id": "relations.trust", "name": "信任与背叛"},
+        {"id": "relations.empathy", "name": "同情与距离"},
+        {"id": "relations.debt", "name": "恩情与亏欠"}
+      ]
+    },
+    {
+      "id": "society", "name": "社会与公平",
+      "subs": [
+        {"id": "society.rules", "name": "规则与例外"},
+        {"id": "society.equality", "name": "平等与效率"},
+        {"id": "society.power", "name": "权力与责任"},
+        {"id": "society.majority", "name": "多数与少数"},
+        {"id": "society.mercy", "name": "惩罚与宽恕"},
+        {"id": "society.mobility", "name": "阶层与流动"}
+      ]
+    },
+    {
+      "id": "work", "name": "工作与创造",
+      "subs": [
+        {"id": "work.diligence", "name": "勤劳与懒惰"},
+        {"id": "work.mastery", "name": "专业与业余"},
+        {"id": "work.creation", "name": "创造与消费"},
+        {"id": "work.hustle", "name": "内卷与松弛"},
+        {"id": "work.craft", "name": "匠心与流量"},
+        {"id": "work.failure", "name": "失败与成功"}
+      ]
+    },
+    {
+      "id": "tech", "name": "技术与时代",
+      "subs": [
+        {"id": "tech.ai", "name": "AI与人的价值"},
+        {"id": "tech.convenience", "name": "便利与退化"},
+        {"id": "tech.connection", "name": "连接与孤独"},
+        {"id": "tech.speed", "name": "速度与深度"},
+        {"id": "tech.privacy", "name": "隐私与透明"},
+        {"id": "tech.progress", "name": "进步的代价"}
+      ]
+    },
+    {
+      "id": "truth", "name": "知识与真相",
+      "subs": [
+        {"id": "truth.expertise", "name": "专家与常识"},
+        {"id": "truth.memory", "name": "记忆与遗忘"},
+        {"id": "truth.doubt", "name": "怀疑与相信"},
+        {"id": "truth.narrative", "name": "事实与叙事"},
+        {"id": "truth.ignorance", "name": "无知的价值"},
+        {"id": "truth.lies", "name": "谎言的用处"}
+      ]
+    },
+    {
+      "id": "time", "name": "时间与自然",
+      "subs": [
+        {"id": "time.ending", "name": "终结与开始"},
+        {"id": "time.busy", "name": "忙碌与虚度"},
+        {"id": "time.nostalgia", "name": "乡愁与向前"},
+        {"id": "time.aging", "name": "衰老与成熟"},
+        {"id": "time.nature", "name": "人与万物"},
+        {"id": "time.renewal", "name": "灾难与新生"}
+      ]
+    },
+    {
+      "id": "art", "name": "美与艺术",
+      "subs": [
+        {"id": "art.useful", "name": "美与实用"},
+        {"id": "art.kitsch", "name": "高雅与媚俗"},
+        {"id": "art.imperfect", "name": "完美与残缺"},
+        {"id": "art.silence", "name": "沉默与表达"},
+        {"id": "art.originality", "name": "模仿与原创"},
+        {"id": "art.ethics", "name": "艺术与道德"}
+      ]
+    }
+  ]
+}

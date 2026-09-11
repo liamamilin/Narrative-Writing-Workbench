@@ -31,7 +31,7 @@ prompts/        外置提示词(引擎角色 + product_patch + meaning_discovery
 schemas/        WIR / critique / outline JSON Schema
 docs/           引擎规范 00-18 + 产品规范 narrative-writing-product-v0-spec/
 benchmarks/     测试用例、消融结果、盲评表导出/导入
-tests/          pytest(213 项:引擎 + 产品 + Quick Write + Settings)
+tests/          pytest(226 项:引擎 + 产品 + Quick Write + Settings)
 runs/           每次引擎运行的全量中间产物
 ui/             运行观察面板(Flask,8551,非产品 UI)
 ```
@@ -104,7 +104,7 @@ H4-confirm(GI 增益)、H5(Critic 应作用于 GI 草稿)。盲评结果导入�
 ## 测试
 
 ```bash
-python3 -m pytest tests/ -q        # 213 passed
+python3 -m pytest tests/ -q        # 226 passed
 ```
 
 ## 阅读顺序

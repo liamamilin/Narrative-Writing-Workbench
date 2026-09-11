@@ -23,6 +23,7 @@ from app.models import StructuredOutputError
 from app.schemas import SchemaSet
 from app.structured import structured_call
 from ..meaning_schema import MEANING_SCHEMA, validate_meaning, meaning_to_wir_block
+from ..topic_schema import validate_topics
 from . import (DiscoveryFailed, GenerationFailed, GenerateResult,
                LockConflict, map_beats_to_paragraphs, split_paragraphs)
 
@@ -296,6 +297,30 @@ class RealWritingEngine:
         if not text:
             raise GenerationFailed("We couldn't draft an instruction. Please retry.")
         return text
+
+    def suggest_topics(self, *, domain=None, sub=None,
+                       avoid=None, config=None) -> dict:
+        """Propose 3 discussable topics. AI proposes; nothing is persisted."""
+        sys_prompt = _load_prompt(self.config.prompts_dir, "topic_suggest")
+        if domain or sub:
+            cat = f"domain={domain or ''}" + (f", tension_axis={sub}" if sub else "")
+        else:
+            cat = "(none — 不限, roam across all domains)"
+        parts = [f"## Category\n\n{cat}"]
+        if avoid:
+            parts.append("## Avoid (genuinely different from these)\n\n"
+                         + "\n".join(f"- {a}" for a in avoid[:8]))
+        parts.append("## Language\n\nChinese (zh)")
+        try:
+            stage = structured_call(
+                self.client, role="topic_suggest",
+                role_cfg=self.config.role("architect"),
+                system_prompt=sys_prompt, user_message="\n\n".join(parts),
+                validator=validate_topics)
+        except StructuredOutputError as exc:
+            raise GenerationFailed(
+                "We couldn't suggest topics. Please retry.") from exc
+        return stage.data
 
     # --------------------------------------------------------------- util ----
 

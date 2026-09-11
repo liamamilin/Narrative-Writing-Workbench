@@ -42,6 +42,12 @@ h1{font-size:1.6rem} h2{font-size:1.15rem} h3{font-size:1rem}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{border:1px solid var(--line);border-radius:16px;padding:5px 14px;background:var(--panel)}
 .chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.tax-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 2px}
+.chip-sug{display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  border:1px solid var(--line);border-radius:12px;padding:8px 12px;background:var(--panel);
+  text-align:left;max-width:100%}
+.chip-sug .sub{color:var(--muted);font-size:12px}
+.chip-sug:hover{border-color:var(--accent)}
 .trio{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .checks label{display:flex;gap:8px;align-items:center;font-weight:400;margin:6px 0}
 .checks input{width:auto}
