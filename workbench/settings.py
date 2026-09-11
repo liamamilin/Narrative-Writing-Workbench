@@ -20,8 +20,7 @@ FIELDS = ("engine", "api_key", "base_url", "model", "timeout_seconds",
 PROVIDERS = [
     {"id": "opencode", "name": "OpenCode Go",
      "base_url": "https://opencode.ai/zen/go/v1", "needs_key": True,
-     "models": ["mimo-v2.5", "mimo-v2.5-pro", "deepseek-v4-flash",
-                "kimi-k2.5"]},
+     "models": ["mimo-v2.5"]},
     {"id": "ollama", "name": "Ollama (本地)",
      "base_url": "http://127.0.0.1:11434/v1", "needs_key": False,
      "models": []},
@@ -30,7 +29,7 @@ PROVIDERS = [
      "models": []},
     {"id": "openai", "name": "OpenAI 官方",
      "base_url": "https://api.openai.com/v1", "needs_key": True,
-     "models": ["gpt-4o-mini", "gpt-4o"]},
+     "models": ["gpt-4o-mini"]},
     {"id": "custom", "name": "自定义…", "base_url": "", "needs_key": True,
      "models": []},
 ]

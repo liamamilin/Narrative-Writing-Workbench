@@ -614,7 +614,7 @@ async function settings() {
     if (!p) return;
     if (p.id !== "custom") $("#s-base").value = p.base_url;
     const list = $("#s-model-list");
-    list.innerHTML = (p.models.length ? p.models : ["deepseek-v4-flash"])
+    list.innerHTML = (p.models.length ? p.models : ["mimo-v2.5"])
       .map(m => `<option value="${esc(m)}">`).join("");
     if (p.models.length && !p.models.includes($("#s-model").value))
       $("#s-model").value = p.models[0];
