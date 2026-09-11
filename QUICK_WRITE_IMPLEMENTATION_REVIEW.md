@@ -562,3 +562,34 @@ buried mid-form. v5 restructures the page around the discovery flow:
   anti-pseudo-depth filter the coach itself enforces; nav gets an active
   state. Cache-bust app.js?v=32 / styles.css?v=11.
 236 tests pass.
+
+## Addendum (2026-09-11): v5.1 — seed mode (relevance) + skeleton fix
+
+Two user-reported issues from live use:
+
+1. **Skeleton kept shimmering after success** — the skeleton cards were
+   hidden only on the error path; success never hid them. Fixed by
+   moving the hide into `finally`.
+2. **Low relevance: user-typed input ignored by generation.** The user
+   typed a phenomenon ("女人会爱上伤害她的男人…") into the topic box and
+   clicked generate — but generation only read domain + steer, and the
+   prompt actively barred narrowing the batch to the user's input.
+   Fix: **seed mode**. When the topic box is non-empty, its content is
+   sent as `seed` (≤200 chars, else 400) and the button reads
+   "✦ 围绕它生成一批" (mode made visible via input listener). Engine:
+   seed present → no sampled tension axes; the prompt instructs the
+   model to diagnose the seed's Puzzle/mechanism/tension internally and
+   produce every topic as a **different facet of that same structure**
+   (distinct instances/mechanisms/scales — never reworded). Without a
+   seed the roam mode is unchanged (spread + sampled axes). Steer box
+   kept (seed takes precedence). Mock filters its pool by seed
+   substring (roams on no match).
+3. Also: schema dup-check now normalizes quote/punctuation variants
+   (curly vs straight quotes are the same text — live batch had shown
+   quote-flipped twins).
+Live smoke (real engine, seed = the user's own sentence): all 8 topics
+press on the trauma-bond structure from distinct facets (intermittent
+reinforcement / costless-good devaluation / exit cost / effort
+rationalization / common enemy / arousal misattribution / definition
+right / pseudo-intimacy). No domain drift, no paraphrases.
+240 tests pass.

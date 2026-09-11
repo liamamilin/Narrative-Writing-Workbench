@@ -148,7 +148,7 @@ function quickWrite() {
       <input id="qw-tax-hint" placeholder="方向提示(可选),如 关注外卖骑手 / 只看平台经济"
              data-tip="想聚焦时填;空着则按领域全面铺开">
       <p class="row">
-        <button id="qw-topic-suggest" data-tip="生成一批可争论的话题(8条,覆盖领域不同侧面);再点会累加不重复的一批">✦ 生成一批话题</button>
+        <button id="qw-topic-suggest" data-tip="右侧已输入话题时:围绕它生产 8 条不同切面;为空时:按领域铺开 8 条。再点会累加不重复的一批">✦ 生成一批话题</button>
         <span class="muted small" id="qw-tax-sel"></span></p>
       <div class="qw-lib-head">
         <h3>已生成话题 <span class="muted small" id="qw-lib-stats"></span></h3>
@@ -201,6 +201,7 @@ function quickWrite() {
   if (saved.angle === "custom") $("#qw-custom").style.display = "";
   if (saved.length) $("#qw-length").value = saved.length;
   if (saved.lang) $("#qw-lang").value = saved.lang;
+  refreshSuggestBtn();
   $("#qw-ex").onclick = e => {
     const b = e.target.closest(".chip"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;
@@ -293,15 +294,24 @@ function quickWrite() {
     renderLib();
     $("#qw-topic").focus();
   };
+  const seedNow = () => ($("#qw-topic").value || "").trim();
+  const refreshSuggestBtn = () => {
+    $("#qw-topic-suggest").textContent =
+      seedNow() ? "✦ 围绕它生成一批" : "✦ 生成一批话题";
+  };
   const suggestTopics = async () => {
     const btn = $("#qw-topic-suggest");
+    const seed = seedNow();
     btn.disabled = true;
-    btn.innerHTML = '<span class="spin"></span> 正在生产 8 条话题…(约半分钟)';
+    btn.innerHTML = seed
+      ? '<span class="spin"></span> 正在围绕它生产 8 条切面…(约半分钟)'
+      : '<span class="spin"></span> 正在生产 8 条话题…(约半分钟)';
     $("#qw-skel").style.display = "";
     try {
       const r = await api("POST", "/topics/suggest",
         { domain: TX.domain || null, count: 8,
           hint: ($("#qw-tax-hint").value || "").trim() || null,
+          seed: seed || null,
           avoid: TX.lib.map(t => t.text) });
       const now = Date.now(), dname = domainName(TX.domain);
       TX.lib = [...TX.lib, ...r.topics.map(t => ({
@@ -311,12 +321,15 @@ function quickWrite() {
       renderLib(now - 1, dname);
       const el = $("#qw-lib .qw-card.fresh");
       if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      btn.disabled = false; btn.textContent = "✦ 生成一批话题";
     } catch (e) {
-      $("#qw-skel").style.display = "none";
       toast(e.message || "生成失败,请重试。", true);
-      btn.disabled = false; btn.textContent = "↻ 重试";
+      btn.textContent = "↻ 重试";
+      btn.disabled = false;
+      return;
+    } finally {
+      $("#qw-skel").style.display = "none";
     }
+    btn.disabled = false; refreshSuggestBtn();
   };
   $("#qw-topic-suggest").onclick = suggestTopics;
   $("#qw-topic-clear").onclick = () => {
@@ -330,7 +343,7 @@ function quickWrite() {
     $("#qw-custom").style.display = e.target.value === "custom" ? "" : "none";
     saveComposeNow();
   };
-  $("#qw-topic").oninput = saveComposeNow;
+  $("#qw-topic").oninput = () => { saveComposeNow(); refreshSuggestBtn(); };
   $("#qw-mode").onchange = saveComposeNow;
   $("#qw-length").oninput = saveComposeNow;
   $("#qw-lang").onchange = saveComposeNow;

@@ -31,14 +31,26 @@ You do not write prose. You propose topics.
 
 ## Batch coverage (hard requirements — this is what makes a batch good)
 
+- **Seed mode (when the user message carries a User seed)**: the seed is
+  the user's own thinking — a phenomenon or hunch they care about.
+  First diagnose its underlying structure internally: the Puzzle it
+  presses on, the mechanism (M1–M10) that drives it, the tension it
+  embodies. Then every one of the N topics presses on **that same
+  structure as a different facet** — different concrete instances,
+  scenarios, mechanisms, or scales of the same thing. 八条互不换说法:
+  not "same sentence reworded", but e.g. 受害者情感绑定 → 间歇性强化
+  的机制 / 受害者为施害者辩护 / 离开的具体成本 / 旁观者为何看不下去 /
+  结构在别处的同构出现。The batch-spread rule below does NOT apply in
+  this mode. Do not drift into unrelated domain topics.
 - **每条话题一个不同的 Concrete Anchor**:N 条话题必须锚定 N 个不同的
   具体对象/行为/制度,绝不允许多条围绕同一个对象换说法。
-- **整批覆盖领域宽度**:如果给了领域,8 条话题应横跨该领域的不同子域/
-  不同人群/不同制度(如"教育"批内应出现 学校、家庭、职场、技术等
-  不同侧面),不是一条选好重复挖八遍。
-- **张力轴逐条就位**:用户消息给出 Required tension axes 时,第 i 条
-  话题必须坐在第 i 条轴上(轴是两个都有真实价值、却难以同时最大化
-  的目标,冲突要真的出现在句子逻辑里)。
+- **整批覆盖领域宽度**(仅无 seed 时):如果给了领域,8 条话题应横跨该
+  领域的不同子域/不同人群/不同制度(如"教育"批内应出现 学校、家庭、
+  职场、技术等不同侧面),不是一条选好重复挖八遍。
+- **张力轴逐条就位**(仅无 seed 时):用户消息给出 Required tension
+  axes 时,第 i 条话题必须坐在第 i 条轴上(轴是两个都有真实价值、
+  却难以同时最大化的目标,冲突要真的出现在句子逻辑里)。有 seed 时
+  不注入轴:自己诊断种子自带的张力并让切面自然落在它上面。
 - **批级机制多样性(软要求)**:参考 M1–M10 机制族 — 稀缺·激励·博弈·
   信息·认知·社会·权力·网络·反馈·历史锁定 — 批内不要全部用同一种
   "为什么";让"答案的形状"也彼此不同。
@@ -109,6 +121,10 @@ Identity Lock · Moralization · Normalization Shift
 - Required tension axes (may be absent): one axis per topic, in order.
 - Tension (may be 不限): a single explicit axis; when present, aim the
   whole batch at it instead of the sampled axes.
+- User seed (may be absent): the user's own sentence — a phenomenon or
+  hunch they typed. Treat it as the anchor of the whole batch (see Seed
+  mode under Batch coverage): diagnose its structure, then produce
+  facets. Do not paraphrase the seed itself as one of the topics.
 - User steer (may be absent): a free-text direction from the user
   (e.g. 关注外卖骑手). Take it as a strong preference for anchor or
   angle, never as a license to narrow the whole batch to one object.

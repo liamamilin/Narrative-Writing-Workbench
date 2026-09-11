@@ -297,19 +297,21 @@ class RealWritingEngine:
         if not text:
             raise GenerationFailed("We couldn't draft an instruction. Please retry.")
         return text
-
     def suggest_topics(self, *, domain=None, object_name=None, tension=None,
-                       avoid=None, config=None, count=8, hint=None) -> dict:
+                       avoid=None, config=None, count=8, hint=None,
+                       seed=None) -> dict:
         """Propose a batch of discussable topics (default 8).
 
-        The UI exposes only the domain; objects/tensions are engine-side
-        production resources. Coverage is enforced two ways: the prompt
-        demands a different Concrete Anchor per topic, and the engine
-        samples `count` distinct tension axes (taxonomy §6) requiring
-        one topic per axis.
+        Two modes: with a `seed` (the user's own sentence/phenomenon), all
+        topics press on the seed's underlying structure as different facets
+        and no sampled axes are injected. Without a seed, the batch roams
+        the domain: the prompt demands a different Concrete Anchor per
+        topic and the engine samples `count` distinct tension axes
+        (taxonomy §6) requiring one topic per axis.
         """
         import dataclasses
         import random
+
         # Reasoning models + long prompt + json_object intermittently return
         # empty content on this gateway (V1 report §4 family of bugs); a
         # short creative task needs no reasoning anyway — use a lite cfg.
@@ -318,17 +320,22 @@ class RealWritingEngine:
                                    max_output_tokens=3000,
                                    temperature=0.6)
         count = max(3, min(12, int(count or 8)))
+        seed = (seed or "").strip() or None
         tax = _load_topic_taxonomy()
-        axes = random.sample([t["name"] for t in tax["tensions"]], count)
+        axes = [] if seed else random.sample(
+            [t["name"] for t in tax["tensions"]], count)
         sys_prompt = _load_prompt(self.config.prompts_dir, "topic_suggest")
         parts = [
             f"## Batch size\n\n{count}",
             f"## Domain\n\n{domain or '(不限 — roam across all domains)'}",
             f"## Object (Concrete Anchor)\n\n"
             f"{object_name or '(不限 — 每条话题自选一个不同的具体锚点)'}",
-            f"## Tension\n\n{tension or '(不限 — 使用下方指定轴)'}",
-            "## Required tension axes (one per topic, in order)\n\n"
-            + "\n".join(f"- {a}" for a in axes)]
+            f"## Tension\n\n{tension or '(不限 — 使用下方指定轴)'}"]
+        if axes:
+            parts.append("## Required tension axes (one per topic, in order)"
+                         "\n\n" + "\n".join(f"- {a}" for a in axes))
+        if seed:
+            parts.append(f"## User seed (their own thinking)\n\n{seed[:200]}")
         if hint:
             parts.append(f"## User steer (optional direction)\n\n{hint[:100]}")
         if avoid:

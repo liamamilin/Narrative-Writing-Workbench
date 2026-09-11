@@ -114,6 +114,34 @@ def test_suggest_hint_too_long_rejected(client):
     assert r.status_code == 400
 
 
+def test_suggest_seed_reaches_engine(capturing_client):
+    tc, eng = capturing_client
+    seed = "女人会爱上伤害她的男人,却不会爱上对她好的男人"
+    r = tc.post("/topics/suggest", json={"seed": seed, "count": 8})
+    assert r.status_code == 200
+    assert eng.kw["seed"] == seed
+
+
+def test_suggest_seed_too_long_rejected(client):
+    r = client.post("/topics/suggest", json={"seed": "x" * 201})
+    assert r.status_code == 400
+
+
+def test_mock_seed_filters_pool():
+    from workbench.engine.mock import _MockTopicState
+    _MockTopicState.reset()
+    eng = MockWritingEngine()
+    seed = "AA"
+    hits = [t for t in _MOCK_TOPICS
+            if seed in t["text"] or seed in t["hook"]]
+    out = eng.suggest_topics(seed=seed)
+    if hits:                                   # substring hits -> filtered
+        assert {t["text"] for t in out["topics"]} <= {
+            t["text"] for t in hits}
+    else:                                      # no hits -> roam
+        assert len(out["topics"]) >= 3
+
+
 def test_suggest_respects_domain_filter(client):
     from workbench.engine.mock import _MOCK_TOPICS
     r = client.post("/topics/suggest", json={"domain": "labor"})
@@ -252,6 +280,26 @@ def test_real_engine_avoid_injection_cap():
     assert len(listed) == 24
 
 
+def test_real_engine_seed_mode_skips_axes():
+    """v5.1: seed present -> no sampled tension axes, seed in prompt."""
+    from app.config import Config
+    from app.llm_client import MockClient
+    from workbench.engine.real import RealWritingEngine
+
+    good = json.dumps({"topics": [
+        {"text": f"可争论话题编号{i},切面各不相同。", "hook": f"钩子{i}"}
+        for i in range(1, 9)]}, ensure_ascii=False)
+    eng = RealWritingEngine.__new__(RealWritingEngine)
+    eng.config = Config.default()
+    eng.client = MockClient({"topic_suggest": [good]})
+    out = eng.suggest_topics(
+        seed="女人会爱上伤害她的男人,却不会爱上对她好的男人")
+    assert len(out["topics"]) == 8
+    user = eng.client.calls[0]["messages"][1]["content"]
+    assert "User seed" in user and "伤害" in user
+    assert "Required tension axes" not in user
+
+
 def test_schema_rejects_pseudo_depth_and_oversize():
     assert validate_topics({"topics": [
         {"text": "谈谈失败。", "hook": "话题太轻"},
@@ -271,3 +319,7 @@ def test_schema_rejects_pseudo_depth_and_oversize():
         {"text": "同一句话说了两遍。", "hook": "重复一"},
         {"text": "同一句话说了两遍。", "hook": "重复二"},
         {"text": "第三个可争论的话题", "hook": "占位"}]}) != []   # dup text
+    assert validate_topics({"topics": [                    # quote-variant dup
+        {"text": "情侣把账算到分毫,信任反而更薄。", "hook": "公平与一体"},
+        {"text": "情侣把账算到分毫，信任反而更薄。", "hook": "公平与一体"},
+        {"text": "第三个可争论的话题", "hook": "占位"}]}) != []

@@ -11,6 +11,16 @@ _TEXT_MIN, _TEXT_MAX = 6, 80
 _HOOK_MIN, _HOOK_MAX = 2, 30
 _BANNED = ("谈谈", "浅析", "感人", "深刻", "有意义", "引人深思", "值得思考")
 
+# Quote/punct variants the model flips freely; normalise before dup-check.
+_NORMALIZE = str.maketrans({
+    "“": '"', "”": '"', "‘": "'", "’": "'", "「": "《", "」": "》",
+    "『": "《", "』": "》", "，": ",", "。": ".", "、": ",", "：": ":",
+    "；": ";", "？": "?", "！": "!", " ": "", "　": ""})
+
+
+def _norm(text: str) -> str:
+    return text.translate(_NORMALIZE)
+
 
 def validate_topics(data: object) -> list[str]:
     """Return [] when valid; otherwise human-readable error strings."""
@@ -36,9 +46,10 @@ def validate_topics(data: object) -> list[str]:
         low = text.lower()
         if any(b in low for b in _BANNED):
             errors.append(f"topics[{i}].text uses filler wording: {text[:12]}…")
-        if text in seen:
+        key = _norm(text)
+        if key in seen:
             errors.append(f"topics[{i}].text duplicates an earlier topic")
-        seen.add(text)
+        seen.add(key)
         hook = str(t.get("hook") or "").strip()
         if not (_HOOK_MIN <= len(hook) <= _HOOK_MAX):
             errors.append(

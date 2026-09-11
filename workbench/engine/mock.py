@@ -384,22 +384,29 @@ class MockWritingEngine:
         return "给出一个具体场景,让读者感到这次经历的分量,不直接说出结论。"
 
     def suggest_topics(self, *, domain=None, object_name=None, tension=None,
-                       avoid=None, config=None, count=8, hint=None) -> dict:
+                       avoid=None, config=None, count=8, hint=None,
+                       seed=None) -> dict:
         """Deterministic canned candidates (LLM-free), avoid-list honored.
 
         Entries carry multiple domain tags; object filtering matches the
         object name as a substring of the canned text (Concrete Anchor
-        heuristic; unmatched objects roam the whole pool). The pool start
-        rotates per call so an immediate re-roll (without avoid) still
-        yields a fresh slice. `hint` is a real-engine-only steer and is
-        ignored here. Effective count is capped at the pool size so a
-        batch never repeats within itself.
+        heuristic; unmatched objects roam the whole pool). A `seed` (the
+        user's own thinking) filters canned topics whose text/hook contains
+        it as a substring, roaming the whole pool when nothing matches.
+        The pool start rotates per call so an immediate re-roll (without
+        avoid) still yields a fresh slice. `hint` is a real-engine-only
+        steer and is ignored here. Effective count is capped at the pool
+        size so a batch never repeats within itself.
         """
         pool = [t for t in _MOCK_TOPICS
                 if (not domain or domain in t["domains"])
                 and (not object_name or object_name in t["text"]
                      or object_name in t["hook"])
                 and (not tension or tension in t["tensions"])]
+        seed = (seed or "").strip()
+        if seed:
+            hits = [t for t in pool if seed in t["text"] or seed in t["hook"]]
+            pool = hits or pool
         if not pool:
             pool = list(_MOCK_TOPICS)
         banned = {a.strip() for a in (avoid or []) if a and a.strip()}

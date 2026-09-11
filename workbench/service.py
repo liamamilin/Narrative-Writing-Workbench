@@ -1025,12 +1025,16 @@ class Service:
         hint = str(payload.get("hint") or "").strip() or None
         if hint and len(hint) > 100:
             raise ApiError("VALIDATION", "hint must be at most 100 characters")
+        seed = str(payload.get("seed") or "").strip() or None
+        if seed and len(seed) > 200:
+            raise ApiError("VALIDATION", "seed must be at most 200 characters")
         try:
             data = self.engine.suggest_topics(domain=domain,
                                               object_name=object_name,
                                               tension=tension,
                                               avoid=avoid, config=None,
-                                              count=count, hint=hint)
+                                              count=count, hint=hint,
+                                              seed=seed)
         except EngineError as exc:
             raise ApiError("TOPIC_SUGGEST_FAILED",
                            str(exc) or "Could not suggest topics. Please retry.",
