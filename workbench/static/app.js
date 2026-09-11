@@ -202,7 +202,6 @@ function quickWrite() {
   if (saved.angle === "custom") $("#qw-custom").style.display = "";
   if (saved.length) $("#qw-length").value = saved.length;
   if (saved.lang) $("#qw-lang").value = saved.lang;
-  refreshSuggestBtn();
   $("#qw-ex").onclick = e => {
     const b = e.target.closest(".chip"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;
@@ -336,9 +335,10 @@ function quickWrite() {
   $("#qw-topic-clear").onclick = () => {
     TX.lib = []; saveLib(TX.lib); TX.selected = ""; renderLib();
   };
+  renderLib();                 // empty-state guidance (no taxonomy needed)
+  refreshSuggestBtn();         // now safe: defined above
   api("GET", "/taxonomy").then(t => {
     TX.tax = t; renderDomains();
-    if (TX.lib.length) renderLib();
   }).catch(() => {});
   $("#qw-angle").onchange = e => {
     $("#qw-custom").style.display = e.target.value === "custom" ? "" : "none";

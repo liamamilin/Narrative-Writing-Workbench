@@ -593,3 +593,20 @@ reinforcement / costless-good devaluation / exit cost / effort
 rationalization / common enemy / arousal misattribution / definition
 right / pseudo-intimacy). No domain drift, no paraphrases.
 240 tests pass.
+
+## Fix (2026-09-11): Quick Write v5.1 — TDZ crash hid the domain chips
+
+Report from screenshot: the 领域 chips cloud was empty and the library
+empty-state never rendered — the whole post-template init of quickWrite()
+had aborted. Root cause: a TDZ ReferenceError — `refreshSuggestBtn()` was
+called at load time (right after the saved-compose restore) but its
+`const` arrow was defined ~90 lines later, so quickWrite threw mid-body
+and the `/taxonomy` handler, renderDomains and renderLib never attached.
+(Also: renderLib was guarded by `if (TX.lib.length)`, so a first-time
+user with an empty library never saw the onboarding empty-state.)
+
+Fix: removed the premature call; renderLib() + refreshSuggestBtn() are
+now invoked after their definitions (renderLib unconditionally, so the
+empty state shows); /taxonomy only drives renderDomains. Verified with a
+Node DOM-stub harness that executes quickWrite() (catches TDZ — the
+pre-fix path threw, the post-fix path runs clean). Cache-bust app.js?v=34.
