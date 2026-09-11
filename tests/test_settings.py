@@ -137,3 +137,15 @@ def test_fetch_models_unreachable_is_graceful():
     r = c.post("/settings/models", json={
         "base_url": "http://127.0.0.1:9/v1", "api_key": "sk-fake"}).json()
     assert r["ok"] is False and r["error"]
+
+
+def test_bad_numeric_settings_rejected():
+    c = _client()
+    r = c.post("/settings", json={"timeout_seconds": "abc"})
+    assert r.status_code == 400 and "timeout_seconds" in r.json()["error"]["message"]
+    r = c.post("/settings", json={"writer_temperature": float("nan")})
+    assert r.status_code == 400 and "writer_temperature" in r.json()["error"]["message"]
+    r = c.post("/settings", json={"writer_temperature": 3})
+    assert r.status_code == 400 and "0-2" in r.json()["error"]["message"]
+    r = c.post("/settings", json={"timeout_seconds": None, "writer_temperature": None})
+    assert r.status_code == 200                      # explicit reset allowed

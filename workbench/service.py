@@ -411,13 +411,17 @@ class Service:
                     cfg[key] = value
                 else:
                     raise ApiError("VALIDATION", f"Invalid {key} value.")
-        if "target_length" in payload and payload["target_length"] is not None:
-            try:
-                tl = int(payload["target_length"])
-            except (TypeError, ValueError):
-                raise ApiError("VALIDATION", "target_length must be an integer.")
-            _validate_target_length(tl)
-            cfg["target_length"] = tl
+        if "target_length" in payload:
+            tl = payload["target_length"]
+            if tl is None or tl == "":
+                cfg["target_length"] = None     # explicit reset: no target
+            else:
+                try:
+                    tl = int(tl)
+                except (TypeError, ValueError):
+                    raise ApiError("VALIDATION", "target_length must be an integer.")
+                _validate_target_length(tl)
+                cfg["target_length"] = tl
         if cfg:
             patch["config"] = cfg
         if patch:
@@ -1075,6 +1079,15 @@ class Service:
         patch = {k: payload[k] for k in allowed if k in payload}
         if patch.get("engine") not in (None, "mock", "real"):
             raise ApiError("VALIDATION", "engine must be mock or real.")
+        for k in ("timeout_seconds", "writer_temperature"):
+            if k in patch and patch[k] not in (None, ""):
+                try:
+                    patch[k] = float(patch[k])
+                except (TypeError, ValueError):
+                    raise ApiError("VALIDATION", f"{k} must be a number.")
+        if "writer_temperature" in patch and patch["writer_temperature"] is not None \
+                and not 0 <= patch["writer_temperature"] <= 2:
+            raise ApiError("VALIDATION", "writer_temperature must be within 0-2.")
         previous = load()
         saved = save(patch)
         apply_env(saved)

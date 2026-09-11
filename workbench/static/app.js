@@ -635,7 +635,10 @@ async function settings() {
         api_key: $("#s-key").value.trim(),
         model: $("#s-model").value.trim(),
         timeout_seconds: parseFloat($("#s-timeout").value) || null,
-        writer_temperature: $("#s-temp").value === "" ? null : parseFloat($("#s-temp").value),
+        writer_temperature: (() => {
+          const t = parseFloat($("#s-temp").value);
+          return Number.isFinite(t) ? t : null;
+        })(),
       });
       toast(`已保存,引擎已切换为 ${r.engine}。`);
       settings();
@@ -937,7 +940,7 @@ function renderPanel() {
           `<option${(c[k] || "auto") === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>`).join("")}
     </div>
     <label class="small muted">Target length</label>
-    <input id="p-len" type="number" value="${c.target_length || 800}" data-tip="正文目标字数,改后重新生成生效">
+    <input id="p-len" type="number" value="${c.target_length ?? ""}" placeholder="800" data-tip="正文目标字数;留空=不设目标(engine 默认 100 字下限)。改后重新生成生效">
     <p style="margin-top:14px"><button class="primary" id="p-gen" style="width:100%"
       data-tip="${WS.draft ? "按当前意图与设置重写一稿(旧稿在 Versions 里永远可回)" : "按你的意图与素材写第一稿(真实引擎约 2–4 分钟)"}">
       ${WS.draft ? "Regenerate Draft" : "Generate Draft"}</button></p>
@@ -1252,7 +1255,7 @@ function collectPanelParams() {
     if (g(`#p-${k}`)) p[k] = g(`#p-${k}`).value === "auto" ? null : g(`#p-${k}`).value;
   if (g("#p-len")) {
     const n = parseInt(g("#p-len").value, 10);
-    if (Number.isFinite(n)) p.target_length = n;
+    p.target_length = Number.isFinite(n) ? n : null;   // explicit reset when cleared
   }
   return p;
 }

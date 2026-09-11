@@ -831,3 +831,25 @@ for auto; _apply_param_overrides now treats explicit null/"" as a reset
 API: set high/low persists, reset to null persists. 263 tests.
 target_length was verified fully effective end-to-end (writer prompt +
 0.35×–3× hard gate) — untouched.
+
+### Review pass (same day) — analogous consistency bugs (3)
+
+Swept the codebase for the display-vs-storage / no-reset / cleared-value
+residue pattern:
+
+1. Goal panel target length: clearing the input silently kept the old
+   DB value (regenerate reused it). Now collectPanelParams sends null
+   on clear and _apply_param_overrides treats explicit null/"" as
+   "no target" (update_task merge already supported null overwrites).
+   The field now displays the honest stored value with an 800
+   placeholder instead of a fake 800.
+2. Settings writer_temperature: a non-numeric value written NaN into
+   settings.json (engine role.temperature = float(nan)). Frontend
+   coerces to null; backend update_settings now validates numerics
+   (timeout_seconds, writer_temperature must be numbers; temperature
+   within 0-2) and allows explicit None resets. Verified bad values
+   rejected with 400.
+3. Settings timeout display showed 150 (fallback) while the live
+   default is 300 — honest display now: empty value + placeholder when
+   unset (falls back to live.yaml 300).
+2 new tests. 265 tests. app.js v41.

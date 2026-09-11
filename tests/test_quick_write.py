@@ -1102,3 +1102,15 @@ def test_product_summary_includes_refined_thesis():
     s = meaning_schema.product_safe_summary(d)
     assert s["refined_thesis"] == d["refined_thesis"]
     assert "crack" not in s          # internal chain step, not exposed
+
+
+def test_generate_payload_can_reset_target_length_and_dials():
+    c = _client()
+    tid = qw_task(c)
+    c.patch(f"/tasks/{tid}", json={"config": {"immersion": "high",
+                                              "target_length": 500}})
+    body = {"immersion": None, "target_length": None}   # UI sends explicit reset
+    r = c.post(f"/tasks/{tid}/generate?skip=1", json=body)
+    assert r.status_code in (200, 500)   # mock engine may fail transport; overrides applied first
+    t = c.get(f"/tasks/{tid}").json()["config"]
+    assert t["immersion"] is None and t["target_length"] is None
