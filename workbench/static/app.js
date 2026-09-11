@@ -86,13 +86,13 @@ async function home() {
           <div class="vrow"><a class="grow" href="#/tasks/${t.id}">
             <b>${esc(t.title || t.topic || t.instruction.slice(0, 40) || "Untitled")}</b>
             <span class="muted small"> · ${esc(t.status)}</span></a>
-            <a class="small" href="#/tasks/${t.id}" data-tip="在新标签页打开此任务">打开</a></div>`).join("")
+            <a class="small" href="#/tasks/${t.id}" data-tip="打开此任务">打开</a></div>`).join("")
         : `<p class="muted">还没有任务。从一个话题或一批素材开始。</p>`}
       </section>
       <section class="card"><h3>最近项目</h3>${
         projects.projects.length ? projects.projects.slice(0, 8).map(p => `
           <div class="vrow"><a class="grow" href="#/projects/${p.id}"><b>${esc(p.name)}</b></a>
-          <a class="small" href="#/projects/${p.id}" data-tip="在新标签页打开此项目">打开</a></div>`).join("")
+          <a class="small" href="#/projects/${p.id}" data-tip="打开此项目">打开</a></div>`).join("")
         : `<p class="muted">项目用于把相关素材与任务归堆(可选)。</p>`}
       </section>
     </div>`;
@@ -1760,15 +1760,6 @@ document.addEventListener("mouseout", e => {
 });
 document.addEventListener("click", hideTip);
 window.addEventListener("scroll", hideTip, true);
-
-/* Open every in-app link in a new tab (user preference). Modifier clicks
-   (⌘/ctrl/shift) keep native behavior. */
-document.addEventListener("click", e => {
-  const a = e.target.closest('a[href^="#/"]');
-  if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-  e.preventDefault();
-  window.open(a.href, "_blank");
-});
 
 const SCREENS = { home, quickWrite, reviseDraft, newTask, workspace, versions, projects, project, guide, settings };
 route();
