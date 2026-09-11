@@ -121,11 +121,13 @@ function quickWrite() {
     <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
       `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
     <label style="margin-top:14px">没有头绪?选个领域,让我来提</label>
-    <input id="qw-tax-search" placeholder="🔍 搜索领域或张力,如 教育 / 自由"
-           data-tip="输入即过滤下方两个下拉的选项">
+    <input id="qw-tax-search" placeholder="🔍 搜索领域 / 对象 / 张力,如 教育 / 学历 / 自由"
+           data-tip="输入即过滤下方三个下拉的选项">
     <div class="trio">
       <div><span class="muted small">领域</span>
         <select id="qw-tax-domain" data-tip="话题的现实入口(可不限)"></select></div>
+      <div><span class="muted small">对象</span>
+        <select id="qw-tax-object" data-tip="具体对象/锚点 — 深刻不等于抽象,越具体越有力(可不限)"></select></div>
       <div><span class="muted small">张力</span>
         <select id="qw-tax-tension" data-tip="跨领域的目标冲突轴,如 自由↔安全(可不限)"></select></div>
     </div>
@@ -168,7 +170,7 @@ function quickWrite() {
   };
 
   /* topic suggestion: search+selects -> suggest -> candidates -> fill */
-  const TX = { tax: null, domain: "", tension: "", seen: [] };
+  const TX = { tax: null, domain: "", object: "", tension: "", seen: [] };
   const fillSelect = (sel, items, current) => {
     const q = ($("#qw-tax-search").value || "").trim().toLowerCase();
     const hit = s => !q || s.name.toLowerCase().includes(q)
@@ -178,16 +180,31 @@ function quickWrite() {
     sel.innerHTML = opts.map(s =>
       `<option value="${esc(s.id)}"${s.id === current ? " selected" : ""}>${esc(s.name)}</option>`).join("");
   };
+  const fillObjectSelect = () => {
+    const t = TX.tax, sel = $("#qw-tax-object"); if (!t || !sel) return;
+    const q = ($("#qw-tax-search").value || "").trim().toLowerCase();
+    const hit = s => !q || s.toLowerCase().includes(q);
+    sel.innerHTML = `<option value=""${!TX.object ? " selected" : ""}>不限</option>`
+      + t.objects.map(g => {
+          const items = g.items.filter(s => hit(s) || s === TX.object);
+          if (!items.length) return "";
+          return `<optgroup label="${esc(g.name)}">` + items.map(o =>
+            `<option value="${esc(o)}"${o === TX.object ? " selected" : ""}>${esc(o)}</option>`).join("")
+            + `</optgroup>`;
+        }).join("");
+  };
   const renderTax = () => {
     const t = TX.tax; if (!t) return;
     fillSelect($("#qw-tax-domain"), t.domains, TX.domain);
+    fillObjectSelect();
     fillSelect($("#qw-tax-tension"), t.tensions, TX.tension);
     const dn = (t.domains.find(d => d.id === TX.domain) || {}).name || "";
-    const tn = (t.tensions.find(s => s.id === TX.tension) || {}).name || "";
-    $("#qw-tax-sel").textContent = [dn, tn].filter(Boolean).join(" · ");
+    $("#qw-tax-sel").textContent = [dn, TX.object, TX.tension && (t.tensions.find(s => s.id === TX.tension) || {}).name]
+      .filter(Boolean).join(" · ");
   };
   $("#qw-tax-search").oninput = renderTax;
   $("#qw-tax-domain").onchange = e => { TX.domain = e.target.value; renderTax(); };
+  $("#qw-tax-object").onchange = e => { TX.object = e.target.value; renderTax(); };
   $("#qw-tax-tension").onchange = e => { TX.tension = e.target.value; renderTax(); };
   const renderSug = topics => {
     $("#qw-sug").innerHTML = topics.map(t =>
@@ -200,8 +217,8 @@ function quickWrite() {
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Thinking…';
     try {
       const r = await api("POST", "/topics/suggest",
-        { domain: TX.domain || null, tension: TX.tension || null,
-          avoid: TX.seen });
+        { domain: TX.domain || null, object: TX.object || null,
+          tension: TX.tension || null, avoid: TX.seen });
       TX.seen = [...TX.seen, ...r.topics.map(t => t.text)].slice(-9);
       renderSug(r.topics);
     } catch (e) { toast(e.message || "Could not suggest topics.", true); }

@@ -298,12 +298,22 @@ class RealWritingEngine:
             raise GenerationFailed("We couldn't draft an instruction. Please retry.")
         return text
 
-    def suggest_topics(self, *, domain=None, tension=None,
+    def suggest_topics(self, *, domain=None, object_name=None, tension=None,
                        avoid=None, config=None) -> dict:
         """Propose 3 discussable topics. AI proposes; nothing is persisted."""
+        import dataclasses
+        # Reasoning models + long prompt + json_object intermittently return
+        # empty content on this gateway (V1 report §4 family of bugs); a
+        # short creative task needs no reasoning anyway — use a lite cfg.
+        lite = dataclasses.replace(self.config.role("architect"),
+                                   reasoning_effort="",
+                                   max_output_tokens=3000,
+                                   temperature=0.6)
         sys_prompt = _load_prompt(self.config.prompts_dir, "topic_suggest")
         parts = [
             f"## Domain\n\n{domain or '(不限 — roam across all domains)'}",
+            f"## Object (Concrete Anchor)\n\n"
+            f"{object_name or '(不限 — pick your own concrete anchor)'}",
             f"## Tension\n\n{tension or '(不限 — any goal-conflict axis)'}"]
         if avoid:
             parts.append("## Avoid (genuinely different from these)\n\n"
@@ -312,7 +322,7 @@ class RealWritingEngine:
         try:
             stage = structured_call(
                 self.client, role="topic_suggest",
-                role_cfg=self.config.role("architect"),
+                role_cfg=lite,
                 system_prompt=sys_prompt, user_message="\n\n".join(parts),
                 validator=validate_topics)
         except StructuredOutputError as exc:

@@ -7,7 +7,7 @@ distinct, single-sentence, non-filler.
 from __future__ import annotations
 
 _TOPICS_MIN, _TOPICS_MAX = 3, 3
-_TEXT_MIN, _TEXT_MAX = 6, 60
+_TEXT_MIN, _TEXT_MAX = 6, 80
 _HOOK_MIN, _HOOK_MAX = 2, 24
 _BANNED = ("谈谈", "浅析", "感人", "深刻", "有意义", "引人深思", "值得思考")
 

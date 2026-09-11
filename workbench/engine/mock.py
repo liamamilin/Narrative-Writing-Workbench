@@ -383,16 +383,20 @@ class MockWritingEngine:
                     "不直接说出结论。")
         return "给出一个具体场景,让读者感到这次经历的分量,不直接说出结论。"
 
-    def suggest_topics(self, *, domain=None, tension=None,
+    def suggest_topics(self, *, domain=None, object_name=None, tension=None,
                        avoid=None, config=None) -> dict:
         """Deterministic canned candidates (LLM-free), avoid-list honored.
 
-        Entries carry multiple domain tags; the pool start rotates per call
-        so an immediate re-roll (without avoid) still yields a new trio.
-        Unknown combos fall back to roaming the whole pool.
+        Entries carry multiple domain tags; object filtering matches the
+        object name as a substring of the canned text (Concrete Anchor
+        heuristic; unmatched objects roam the whole pool). The pool start
+        rotates per call so an immediate re-roll (without avoid) still
+        yields a new trio.
         """
         pool = [t for t in _MOCK_TOPICS
                 if (not domain or domain in t["domains"])
+                and (not object_name or object_name in t["text"]
+                     or object_name in t["hook"])
                 and (not tension or tension in t["tensions"])]
         if not pool:
             pool = list(_MOCK_TOPICS)

@@ -456,3 +456,30 @@ filtering both dropdown options by substring.
   app.js v29.
 - 230 tests pass (test file rewritten for v2; coverage invariant keeps the
   canned pool honest).
+
+## Addendum (2026-09-11): Object Taxonomy joins the picker (taxonomy v3)
+
+User asked where the Object Taxonomy went — it had been prompt-only
+vocabulary. Per the source design (§15 Concrete Anchor), objects ARE the
+"具体入口", so they now join the UI: taxonomy.json v3 adds `objects`
+(§2, 18 O-groups × 313 anchors, name-keyed since objects repeat across
+groups). UI becomes three orthogonal searchable selects — 领域 (49
+Surface Domains) / 对象 (313, optgrouped by O-group) / 张力 (33) — one
+search box filters all three. API accepts `object` (validated against
+the anchor name set); engine protocol gains `object_name`; real prompt
+uses it as the Concrete Anchor requirement; mock filters canned topics
+by substring (anchor heuristic, unmatched objects roam). 230 tests pass.
+
+Follow-up (same day): live-engine hardening for topic suggestion.
+(a) Reasoning-mode empty output: the architect role cfg (reasoning_effort
+low + long prompt + json_object) intermittently returned empty content on
+this gateway — same bug family as V1 report §4. `RealWritingEngine
+.suggest_topics` now derives a lite cfg (reasoning_effort="", max tokens
+3000, temperature 0.6) via dataclasses.replace; verified live: ~19s,
+valid trio, no repair.
+(b) Occasional single-schema-error reruns (model writes long puzzle
+sentences): schema text cap widened 60→80 chars; prompt prefers 10–45,
+hard cap 70. Live smoke: object=算法 / 大学 both return Pattern-hooked
+trios (Goodhart / Individual Rationality Trap / Hidden Beneficiary).
+Note: "加班"/"学生" are not in the source Object list (§2) and are
+correctly rejected by validation — pick from the 313 anchors.

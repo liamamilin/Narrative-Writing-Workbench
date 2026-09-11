@@ -41,13 +41,17 @@ def failing_client():
 def test_taxonomy_v2_structure(client):
     t = client.get("/taxonomy").json()
     assert t["version"] >= 2
-    doms, tens = t["domains"], t["tensions"]
+    doms, tens, objs = t["domains"], t["tensions"], t["objects"]
     assert len(doms) >= 45 and len(tens) >= 30
+    assert len(objs) >= 18                                   # O-groups
+    assert sum(len(g["items"]) for g in objs) >= 250         # object anchors
+    assert {g["id"] for g in objs} >= {"O01", "O18"}
     assert {d["id"] for d in doms} >= {"politics", "education", "ai", "love"}
     assert {x["id"] for x in tens} >= {"t01", "t33"}
     assert len({d["id"] for d in doms}) == len(doms)       # unique ids
     assert len({x["id"] for x in tens}) == len(tens)
     assert all(d["name"] and x["name"] for d in doms for x in tens)
+    assert all(g["name"] and g["items"] for g in objs)
 
 
 def test_mock_pool_covers_every_domain_and_tension():
@@ -100,6 +104,10 @@ def test_suggest_unknown_category_rejected(client):
     assert r.status_code == 400
     r = client.post("/topics/suggest", json={"tension": "t99"})
     assert r.status_code == 400
+    r = client.post("/topics/suggest", json={"object": "不存在的对象"})
+    assert r.status_code == 400
+    r = client.post("/topics/suggest", json={"object": "算法"})
+    assert r.status_code == 200
 
 
 def test_suggest_sub_alias_maps_to_tension(client):
@@ -132,12 +140,13 @@ def test_real_engine_topic_prompt_path():
     eng = RealWritingEngine.__new__(RealWritingEngine)   # no settings/env coupling
     eng.config = Config.default()
     eng.client = MockClient({"topic_suggest": [good]})
-    out = eng.suggest_topics(domain="internet", tension="t08", avoid=["旧的"])
+    out = eng.suggest_topics(domain="internet", object_name="算法",
+                             tension="t08", avoid=["旧的"])
     assert len(out["topics"]) == 3 and out["topics"][0]["hook"]
     call = eng.client.calls[0]
     assert call["role"] == "topic_suggest"
     user = call["messages"][1]["content"]
-    assert "internet" in user and "t08" in user and "旧的" in user
+    assert "internet" in user and "算法" in user and "t08" in user and "旧的" in user
 
 
 def test_schema_rejects_pseudo_depth_and_oversize():
@@ -146,6 +155,6 @@ def test_schema_rejects_pseudo_depth_and_oversize():
         {"text": "让文章感人又有深度。", "hook": "假深刻"},
         {"text": "无意义的第三个话题", "hook": "占位"}]}) != []
     assert validate_topics({"topics": [
-        {"text": "好话题" * 21, "hook": "过长被拒"},     # 63 > 60 chars
+        {"text": "好话题" * 30, "hook": "过长被拒"},     # 90 > 80 chars
         {"text": "第二个可争论的话题", "hook": "张力清晰"},
         {"text": "第三个可争论的话题", "hook": "张力清晰"}]}) != []

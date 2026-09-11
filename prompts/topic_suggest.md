@@ -68,7 +68,7 @@ Identity Lock · Moralization · Normalization Shift
 ## Hard rules
 
 - **One debatable sentence per topic**, 10–45 Chinese characters
-  (hard cap 60). A reasonable person could push back. No 谈谈/浅析
+  preferred (hard cap 70). A reasonable person could push back. No 谈谈/浅析
   openers, no banned filler (感人/深刻/有意义/引人深思/值得思考),
   no meta-instructions, no "pros and cons" grids, no conclusion
   preloading. 不要为了反直觉而反直觉。
@@ -82,6 +82,12 @@ Identity Lock · Moralization · Normalization Shift
 
 - Domain (may be 不限): the life area to anchor in. If given, all 3
   topics must live inside it.
+- Object (may be 不限): a concrete object/anchor (from the Object
+  Taxonomy — a person type, artifact, institution, behavior). If given,
+  every topic must use it as its Concrete Anchor (the sentence should
+  mention it or a direct instance of it). A strong answer often pairs
+  the object with a mechanism, e.g. 平台 × Risk Transfer, 学历 ×
+  Signal/Substance Divergence.
 - Tension (may be 不限): a cross-domain goal-conflict axis (两个都有真实
   价值、却难以同时最大化的目标). If given, aim at it.
 - Avoid list (may be empty).
