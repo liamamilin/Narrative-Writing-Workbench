@@ -618,3 +618,36 @@ domain groups sort by their latest timestamp, and within a group topics
 sort newest-on-top, so a fresh batch appears at the very top and the
 left column auto-scrolls there (block:start). Verified with a Node
 DOM-stub harness asserting both orderings. app.js?v=35.
+
+## Addendum (2026-09-11): Topic prompt v3 — Sharp Thesis Generator
+
+User found batch output too mediocre ("嗯,挺有道理" vs "等等,还能这样
+理解?") and supplied a Sharp Thesis Generator methodology. Root causes
+in the old prompt: TVS nine-dim scoring selects for *safe & important*,
+not for frame-shifting; the Pattern-matching flow produced debatable
+phenomenon statements; and the old "no conclusion preloading" rule
+actively suppressed thesis-shaped sharpness.
+
+Rewrite of prompts/topic_suggest.md keeps the product pipeline (JSON
+contract, batch coverage, seed/roam modes, injected sections, schema
+validation) and swaps the generative core:
+- Sharpness = Frame Distance × Explanatory Power × Compression ×
+  Defensibility (replaces TVS as main scorer; Reality/Mechanism/Anchor
+  hard gates kept via the seven-point quality test incl. the 5-second
+  non-obviousness test and mandatory frame migration).
+- Reframe catalog A–L replaces Pattern Library A–J (overlapping patterns
+  folded in: Goodhart→L, Safety Paradox→B); user's calibration examples
+  included as sharpness anchors (never imitate wording).
+- Elimination list now covers clichés / psych platitudes (unless
+  reframed to structure) / pseudo-depth / unfounded absolutism /
+  clickbait / synonym rehash; "no conclusion preloading" deleted — a
+  thesis IS a stance; Defensibility is the counterweight.
+- Style: judgment sentences (not questions), hook = reframe label
+  (默认→新框架), batch ordered sharpest-first (UI shows newest batch
+  on top; within-batch stable sort keeps rank). No Top3 badge, library
+  not wiped (user's calls).
+- real.py lite cfg temperature 0.6→0.75 (schema+repair still backstop).
+Live A/B: seed = user's own sentence produced 8 distinct facets
+(间歇强化/信号贬值/浪漫化忍耐/离开即否定/权力即爱/伤害即在乎/痛感即
+深度/考题与选项); roam(labor) produced 8 axis-mapped theses (自由→风险
+转移, 家文化绑架离职…). Both 8/8 first-pass schema. 240 tests.

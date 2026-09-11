@@ -318,7 +318,7 @@ class RealWritingEngine:
         lite = dataclasses.replace(self.config.role("architect"),
                                    reasoning_effort="",
                                    max_output_tokens=3000,
-                                   temperature=0.6)
+                                   temperature=0.75)
         count = max(3, min(12, int(count or 8)))
         seed = (seed or "").strip() or None
         tax = _load_topic_taxonomy()
