@@ -360,7 +360,8 @@ def test_meaning_endpoint_product_safe():
                  "candidate_angles", "chain-of-thought"):
         assert leak not in body
     m = c.get(f"/tasks/{tid}/meaning").json()
-    assert set(m) == {"topic", "selected_angle", "core_question", "reader_end_state"}
+    assert set(m) == {"topic", "selected_angle", "core_question",
+                      "reader_end_state", "refined_thesis"}
 
 
 # ------------------------------------------------ SSE progress stream ----
@@ -392,8 +393,8 @@ def test_progress_stream_replays_stages_and_angle():
     assert events[-1][0] == "eof"
     # angle event carries only product-safe fields
     angle_ev = next(e for k, e in events if k == "angle")
-    assert set(angle_ev["data"]) == {"topic", "selected_angle",
-                                     "core_question", "reader_end_state"}
+    assert set(angle_ev["data"]) == {"topic", "selected_angle", "core_question",
+                                     "reader_end_state", "refined_thesis"}
 
 
 def test_progress_stream_error_event_on_failure():
@@ -1045,3 +1046,59 @@ def test_concurrent_reviews_rejected_and_flag_released(monkeypatch):
     gate.set()
     first.join(6)
     assert not svc._reviewing                      # released after completion
+
+
+# ---------------------------------- 15. thinking chain (meaning pipeline v2) ----
+
+def _chain_mock():
+    return MockWritingEngine().discover_meaning(
+        topic="谈谈失败", writing_mode="deep_narrative", angle_mode="auto",
+        custom_angle="", avoid=[], config={})
+
+
+def test_thinking_chain_fields_required_and_produced():
+    d = _chain_mock()
+    for f in ("crack", "strongest_counterexample", "boundary", "refined_thesis"):
+        assert d.get(f), f"missing chain field {f}"
+    assert meaning_schema.validate_meaning(d) == []
+
+
+def test_thinking_chain_fields_are_schema_required():
+    import copy
+    d = _chain_mock()
+    for f in ("crack", "strongest_counterexample", "boundary", "refined_thesis"):
+        broken = copy.deepcopy(d)
+        broken.pop(f)
+        errs = meaning_schema.validate_meaning(broken)
+        assert any(f in e for e in errs), f"{f} not enforced"
+
+
+def test_refined_thesis_must_migrate_frame():
+    d = _chain_mock()
+    d["refined_thesis"] = d["common_reading"]          # no frame migration
+    errs = meaning_schema.validate_meaning(d)
+    assert any("frame migration" in e for e in errs)
+
+
+def test_wir_handoff_carries_chain_fields():
+    d = _chain_mock()
+    block = meaning_schema.meaning_to_wir_block(d)
+    for f in ("refined_thesis", "strongest_counterexample", "boundary"):
+        assert block.get(f)
+
+
+def test_progression_contract_in_wir_instruction():
+    from workbench.engine.real import _compose_topic_instruction
+    instruction = _compose_topic_instruction("", _chain_mock())
+    assert "Progression contract" in instruction
+    assert "Refined thesis" in instruction
+    assert "Strongest counterexample to face:" in instruction
+    assert "Boundary of the thesis:" in instruction
+    assert "counterexample" in instruction and "boundary" in instruction
+
+
+def test_product_summary_includes_refined_thesis():
+    d = _chain_mock()
+    s = meaning_schema.product_safe_summary(d)
+    assert s["refined_thesis"] == d["refined_thesis"]
+    assert "crack" not in s          # internal chain step, not exposed

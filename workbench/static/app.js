@@ -914,8 +914,9 @@ function renderPanel() {
     ${WS.task.input_mode === "topic_only" && WS.meaning ? `
       <div class="meaning-card">
         <span class="muted small">What this piece is about</span>
-        <b>${esc(WS.meaning.selected_angle)}</b>
+        <b>${esc(WS.meaning.refined_thesis || WS.meaning.selected_angle)}</b>
         <p class="small">${esc(WS.meaning.core_question)}</p>
+        <p class="small muted">Reframe: ${esc(WS.meaning.selected_angle)}</p>
         <p class="small muted">Reader leaves with: ${esc(WS.meaning.reader_end_state)}</p>
       </div>` : ""}
     <label class="small muted" data-tip="你要这篇文字做到什么。它作为『写作指令』进入生成管线:同时指导结构设计与正文写作。">Intent</label>

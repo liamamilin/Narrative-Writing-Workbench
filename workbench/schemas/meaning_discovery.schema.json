@@ -13,7 +13,11 @@
     "deep_meaning",
     "common_reading",
     "new_reading",
-    "reader_end_state"
+    "reader_end_state",
+    "crack",
+    "strongest_counterexample",
+    "boundary",
+    "refined_thesis"
   ],
   "properties": {
     "topic": { "type": "string", "minLength": 1 },
@@ -45,6 +49,10 @@
     "common_reading": { "type": "string" },
     "new_reading": { "type": "string" },
     "reader_end_state": { "type": "string", "minLength": 1 },
+    "crack": { "type": "string", "minLength": 1 },
+    "strongest_counterexample": { "type": "string", "minLength": 1 },
+    "boundary": { "type": "string", "minLength": 1 },
+    "refined_thesis": { "type": "string", "minLength": 1 },
     "key_tensions": { "type": "array", "items": { "type": "string" } },
     "constraints": { "type": "array", "items": { "type": "string" } },
     "fact_heavy": { "type": "boolean" },

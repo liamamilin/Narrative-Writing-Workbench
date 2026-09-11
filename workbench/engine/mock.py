@@ -284,6 +284,12 @@ class MockWritingEngine:
             "common_reading": "a generic answer",
             "new_reading": sel["deep_meaning"],
             "reader_end_state": sel["reader_end_state"],
+            "crack": "the generic answer keeps failing on repeat cases",
+            "strongest_counterexample":
+                "some losses are fully priced and simply accepted",
+            "boundary":
+                "holds where the loss is unpriced; fails for priced losses",
+            "refined_thesis": f"{sel['deep_meaning']} — priced differently",
             "key_tensions": ["wanting vs. fearing"],
             "constraints": [], "fact_heavy": False, "language": "en",
         }

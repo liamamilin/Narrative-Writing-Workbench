@@ -18,6 +18,20 @@ from jsonschema import Draft202012Validator
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "meaning_discovery.schema.json"
 
+# Progression contract (thinking-chain steps 6-8): how the Architect must
+# order beats once this meaning block is injected into the WIR stage.
+PROGRESSION_CONTRACT = (
+    "## Progression contract (how the beats must be ordered)\n"
+    "- Derive, don't enumerate: beats must follow the mechanism through "
+    "successive orders of consequence — first-order phenomenon → "
+    "second-order reaction → third-order structure. 并列铺陈 = failure.\n"
+    "- One beat must face the strongest counterexample head-on and answer "
+    "it from the mechanism, not by dismissing it.\n"
+    "- The closing beat states the boundary: where the thesis holds, "
+    "where it does not. No absolutism.\n"
+    "- Each beat's meaning_gain records what the reader's understanding "
+    "gained at that step of the chain.")
+
 with open(SCHEMA_PATH, "r", encoding="utf-8") as fh:
     MEANING_SCHEMA = json.load(fh)
 
@@ -58,6 +72,12 @@ def validate_meaning(obj) -> list[str]:
                 errors.append(
                     f"candidate_angles {candidates[i]['id']} and "
                     f"{candidates[j]['id']} duplicate the same label")
+
+    # framework migration must actually happen (thinking-chain step 4→9):
+    # the refined thesis may not restate the default reading.
+    if _normalize(obj.get("refined_thesis")) == _normalize(obj.get("common_reading")):
+        errors.append("refined_thesis must differ from common_reading "
+                      "(no frame migration detected)")
     return errors
 
 
@@ -70,7 +90,7 @@ def selected_angle(obj: dict) -> dict:
 
 
 def meaning_to_wir_block(obj: dict) -> dict:
-    """Minimum handoff to WIR (product/13 'Output to WIR')."""
+    """Handoff to WIR (product/13 'Output to WIR') + thinking-chain fields."""
     sel = selected_angle(obj)
     return {
         "selected_angle": sel.get("label", obj.get("new_reading", "")),
@@ -78,15 +98,20 @@ def meaning_to_wir_block(obj: dict) -> dict:
         "deep_meaning": obj.get("deep_meaning", ""),
         "reader_end_state": obj.get("reader_end_state", ""),
         "key_tensions": obj.get("key_tensions") or obj.get("candidate_tensions") or [],
+        "refined_thesis": obj.get("refined_thesis", ""),
+        "strongest_counterexample": obj.get("strongest_counterexample", ""),
+        "boundary": obj.get("boundary", ""),
     }
 
 
 def product_safe_summary(obj: dict) -> dict:
-    """GET /tasks/:id/meaning payload — 4 fields, no reasoning trace (product/17)."""
+    """GET /tasks/:id/meaning payload — refined products only, no reasoning
+    trace (product/17; v2 adds refined_thesis per user request — see review)."""
     sel = selected_angle(obj)
     return {
         "topic": obj.get("topic", ""),
         "selected_angle": sel.get("label", ""),
         "core_question": obj.get("core_question", ""),
         "reader_end_state": obj.get("reader_end_state", ""),
+        "refined_thesis": obj.get("refined_thesis", ""),
     }

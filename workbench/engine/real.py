@@ -478,16 +478,23 @@ def _dial_block(config: dict) -> str:
 
 def _compose_topic_instruction(instruction: str, meaning: dict) -> str:
     """Feed the selected meaning explicitly into the WIR stage (product/13 §Output to WIR)."""
+    from ..meaning_schema import PROGRESSION_CONTRACT
     block = meaning_to_wir_block(meaning)
     lines = ["## Meaning to develop (do not replace this thesis)", ""]
+    lines.append(f"Refined thesis: {block['refined_thesis'] or block['deep_meaning']}")
     lines.append(f"Selected angle: {block['selected_angle']}")
     lines.append(f"Core question: {block['core_question']}")
     lines.append(f"Deep meaning: {block['deep_meaning']}")
     lines.append(f"Reader should end understanding: {block['reader_end_state']}")
+    if block.get("strongest_counterexample"):
+        lines.append(f"Strongest counterexample to face: {block['strongest_counterexample']}")
+    if block.get("boundary"):
+        lines.append(f"Boundary of the thesis: {block['boundary']}")
     if block["key_tensions"]:
         lines.append("Key tensions: " + "; ".join(block["key_tensions"]))
-    lines += ["", "This piece is topic-led (not source-grounded). Do not invent "
-                  "citations or claim unsupported authority.", ""]
+    lines += ["", PROGRESSION_CONTRACT, "",
+              "This piece is topic-led (not source-grounded). Do not invent "
+              "citations or claim unsupported authority.", ""]
     if instruction:
         lines.append("## Writer's own note")
         lines.append(instruction)

@@ -689,3 +689,41 @@ value. Findings:
 - Regression test test_topics_use_settings_model_overlay asserts the
   architect model (Settings-overlaid) reaches the topic call with
   reasoning cleared. 242 tests.
+
+## Addendum (2026-09-11): Meaning pipeline v2 — the ten-step thinking chain
+
+User supplied a dialectical thinking chain (Sharp Thesis → Default Frame →
+Crack → Reframe → Mechanism → Derivation → Counterexample → Boundary →
+Refined Thesis → Implication) and asked to fuse it into the writing
+system. Mapping onto Meaning Discovery (applies to all three entry
+points + rediscover-angle via the shared discover path):
+
+- Schema (meaning_discovery.schema.json) gains 4 REQUIRED top-level
+  fields: crack, strongest_counterexample, boundary, refined_thesis.
+- validate_meaning adds a semantic rule: refined_thesis must differ from
+  common_reading (normalized) — no frame migration, no pass.
+- prompts/meaning_discovery.md rewritten around the chain: candidates =
+  reframes repairing the crack; refined thesis = the deeper proposition
+  after counterexample + boundary push back; implication = reader end
+  state. Custom angles (A0) are refined by the chain, not replaced.
+- Progression contract (PROGRESSION_CONTRACT in meaning_schema.py,
+  injected via _compose_topic_instruction into the WIR stage — engine
+  code untouched): beats must DERIVE along the mechanism through orders
+  of consequence (1st phenomenon → 2nd reaction → 3rd structure), one
+  beat must face the strongest counterexample head-on, the closing beat
+  states the boundary. No absolutism.
+- Transparency: internal drive only (user's call). Workspace meaning
+  card shows refined_thesis (bold) + reframe + reader_end_state;
+  product_safe_summary 4→5 fields (+refined_thesis). product/17
+  "4 fields" decision recorded here per user request — refined products,
+  not reasoning traces.
+- Mock engine returns the new fields; 6 new tests (schema required,
+  frame-migration rule, WIR handoff, instruction contract, summary
+  fields). 248 tests.
+Live smoke (mimo-v2.5, seed topic 加班文化是自愿的…): discovery produced
+all chain fields (crack: 主动性的定义由系统改写; counterexample: 财务自由者的
+真实退出; boundary: 节奏共存且不污名化时才成立; refined_thesis: 自愿是
+事后制造的假象——清洗样本后再指认幸存者); the 5-paragraph draft ran
+derivation (§2), faced the counterexample head-on (§3), stated the
+boundary (§4), landed the implication (§5). ~3:47 total, meaning card
+shows the refined thesis.
