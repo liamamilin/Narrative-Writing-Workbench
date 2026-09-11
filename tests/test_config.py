@@ -56,3 +56,13 @@ def test_api_key_env_lookup(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-123")
     cfg = Config.default()
     assert cfg.api_key == "sk-test-123"
+
+
+def test_session_headers_mirror_session_id():
+    """Console Go providers (mimo-v2.5) require x-session-id; both headers
+    must carry the same stable value."""
+    from app.llm_client import _opencode_session_headers
+
+    h = _opencode_session_headers()
+    assert h["x-session-id"] == h["x-opencode-session"]
+    assert _opencode_session_headers() == h        # stable per process

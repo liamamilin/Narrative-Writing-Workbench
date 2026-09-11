@@ -651,3 +651,20 @@ Live A/B: seed = user's own sentence produced 8 distinct facets
 (间歇强化/信号贬值/浪漫化忍耐/离开即否定/权力即爱/伤害即在乎/痛感即
 深度/考题与选项); roam(labor) produced 8 axis-mapped theses (自由→风险
 转移, 家文化绑架离职…). Both 8/8 first-pass schema. 240 tests.
+
+## Fix (2026-09-11): topic generation was slow — wrong model + missing header
+
+Root cause: Settings' model field was empty, so every role used
+config.live.yaml's deepseek-v4-flash — ~37-40s per 8-topic batch (decoding
+~1000 JSON tokens), with sporadic gateway hangs stacking behind the SDK's
+150s x 3 silent retries. The user expected the gateway's mimo-v2.5, which
+the engine never used because (a) no model was set in settings and (b) the
+Console Go provider behind mimo-v2.5 401s requests lacking an x-session-id
+header — the engine only sent x-opencode-session.
+
+Fix: _opencode_session_headers() now mirrors the stable session id into
+x-session-id; settings.json model set to mimo-v2.5 (the role overlay at
+engine load applies it to all roles). Measured: topic batch 37-40s →
+9-11s, both seed and roam modes, 8/8 first-pass schema. Full Write
+pipeline smoke passed under mimo-v2.5 (multi-stage, ~165s — unchanged
+character). README test count 240 → 241 (header regression test added).

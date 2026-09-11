@@ -104,7 +104,7 @@ H4-confirm(GI 增益)、H5(Critic 应作用于 GI 草稿)。盲评结果导入�
 ## 测试
 
 ```bash
-python3 -m pytest tests/ -q        # 240 passed
+python3 -m pytest tests/ -q        # 241 passed
 ```
 
 ## 阅读顺序

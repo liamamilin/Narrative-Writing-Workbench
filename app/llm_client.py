@@ -250,10 +250,14 @@ def build_client(config: Config) -> LLMClient:
 
 
 def _opencode_session_headers() -> dict[str, str]:
-    """Send a stable session id so OpenCode Go can optimize routing/caching."""
+    """Send a stable session id so OpenCode Go can optimize routing/caching.
+
+    Also mirrored as x-session-id: the Console Go provider behind some
+    models (e.g. mimo-v2.5) rejects requests without that header.
+    """
     import uuid
 
     ts = time.strftime("%Y%m%d", time.localtime())
     sid = os.environ.get("OPENCODE_SESSION_ID") or f"{ts}-{uuid.uuid4().hex}"
     os.environ.setdefault("OPENCODE_SESSION_ID", sid)
-    return {"x-opencode-session": sid}
+    return {"x-opencode-session": sid, "x-session-id": sid}
