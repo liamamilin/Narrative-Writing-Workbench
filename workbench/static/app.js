@@ -64,6 +64,7 @@ async function home() {
   const [tasks, projects] = await Promise.all([api("GET", "/tasks"), api("GET", "/projects")]);
   $("#app").innerHTML = `
     <div class="hero">
+      <p class="slogan">发现值得写的,写成值得读的。</p>
       <h1>你想写点什么?</h1>
       <div class="entries">
         <a class="entry" href="#/quickwrite" data-tip="只有一个话题也行:系统先找到值得说的角度再写">
