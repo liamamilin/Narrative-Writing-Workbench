@@ -815,3 +815,19 @@ timeout bump resolves it.
 3. Prompt tests now resolve via Config.default().prompts_dir instead of
    cwd-relative paths (fragile when pytest runs from elsewhere).
 263 tests.
+
+### Addendum (2026-09-11): experience dials — UI consistency fixes
+
+Audit found immersion/explicitness/intensity (engine `_DIAL_GUIDANCE`
+three-level mapping, `_dial_block` injection, persistence, validation)
+were fully wired on the backend — the Goal panel already renders the
+three selects and collectPanelParams sends them with generate/retry —
+but two consistency defects: a null DB value displayed as "low" (the
+first option) creating a fake-UI-state, and no way to return to
+"not set". Fixes: selects gain an explicit "auto" option (selected when
+null, tip explains auto = not injected); collectPanelParams sends null
+for auto; _apply_param_overrides now treats explicit null/"" as a reset
+(update_task merge already supported null overwrites). Verified via
+API: set high/low persists, reset to null persists. 263 tests.
+target_length was verified fully effective end-to-end (writer prompt +
+0.35×–3× hard gate) — untouched.

@@ -928,13 +928,13 @@ function renderPanel() {
     <p style="margin-top:8px"><button id="p-suggest" data-tip="让模型根据素材/话题与你现在的意图起草一版,再点『使用』填回(可先修改)。仅作为草稿,由你决定。">AI 帮我写/改进 Intent</button></p>
     <div id="suggest-out"></div>
     <div class="trio" style="margin-top:10px">
-      ${[["immersion", "高=偏场景呈现,让读者“身临其境”;低=偏概述与说明"],
-         ["explicitness", "高=主题直说;低=意义藏在画面里,靠读者推断"],
-         ["intensity", "情绪与冲突的强度:高=浓烈,低=克制留白"]]
+      ${[["immersion", "高=偏场景呈现,让读者“身临其境”;低=偏概述与说明;auto=不注入此设置"],
+         ["explicitness", "高=主题直说;低=意义藏在画面里,靠读者推断;auto=不注入此设置"],
+         ["intensity", "情绪与冲突的强度:高=浓烈,低=克制留白;auto=不注入此设置"]]
         .map(([k, tip]) => `
         <div data-tip="${tip}"><span class="muted small">${k}</span>
-        <select id="p-${k}">${["low", "medium", "high"].map(x =>
-          `<option${c[k] === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>`).join("")}
+        <select id="p-${k}">${["auto", "low", "medium", "high"].map(x =>
+          `<option${(c[k] || "auto") === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>`).join("")}
     </div>
     <label class="small muted">Target length</label>
     <input id="p-len" type="number" value="${c.target_length || 800}" data-tip="正文目标字数,改后重新生成生效">
@@ -1249,7 +1249,7 @@ function collectPanelParams() {
   const p = {};
   if (g("#p-instr")) p.instruction = g("#p-instr").value;
   for (const k of ["immersion", "explicitness", "intensity"])
-    if (g(`#p-${k}`)) p[k] = g(`#p-${k}`).value;
+    if (g(`#p-${k}`)) p[k] = g(`#p-${k}`).value === "auto" ? null : g(`#p-${k}`).value;
   if (g("#p-len")) {
     const n = parseInt(g("#p-len").value, 10);
     if (Number.isFinite(n)) p.target_length = n;

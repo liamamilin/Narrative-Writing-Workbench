@@ -403,10 +403,14 @@ class Service:
                 patch["instruction"] = instr
         cfg: dict = {}
         for key in ("immersion", "explicitness", "intensity"):
-            if key in payload and payload[key]:
-                if payload[key] not in EXPERIENCE_LEVELS:
+            if key in payload:
+                value = payload[key]
+                if value is None or value == "":
+                    cfg[key] = None                 # explicit reset to auto
+                elif value in EXPERIENCE_LEVELS:
+                    cfg[key] = value
+                else:
                     raise ApiError("VALIDATION", f"Invalid {key} value.")
-                cfg[key] = payload[key]
         if "target_length" in payload and payload["target_length"] is not None:
             try:
                 tl = int(payload["target_length"])
