@@ -668,3 +668,24 @@ engine load applies it to all roles). Measured: topic batch 37-40s →
 9-11s, both seed and roam modes, 8/8 first-pass schema. Full Write
 pipeline smoke passed under mimo-v2.5 (multi-stage, ~165s — unchanged
 character). README test count 240 → 241 (header regression test added).
+
+## Check (2026-09-11): confirm topic generation runs off Settings (not yaml)
+
+User asked to verify the topic model comes from Settings, not a hardcoded
+value. Findings:
+- The chain already works: get_engine() -> RealWritingEngine.__init__ ->
+  _apply_settings() overlays Settings model/timeout onto all 4 roles;
+  suggest_topics derives its lite cfg from the (overlaid) architect role,
+  so the model flows from Settings. Runtime probe: all roles = mimo-v2.5
+  with the current settings.json; client sends x-session-id.
+- Hot-swap confirmed live: POST /settings {model:mimo-v2.5-pro} -> next
+  /topics/suggest used it (14.5s); reverting to mimo-v2.5 -> 8.5s. No
+  restart needed (Service.update_settings reassigns self.engine).
+- Closed latent traps so nothing silently pins deepseek: config.live.yaml
+  role defaults -> mimo-v2.5 (was deepseek-v4-flash); the "OpenCode Go"
+  preset model list -> [mimo-v2.5, mimo-v2.5-pro, deepseek-v4-flash,
+  kimi-k2.5]; Settings datalist fallback -> mimo-v2.5. (Gateway exposes
+  37 models incl. 4 mimo variants via POST /settings/models; app.js v36.)
+- Regression test test_topics_use_settings_model_overlay asserts the
+  architect model (Settings-overlaid) reaches the topic call with
+  reasoning cleared. 242 tests.

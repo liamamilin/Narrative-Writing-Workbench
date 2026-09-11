@@ -571,7 +571,7 @@ async function settings() {
     <label>模型 Model</label>
     <div class="row">
       <input id="s-model" class="grow" list="s-model-list" value="${esc(s.model)}" placeholder="选择或输入模型名" data-tip="下拉选常见模型;也可手填">
-      <datalist id="s-model-list">${(known && known.models.length ? known.models : ["deepseek-v4-flash"]).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
+      <datalist id="s-model-list">${(known && known.models.length ? known.models : ["mimo-v2.5"]).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
       <button id="s-fetch" data-tip="从该 Base URL 拉取可用模型列表(GET /models)">拉取模型</button>
     </div>
     <div class="trio" style="margin-top:10px">

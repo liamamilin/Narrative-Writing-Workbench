@@ -10,27 +10,27 @@ thresholds:
 
 roles:
   architect:
-    model: deepseek-v4-flash
+    model: mimo-v2.5
     temperature: 0.2
     max_output_tokens: 6000
     timeout_seconds: 150
     structured_mode: auto
     reasoning_effort: low
   writer:
-    model: deepseek-v4-flash
+    model: mimo-v2.5
     temperature: 0.7
     max_output_tokens: 4000
     timeout_seconds: 150
     reasoning_effort: low
   critic:
-    model: deepseek-v4-flash
+    model: mimo-v2.5
     temperature: 0.1
     max_output_tokens: 6000
     timeout_seconds: 150
     structured_mode: auto
     reasoning_effort: low
   patcher:
-    model: deepseek-v4-flash
+    model: mimo-v2.5
     temperature: 0.3
     max_output_tokens: 6000
     timeout_seconds: 150

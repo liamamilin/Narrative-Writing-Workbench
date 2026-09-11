@@ -323,3 +323,34 @@ def test_schema_rejects_pseudo_depth_and_oversize():
         {"text": "情侣把账算到分毫,信任反而更薄。", "hook": "公平与一体"},
         {"text": "情侣把账算到分毫，信任反而更薄。", "hook": "公平与一体"},
         {"text": "第三个可争论的话题", "hook": "占位"}]}) != []
+
+
+def test_topics_use_settings_model_overlay(monkeypatch):
+    """Topic suggestion derives its model from Settings (via the architect
+    role overlay), not from a hardcoded value."""
+    from app.config import Config
+    from workbench.engine import real as real_mod
+
+    cfg = Config.default()
+    captured = {}
+
+    class _Recorder:
+        def generate_structured(self, messages, *, role, role_cfg, on_delta=None):
+            captured["model"] = role_cfg.model
+            captured["reasoning"] = getattr(role_cfg, "reasoning_effort", "?")
+            from app.llm_client import GenerationResult
+            good = json.dumps({"topics": [
+                {"text": f"可争论话题编号{i}。", "hook": f"钩子{i}"}
+                for i in range(1, 4)]}, ensure_ascii=False)
+            return GenerationResult(text=good, model=role_cfg.model)
+
+    monkeypatch.setattr(real_mod, "_load_topic_taxonomy",
+                        lambda: {"tensions": [{"name": f"x{i}"} for i in range(40)]})
+    eng = real_mod.RealWritingEngine.__new__(real_mod.RealWritingEngine)
+    eng.config = cfg
+    eng.client = _Recorder()
+    # architect role model set from settings (what _apply_settings does):
+    cfg.role("architect").model = "mimo-v2.5"
+    eng.suggest_topics(domain="love", count=3)
+    assert captured["model"] == "mimo-v2.5"          # settings model wins
+    assert captured["reasoning"] == ""               # lite: reasoning cleared
