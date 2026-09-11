@@ -210,14 +210,19 @@ def test_progression_contract_carries_distinction_and_residue():
 
 
 def test_discover_prompt_demands_distinction_and_residue():
-    text = open("prompts/meaning_discovery.md", encoding="utf-8").read()
+    import pathlib
+    base = pathlib.Path(Config.default().prompts_dir)
+    text = (base / "meaning_discovery.md").read_text(encoding="utf-8")
     assert "conceptual distinction" in text and "X ≠ Y" in text
     assert "portable mental tool" in text
     assert "Residue" in text
 
 
 def test_critic_prompt_has_thesis_gates():
-    text = open("prompts/critic.md", encoding="utf-8").read()
+    import pathlib
+    base = pathlib.Path(Config.default().prompts_dir)
+    text = (base / "critic.md").read_text(encoding="utf-8")
     assert "Gate 2, FATAL" in text and "Gate 3, FATAL" in text
     assert "delete test" in text
     assert "Core quality decides; delivery amplifies" in text
+    assert "Applies only when the draft carries a thesis" in text  # skip for non-thesis tasks

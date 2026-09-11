@@ -38,6 +38,11 @@ Report any deviation as a fidelity violation.
 
 ## Pass A+ — Thesis-level audit (the gates)
 
+**Applies only when the draft carries a thesis** (WIR/task has a meaning
+block — the essay is built on a proposition). If the task is faithful
+rewriting/revision of the user's own material with no thesis of its own,
+skip this pass entirely and judge with Pass A/B.
+
 These judge the draft as a piece of thinking, not as prose. Severity is
 prescribed — do not soften:
 

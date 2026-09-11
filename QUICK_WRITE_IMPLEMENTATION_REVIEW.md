@@ -801,3 +801,17 @@ thesis-level audit discriminating correctly, no fatal over-firing.
 Note: two GENERATION_FAILED runs before this were APITimeoutError on
 the WIR call (gateway slowness), unrelated to these changes; the
 timeout bump resolves it.
+
+### Review pass (same day) — 3 fixes
+
+1. Pass A+ applicability: gates now apply ONLY when the draft carries a
+   thesis (meaning block). Faithful rewriting/revision of user material
+   (no thesis) skips Gate 2/3 — previously a no-thesis task could be
+   falsely killed by the development gate.
+2. live.yaml timeout_seconds 150→300 (was still the tight default;
+   settings overlay masked it — now both agree, no regression if
+   settings timeout is cleared). No secrets in the file (api_key_env
+   reference only).
+3. Prompt tests now resolve via Config.default().prompts_dir instead of
+   cwd-relative paths (fragile when pytest runs from elsewhere).
+263 tests.
