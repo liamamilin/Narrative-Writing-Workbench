@@ -109,6 +109,7 @@ python3 -m pytest tests/ -q        # 242 passed
 
 ## 阅读顺序
 
+**想了解产品是什么**:`docs/PRODUCT_INTRODUCTION.md`(中文,面向读者)
 **产品层**:`docs/narrative-writing-product-v0-spec/README.md` →
 `PRODUCT_IMPLEMENTATION_TASK.md` → `product/00..10`
 **引擎层**:`docs/00` → `docs/12` → `docs/01` → `docs/02`(WIR)→
