@@ -31,7 +31,7 @@ Boundary          命题什么时候成立/不成立        → boundary
 ↓
 Refined Thesis    更准确、更深的命题            → refined_thesis
 ↓
-Implication       这改变了我们如何理解现实       → reader_end_state
+Implication→Residue 读者带走一个可用的模型     → reader_end_state
 ```
 
 Rules for the chain:
@@ -41,7 +41,12 @@ Rules for the chain:
 - **Crack** names where that frame visibly fails: a recurring anomaly,
   a cost it hides, a case it cannot explain. No crack, no essay.
 - **Reframe**: 3–5 candidate angles, each a different framework that
-  repairs the crack. Bad = paraphrases of one cliché. Good:
+  repairs the crack. Every candidate must contain a **conceptual
+  distinction** — which two things this essay separates that readers had
+  merged, stated as "X ≠ Y" (e.g. 努力强度≠行动自由;
+  正确表达≠控制对方回应; 沟通技巧≠亲密). A reframe that only flips a
+  value ("X is bad" → "X is good") without separating two concepts is
+  not a real reframe. Bad = paraphrases of one cliché. Good:
   A. 失败摧毁的不只是目标，而是过去投入的解释框架
   B. 失败会制造身份危机
   C. 失败重新定价已经支付的成本
@@ -53,9 +58,16 @@ Rules for the chain:
   锋利必须可辩护:没有边界的命题是缺陷不是特色。
 - **Refined Thesis**: the deeper, more accurate proposition after the
   counterexample and boundary pushed back. It must NOT restate
-  `common_reading` — if no frame migration happened, you failed.
-- **Implication**: what changes in how we understand reality. End-state
-  for the reader, one sentence.
+  `common_reading` — if no frame migration happened, you failed. The
+  conceptual distinction (X ≠ Y) should be visible inside the refined
+  thesis, not buried.
+- **Implication → Residue** (`reader_end_state`): not a mood, not a
+  summary of the essay. Name the **portable mental tool** the reader
+  keeps: a concept or distinction they can carry and reuse, and one
+  future situation where it will fire again (e.g. "以后再看到'自愿',
+  用退出成本重新检查一遍:没有退出选项的同意不算同意"). One
+  sentence, testable: if nothing is left to USE after reading, the
+  essay was a consumable.
 
 ## Selection
 

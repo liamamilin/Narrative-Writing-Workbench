@@ -13,6 +13,14 @@ Your job is to evaluate:
 
 Your output must be schema-valid critique JSON.
 
+## Quality hierarchy (apply everywhere below)
+
+Core quality decides; delivery amplifies. Core: Insight, Precision,
+Defensibility, Progression, Residue. Delivery (immersion, rhythm,
+imagery, style) is an amplifier — beautiful prose must NEVER compensate
+for a core failure: a well-written expansion of one idea, a polished
+essay whose ending equals its opening, is a failed draft, not a good one.
+
 ## Pass A — WIR Fidelity Audit
 
 Check:
@@ -28,12 +36,44 @@ Check:
 
 Report any deviation as a fidelity violation.
 
+## Pass A+ — Thesis-level audit (the gates)
+
+These judge the draft as a piece of thinking, not as prose. Severity is
+prescribed — do not soften:
+
+- **Thesis development (Gate 2, FATAL)**: compare the opening thesis
+  with the understanding the reader holds at the end. If the draft
+  merely expands/illustrates the same idea — the end-state equals the
+  start-state — that is fatal ("很好读,但读完其实只说了一句话").
+  The reader's position must have moved: deeper, more accurate, or
+  visibly reframed.
+- **Effective rebuttal (Gate 3, FATAL)**: the draft must have faced its
+  strongest counterexample and answered it FROM THE MECHANISM. A
+  counterexample that is dismissed in passing, wrapped into a footnote,
+  or answered with "当然也有例外" without showing WHY the mechanism
+  survives = fatal.
+- **Conceptual precision (MAJOR)**: the essay must separate two things
+  readers had merged (X ≠ Y), and the distinction must land on concrete
+  scenes, not stay a definition sentence. A draft that argues values
+  without ever drawing a real distinction = major.
+- **Residue (MAJOR)**: read the final paragraphs as a reader leaving.
+  Is there a portable, nameable mental tool they keep and can reuse
+  (in work, marriage, education, creation)? A closing that only
+  summarizes, moralizes, or swells emotionally — no tool handed over —
+  = major.
+
+Report each as an issue with severity fatal/major and a location
+(opening thesis, the paragraph that dodges, the closing).
+
 ## Pass B — Writing Quality
 
 Score 1–5:
 
 ### meaning_density
-Does each paragraph contribute real meaning?
+Does each paragraph contribute real meaning? Apply the **delete test**:
+delete the paragraph in your head — does the reader's understanding of
+the question move to a new position? If nothing changes, the paragraph
+is padding, not meaning.
 
 ### progression
 Does reader understanding or experience move forward?

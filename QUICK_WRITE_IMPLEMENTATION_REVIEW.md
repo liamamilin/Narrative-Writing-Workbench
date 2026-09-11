@@ -759,3 +759,45 @@ decision, gate text). 260 tests.
 Live smoke (mimo, AA制 topic): 3:57 total (~+10s = judge call), meaning
 5 fields intact, review returned decision=PASS wq=30, no degrade
 warnings in log.
+
+## Addendum (2026-09-11): Goal function pinned — five metrics, three gates
+
+User pinned the definition of "good" (Insight / Precision /
+Defensibility / Progression / Residue; delivery = amplifier only;
+Good Essay = Valuable Thesis × Thesis Development × Defensibility ×
+Cognitive Transfer, multiplicative). Prompt/contract layer only — no
+schema, no app/ code changes:
+
+1. meaning_discovery.md: every reframe must contain a conceptual
+   distinction (X ≠ Y, two merged things separated); Implication
+   rewritten as Residue — reader_end_state must name a portable,
+   nameable mental tool + the future situation where it fires, not a
+   mood. Chain diagram updated (Implication→Residue).
+2. PROGRESSION_CONTRACT +2 beats: land the distinction on a concrete
+   scene ("X is not Y, but Z" happening, not defined); closing beat =
+   Residue delivery — 总结陈词/鸡汤收束 = contract violation.
+3. critic.md: new "Pass A+ — Thesis-level audit". Gate 2 (end-state
+   equals start-state = expansion, not development) → FATAL; dodged
+   counterexample ("answered with 当然也有例外 without mechanism") →
+   FATAL; no real conceptual distinction → major; no portable tool at
+   the close → major. New quality hierarchy section: core decides,
+   delivery amplifies, prose must never compensate. Delete test written
+   into meaning_density. Critique schema untouched (diagnosis.type is
+   free-form; severity enum free — fatal flows into the existing
+   decision rule unchanged). Residue deliberately MAJOR, not fatal: the
+   no-upgrade fatal (Gate 2) already catches the one-shot-consumable
+   case; double-fatal would over-trigger PATCH.
+4. Settings: timeout_seconds 150→300 (live.yaml default was too tight
+   for today's slow mimo WIR calls; settings overlay now 300).
+3 new prompt/contract tests. 263 tests.
+Live smoke (AA制, 5:55 — mimo slow day): angle now carries the
+distinction ("公平是匹配,不是复制——混淆了程序平等与实质公平"),
+residue is a three-question portable tool (起点/获益/负担比例), draft
+§5 faced the counterexample head-on, §6 landed the distinction, §7
+delivered the residue, §8 stated the boundary. Review: 5 dims all
+strong, wq 27, decision=PATCH_REQUIRED on ONE real issue (early_reveal:
+§5 revealed the §6 distinction early, making later beats redundant) —
+thesis-level audit discriminating correctly, no fatal over-firing.
+Note: two GENERATION_FAILED runs before this were APITimeoutError on
+the WIR call (gateway slowness), unrelated to these changes; the
+timeout bump resolves it.

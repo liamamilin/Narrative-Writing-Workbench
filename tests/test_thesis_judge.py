@@ -198,3 +198,26 @@ def test_review_summary_text_pass_no_warning():
                "issues": []}
     text = _review_summary_text(payload)
     assert "⚠" not in text and "未发现明显问题" in text
+
+
+# ---------------------------- goal function: precision/residue contract ----
+
+def test_progression_contract_carries_distinction_and_residue():
+    from workbench.meaning_schema import PROGRESSION_CONTRACT
+    assert "conceptual distinction" in PROGRESSION_CONTRACT
+    assert "Residue" in PROGRESSION_CONTRACT
+    assert "总结陈词" in PROGRESSION_CONTRACT          # closing = tool, not summary
+
+
+def test_discover_prompt_demands_distinction_and_residue():
+    text = open("prompts/meaning_discovery.md", encoding="utf-8").read()
+    assert "conceptual distinction" in text and "X ≠ Y" in text
+    assert "portable mental tool" in text
+    assert "Residue" in text
+
+
+def test_critic_prompt_has_thesis_gates():
+    text = open("prompts/critic.md", encoding="utf-8").read()
+    assert "Gate 2, FATAL" in text and "Gate 3, FATAL" in text
+    assert "delete test" in text
+    assert "Core quality decides; delivery amplifies" in text
