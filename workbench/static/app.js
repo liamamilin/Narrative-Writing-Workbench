@@ -251,9 +251,13 @@ function quickWrite() {
     const prevOpen = new Set(
       [...document.querySelectorAll("#qw-lib details.qw-group")]
         .filter(d => d.open).map(d => d.dataset.d));
+    const indexed = lib.map((t, i) => ({ t, i }));       // keep true lib index
+    const lastTs = dn => Math.max(
+      ...indexed.filter(x => x.t.domainName === dn).map(x => x.t.ts));
+    doms.sort((a, b) => lastTs(b) - lastTs(a));          // newest domain first
     $("#qw-lib").innerHTML = doms.map(dn => {
-      const items = lib.map((t, i) => ({ t, i }))
-        .filter(x => x.t.domainName === dn);
+      const items = indexed.filter(x => x.t.domainName === dn)
+                           .sort((a, b) => b.t.ts - a.t.ts);   // newest on top
       const open = prevOpen.has(dn) || dn === freshDomain ||
                    !prevOpen.size;
       return `<details class="qw-group"${open ? " open" : ""} data-d="${esc(dn)}">
@@ -320,7 +324,7 @@ function quickWrite() {
       saveLib(TX.lib);
       renderLib(now - 1, dname);
       const el = $("#qw-lib .qw-card.fresh");
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
       toast(e.message || "生成失败,请重试。", true);
       btn.textContent = "↻ 重试";

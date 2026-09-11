@@ -610,3 +610,11 @@ now invoked after their definitions (renderLib unconditionally, so the
 empty state shows); /taxonomy only drives renderDomains. Verified with a
 Node DOM-stub harness that executes quickWrite() (catches TDZ — the
 pre-fix path threw, the post-fix path runs clean). Cache-bust app.js?v=34.
+
+## Tweak (2026-09-11): newest topics surface first
+
+Library display now reverse-chronological (storage stays append-order):
+domain groups sort by their latest timestamp, and within a group topics
+sort newest-on-top, so a fresh batch appears at the very top and the
+left column auto-scrolls there (block:start). Verified with a Node
+DOM-stub harness asserting both orderings. app.js?v=35.
