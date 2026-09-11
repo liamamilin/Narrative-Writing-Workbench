@@ -31,7 +31,7 @@ prompts/        外置提示词(引擎角色 + product_patch + meaning_discovery
 schemas/        WIR / critique / outline JSON Schema
 docs/           引擎规范 00-18 + 产品规范 narrative-writing-product-v0-spec/
 benchmarks/     测试用例、消融结果、盲评表导出/导入
-tests/          pytest(209 项:引擎 + 产品 + Quick Write + Settings)
+tests/          pytest(213 项:引擎 + 产品 + Quick Write + Settings)
 runs/           每次引擎运行的全量中间产物
 ui/             运行观察面板(Flask,8551,非产品 UI)
 ```
@@ -46,6 +46,8 @@ pip install -r requirements.txt -r requirements-workbench.txt
 ```
 
 不配置任何密钥即可体验完整交互:默认走内置 **mock 引擎**(离线、确定性)。
+服务空闲 30 分钟无任何请求会**自动退出**(下次直接重跑脚本即可;
+`WORKBENCH_IDLE_TIMEOUT` 分钟可调,0 关闭)。
 
 切换到**真实引擎**:在浏览器打开的 Settings 页填 Base URL / API Key / Model
 (选服务商会自动填入端点与本机可用模型),或手动:
@@ -102,7 +104,7 @@ H4-confirm(GI 增益)、H5(Critic 应作用于 GI 草稿)。盲评结果导入�
 ## 测试
 
 ```bash
-python3 -m pytest tests/ -q        # 209 passed
+python3 -m pytest tests/ -q        # 213 passed
 ```
 
 ## 阅读顺序

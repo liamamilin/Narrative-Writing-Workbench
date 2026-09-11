@@ -1,6 +1,9 @@
 #!/bin/bash
 # Narrative Writing Workbench — launch helper (idempotent).
 # Usage: scripts/launch_workbench.sh [stop]
+# Idle auto-exit: after WORKBENCH_IDLE_TIMEOUT minutes without any request
+# the server shuts itself down (default 30; 0 disables). Restart with this
+# script anytime (idempotent).
 # Credentials live in workbench/settings.json (git-ignored). No env file needed:
 # workbench/server.py applies them into the process env at startup.
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

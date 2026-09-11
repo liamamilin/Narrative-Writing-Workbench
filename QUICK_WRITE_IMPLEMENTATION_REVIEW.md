@@ -365,3 +365,16 @@ usage tokens (B4, debug path only); the SSE grace loop waits 2s before
 replaying a fast completed review (B7, mock-only latency, replay correct);
 runReview's EventSource is not closed on navigation (B8, self-terminates on
 eof/300s cap). 209 tests pass (8 new).
+
+## Addendum (2026-09-04): idle auto-shutdown
+
+User request: the nohup'd workbench server outlived every browser session.
+New `workbench/idle.py`: `IdleTracker` (monotonic clock, lock-guarded
+touch), HTTP middleware touching it on every request start (SSE opens
+count; no browser polling exists to keep it wedged), daemon watchdog with
+poll = clamp(timeout/4, 1s, 15s), exit via SIGINT to self (uvicorn graceful,
+`timeout_graceful_shutdown=5` so an open SSE tab cannot block the stop).
+`WORKBENCH_IDLE_TIMEOUT` minutes, default 30, 0 disables; startup banner
+shows the mode. Engine/product logic untouched. 213 tests pass (4 new) +
+live smoke: request refreshes the clock, server self-exits with a visible
+message.
