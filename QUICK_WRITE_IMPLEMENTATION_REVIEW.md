@@ -853,3 +853,27 @@ residue pattern:
    default is 300 — honest display now: empty value + placeholder when
    unset (falls back to live.yaml 300).
 2 new tests. 265 tests. app.js v41.
+
+### Addendum (2026-09-12): resume at last successful node
+
+Generation failures no longer restart from zero. Nodes: N1 meaning
+discovery (topic_only; already persisted and now reused), N2 WIR plan
+(previously thrown away when the writer/gates failed), N3 writer.
+
+- Engine (`real.py`/`mock.py`): `generate()` gains `plan` (skip
+  Architect, reuse the persisted WIR) and `on_plan` (fires right after
+  the Architect finishes, before the Writer).
+- Service: `_generate_with` persists the plan row via `on_plan` instead
+  of only after total success; plan rows carry an `inputs_json`
+  fingerprint (instruction, dials, target_length, language, locks,
+  constraints, meaning_id, material hash) in a new `engine_plans`
+  column (additive migration).
+- `POST /tasks/:id/generate` accepts `resume: true`: reuses the latest
+  ready discovery (never re-run; topic is immutable) and the latest
+  plan when its fingerprint matches; mismatches fall back to a fresh
+  WIR with the meaning preserved. `regenerate` (Rewrite this angle)
+  reuses the plan too — a same-angle rewrite is writer-only when
+  nothing changed.
+- UI: the failure card's Retry sends `resume: true` with the current
+  panel params, and explains that completed steps are not re-run.
+- 5 new tests (tests/test_resume.py). 270 tests. app.js v42.

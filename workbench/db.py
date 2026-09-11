@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS writing_configs(
 CREATE TABLE IF NOT EXISTS engine_plans(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, schema_version TEXT DEFAULT '1',
   data_json TEXT NOT NULL, created_at TEXT NOT NULL,
-  meaning_id TEXT);
+  meaning_id TEXT, inputs_json TEXT);
 CREATE TABLE IF NOT EXISTS meaning_discoveries(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, topic TEXT NOT NULL,
   selected_angle_id TEXT, status TEXT NOT NULL DEFAULT 'ready'
@@ -111,6 +111,9 @@ class Database:
         if "meaning_id" not in cols("engine_plans"):
             self.conn.execute(
                 "ALTER TABLE engine_plans ADD COLUMN meaning_id TEXT")
+        if "inputs_json" not in cols("engine_plans"):
+            self.conn.execute(
+                "ALTER TABLE engine_plans ADD COLUMN inputs_json TEXT")
 
     # -- tiny helpers ----------------------------------------------------
 

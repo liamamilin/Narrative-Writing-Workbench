@@ -219,7 +219,8 @@ class RealWritingEngine:
 
     def generate(self, *, material, instruction, task_type, config,
                  meaning=None, emit=None, on_delta=None,
-                 on_struct_delta=None) -> GenerateResult:
+                 on_struct_delta=None, plan=None,
+                 on_plan=None) -> GenerateResult:
         allow_new_facts = bool(meaning) or not bool(
             config.get("locks", {}).get("facts", True))
         expected = resolve_language_for(config, material, instruction,
@@ -236,17 +237,28 @@ class RealWritingEngine:
         engine_type = _TASK_TYPE_MAP.get(task_type, "narrative_commentary")
         if emit:
             emit("stage", {"stage": "structure"})
-        try:
-            arch = self.architect.run(material, instruction, engine_type,
-                                      constraints, on_delta=on_struct_delta)
-        except StructuredOutputError as exc:
-            raise GenerationFailed("The draft could not be generated correctly.") from exc
-        wir = arch.data
-        if emit:
-            emit("stage_summary", {"stage": "structure",
-                                   "text": _outline_summary(wir)})
-        if meaning:
-            wir.setdefault("task", {})["meaning"] = meaning_to_wir_block(meaning)
+        if plan:
+            # Resume at the writer: reuse the persisted WIR instead of
+            # re-running the Architect (failure retry resumes at the last
+            # successful node).
+            wir = (plan or {}).get("wir") or {}
+            if emit:
+                emit("stage_summary", {"stage": "structure",
+                                       "text": "复用上次的结构:" + _outline_summary(wir)})
+        else:
+            try:
+                arch = self.architect.run(material, instruction, engine_type,
+                                          constraints, on_delta=on_struct_delta)
+            except StructuredOutputError as exc:
+                raise GenerationFailed("The draft could not be generated correctly.") from exc
+            wir = arch.data
+            if emit:
+                emit("stage_summary", {"stage": "structure",
+                                       "text": _outline_summary(wir)})
+            if meaning:
+                wir.setdefault("task", {})["meaning"] = meaning_to_wir_block(meaning)
+            if on_plan:
+                on_plan({"wir": wir, "meaning": meaning})
         target = config.get("target_length")
         if emit:
             emit("stage", {"stage": "writing"})

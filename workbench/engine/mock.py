@@ -5,8 +5,8 @@ Interface is identical to RealWritingEngine (both satisfy WritingEngine).
 
 from __future__ import annotations
 
-from . import (DiscoveryFailed, GenerateResult, LockConflict,
-               map_beats_to_paragraphs, split_paragraphs)
+from . import (DiscoveryFailed, GenerationFailed, GenerateResult,
+               LockConflict, map_beats_to_paragraphs, split_paragraphs)
 
 _MOCK_CANDIDATES = [
     {"id": "A1", "label": "The topic as loss", "mechanism": "subtraction",
@@ -252,6 +252,7 @@ _MOCK_WIR = {    "kind": "mock_wir",
 class MockWritingEngine:
     name = "mock"
     simulate_repair = False    # tests flip this to exercise the reset path
+    fail_writer = False        # tests flip this to fail AFTER the plan node
 
     def discover_meaning(self, *, topic, writing_mode, angle_mode,
                          custom_angle, avoid, config, emit=None,
@@ -296,14 +297,31 @@ class MockWritingEngine:
 
     def generate(self, *, material, instruction, task_type, config,
                  meaning=None, emit=None, on_delta=None,
-                 on_struct_delta=None) -> GenerateResult:
+                 on_struct_delta=None, plan=None,
+                 on_plan=None) -> GenerateResult:
+        reused = bool(plan)
         if emit:
-            emit("stage", {"stage": "structure"})
-            if on_struct_delta:
-                on_struct_delta("{\"beats\": […]}  # mock structure")
-            emit("stage_summary", {"stage": "structure",
-                                   "text": "结构:铺垫 → 张力显形 → 转折 → 收束"})
+            if reused:
+                emit("stage", {"stage": "structure"})
+                emit("stage_summary", {"stage": "structure",
+                                       "text": "结构:复用上次结构"})
+            else:
+                emit("stage", {"stage": "structure"})
+                if on_struct_delta:
+                    on_struct_delta("{\"beats\": […]}  # mock structure")
+                emit("stage_summary", {"stage": "structure",
+                                       "text": "结构:铺垫 → 张力显形 → 转折 → 收束"})
             emit("stage", {"stage": "writing"})
+        if reused:
+            plan_data = plan
+        else:
+            plan_data = dict(_MOCK_WIR)
+            if meaning:
+                plan_data["meaning"] = meaning
+            if on_plan:
+                on_plan(plan_data)
+        if self.fail_writer:
+            raise GenerationFailed("mock writer failure")
         topic = (instruction or material or "the subject").strip().split("\n")[0][:40]
         if meaning and meaning.get("selected_angle"):
             topic = f"{topic} — {meaning['selected_angle']}".strip(" —")[:80]
@@ -314,9 +332,6 @@ class MockWritingEngine:
             "What mattered was never said directly, only circled.",
             "By the end, the reader understands what the character refused to.",
         ]
-        plan = dict(_MOCK_WIR)
-        if meaning:
-            plan["meaning"] = meaning
         text = "\n\n".join(paras)
         if on_delta:
             import time as _t
@@ -333,7 +348,7 @@ class MockWritingEngine:
                 for i in range(0, len(text), 24):
                     on_delta(text[i:i + 24])
                     _t.sleep(0.005)
-        return GenerateResult(text=text, plan=plan)
+        return GenerateResult(text=text, plan=plan_data)
 
     def review(self, *, content, material, instruction, plan, config,
                on_delta=None) -> dict:

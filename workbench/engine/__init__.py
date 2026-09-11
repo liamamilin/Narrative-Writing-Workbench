@@ -45,7 +45,9 @@ class WritingEngine(Protocol):
     def generate(self, *, material: str, instruction: str, task_type: str,
                  config: dict, meaning: dict | None = None,
                  emit=None, on_delta=None,
-                 on_struct_delta=None) -> GenerateResult: ...
+                 on_struct_delta=None,
+                 plan: dict | None = None,
+                 on_plan=None) -> GenerateResult: ...
 
     def review(self, *, content: str, material: str, instruction: str,
                plan: dict | None, config: dict,

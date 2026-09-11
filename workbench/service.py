@@ -10,6 +10,7 @@ Golden rules enforced here:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -530,20 +531,35 @@ class Service:
         ch = BROKER.channel(tid, reset=True)
         ch.emit("stage", {"stage": "queued"})
         material = self._material(task)
+        resume = bool((payload or {}).get("resume"))
         if task.get("input_mode") != "topic_only":
             if not material and not task["instruction"]:
                 ch.close()
                 raise ApiError("VALIDATION", "Add material or an intent first.")
             try:
-                return self._generate_with(task, meaning=None)
+                plan = self._resumable_plan(task) if resume else None
+                return self._generate_with(task, meaning=None, plan=plan)
             finally:
                 ch.close()
         # Quick Write golden path: Meaning Discovery -> Angle -> WIR -> Writer
         try:
-            discovery = self.discover(task, emit=ch.emit)
+            if resume:
+                discovery = self._latest_discovery(tid)
+                if discovery:
+                    ch.emit("stage_summary", {
+                        "stage": "discovery",
+                        "text": "复用上次发现的角度 —— "
+                        + (meaning_schema.selected_angle(discovery["data"])
+                           .get("label", "") or "已确定")})
+                    ch.emit("angle",
+                            meaning_schema.product_safe_summary(discovery["data"]))
+            if not resume or not discovery:
+                discovery = self.discover(task, emit=ch.emit)
+            plan = self._resumable_plan(task, discovery) if resume else None
             if not material:
                 material = task["topic"]
-            return self._generate_with(task, meaning=discovery, material=material)
+            return self._generate_with(task, meaning=discovery,
+                                       material=material, plan=plan)
         finally:
             ch.close()
 
@@ -645,8 +661,47 @@ class Service:
         row["data"] = json.loads(row["data_json"])
         return row
 
+    def _gen_inputs_fingerprint(self, task: dict, meaning: dict | None,
+                                material: str) -> dict:
+        """Snapshot of every input the WIR stage consumes. A plan is only
+        reusable when this matches the snapshot stored with it."""
+        cfg = task["config"]
+        return {
+            "instruction": task["instruction"],
+            "dials": {k: cfg.get(k) for k in
+                      ("immersion", "explicitness", "intensity")},
+            "target_length": cfg.get("target_length"),
+            "expected_language": cfg.get("expected_language"),
+            "locks": cfg.get("locks"),
+            "constraints": cfg.get("constraints"),
+            "meaning_id": (meaning or {}).get("id"),
+            "material_sha": hashlib.sha256(
+                (material or "").encode("utf-8")).hexdigest(),
+        }
+
+    def _resumable_plan(self, task: dict,
+                        meaning: dict | None = None) -> dict | None:
+        """Latest plan for this task, valid only if inputs still match."""
+        row = self.db.q1(
+            "SELECT data_json, inputs_json FROM engine_plans WHERE task_id=?"
+            " ORDER BY created_at DESC, rowid DESC LIMIT 1", (task["id"],))
+        if not row:
+            return None
+        try:
+            saved = json.loads(row["inputs_json"] or "{}")
+        except json.JSONDecodeError:
+            return None
+        material = self._material(task) or task["topic"]
+        if saved != self._gen_inputs_fingerprint(task, meaning, material):
+            return None
+        try:
+            return json.loads(row["data_json"])
+        except json.JSONDecodeError:
+            return None
+
     def _generate_with(self, task: dict, meaning: dict | None,
-                       material: str | None = None) -> dict:
+                       material: str | None = None,
+                       plan: dict | None = None) -> dict:
         tid = task["id"]
         ch = BROKER.channel(tid)
         emit = ch.emit
@@ -657,12 +712,29 @@ class Service:
             material = self._material(task)
         self.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
                      (now(), tid))
+        if plan:
+            on_plan = None      # resume: architect skipped, plan row exists
+        else:
+            def on_plan(new_plan: dict) -> None:
+                # Persist the WIR the moment the Architect finishes: if the
+                # Writer or gates fail, this node is already saved and a
+                # resume can skip straight to writing.
+                self.db.exec(
+                    "INSERT INTO engine_plans(id,task_id,schema_version,"
+                    "data_json,created_at,meaning_id,inputs_json)"
+                    " VALUES(?,?,?,?,?,?,?)",
+                    (new_id("plan"), tid, "1",
+                     json.dumps(new_plan, ensure_ascii=False), now(),
+                     (meaning or {}).get("id"),
+                     json.dumps(self._gen_inputs_fingerprint(
+                         task, meaning, material), ensure_ascii=False)))
         try:
             result = self.engine.generate(
                 material=material, instruction=task["instruction"],
                 task_type=task["type"], config=self._config_dict(task),
                 meaning=(meaning or {}).get("data") if meaning else None,
-                emit=emit, on_delta=stream, on_struct_delta=struct_cb)
+                emit=emit, on_delta=stream, on_struct_delta=struct_cb,
+                plan=plan, on_plan=on_plan)
         except EngineError as exc:
             # failure safety: previous draft/versions untouched
             self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?",
@@ -687,12 +759,6 @@ class Service:
             if struct_cb:
                 struct_cb.flush()
         ts = now()
-        plan_id = new_id("plan")
-        self.db.exec(
-            "INSERT INTO engine_plans(id,task_id,schema_version,data_json,"
-            "created_at,meaning_id) VALUES(?,?,?,?,?,?)",
-            (plan_id, tid, "1", json.dumps(result.plan, ensure_ascii=False), ts,
-             (meaning or {}).get("id")))
         draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
         if not draft:
             did = new_id("draft")
@@ -963,7 +1029,9 @@ class Service:
         ch.emit("angle", meaning_schema.product_safe_summary(discovery["data"]))
         try:
             material = self._material(task) or task["topic"]
-            return self._generate_with(task, meaning=discovery, material=material)
+            plan = self._resumable_plan(task, discovery)
+            return self._generate_with(task, meaning=discovery,
+                                       material=material, plan=plan)
         finally:
             ch.close()
 

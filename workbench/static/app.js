@@ -1173,10 +1173,12 @@ function genFailureCard(errMsg, endpoint, body, okMsg) {
     `<div class="card" style="border-color:var(--warn)">
       <b style="color:var(--warn)">生成失败 — 你的现有正文没有被改动</b>
       <p class="small">${esc(errMsg || "The draft could not be generated correctly.")}</p>
-      <button class="primary" id="gen-retry" data-tip="再试一次;现有正文与历史版本不受影响">重试 Retry</button></div>`);
+      <p class="small muted">重试将从已完成的步骤继续(已发现的角度与已定稿的结构不会重跑)。
+      想全新重来,请用 Goal 面板的 Generate。</p>
+      <button class="primary" id="gen-retry" data-tip="从上一个成功的节点继续,不重复已完成的步骤">重试(继续)Retry</button></div>`);
   const r = $("#gen-retry");
   if (r) r.onclick = () => runGeneration(
-    endpoint || "generate", body || {},
+    endpoint || "generate", { ...collectPanelParams(), ...(body || {}), resume: true },
     okMsg || "Draft ready — 第一稿已生成。");
 }
 
