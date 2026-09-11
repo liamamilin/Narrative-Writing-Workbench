@@ -425,3 +425,34 @@ POST /topics/suggest (taskless, nothing persisted). UI: two-level chips
 chips (text + hook subtitle) that fill the topic input on click, 换一批
 keeps a 9-item seen window as avoid. 226 tests pass (7 new); live smoke
 against the real engine returned valid trios for 不限 and work/diligence.
+
+## Addendum (2026-09-11): taxonomy v2 (World Topic Taxonomy V1.0) + search box
+
+User supplied `world_topic_taxonomy_v1.md` (faceted topic-discovery system)
+and asked to rebuild the picker on it, plus a search box. Decisions
+confirmed: Patterns stay prompt-only (no third selector); the source doc
+moves into the repo (`docs/TOPIC_TAXONOMY.md`); search = single input
+filtering both dropdown options by substring.
+
+- `workbench/taxonomy.json` v2: `domains` = §1 Surface Domains (49, flat,
+  ascii ids — domain↔tension no longer nested); `tensions` = §6 global
+  goal-conflict axes (t01–t33). Remaining facets (Object/Relation/
+  Phenomenon/Mechanism/Pattern/Scale/Time/Inquiry) are prompt vocabulary,
+  not UI.
+- `prompts/topic_suggest.md` rewritten around the new system: Concrete
+  Anchor → Puzzle structures (§12) → Pattern Library (§10, all 60, prompt
+  -only) → internal TVS screening (§13 hard gates) → anti-pseudo-depth
+  filter (§14) → diversify → output best 3. Schema widened to 6–60 chars
+  (puzzle sentences run longer than aphorisms); hook ≤ 24 (target ≤ 20).
+- API: `POST /topics/suggest {domain?, tension?, avoid[]}` — `sub` kept
+  as a legacy alias for `tension`; domain/tension validated independently
+  against the taxonomy.
+- Mock engine: canned pool rebuilt as multi-domain-tag entries (93 items);
+  coverage invariant tested (every domain ≥3, every tension ≥2); rotation
+  + avoid unchanged. Real engine passes domain + tension into the prompt.
+- UI: chips replaced by two native selects (领域 49 / 张力 33, "不限"
+  default) + one search input filtering both selects live (keeps current
+  selection visible); candidate chips (text + hook) unchanged. cache-bust
+  app.js v29.
+- 230 tests pass (test file rewritten for v2; coverage invariant keeps the
+  canned pool honest).

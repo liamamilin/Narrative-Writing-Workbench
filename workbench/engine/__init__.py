@@ -62,7 +62,7 @@ class WritingEngine(Protocol):
                             avoid: list[str] | None = None) -> str: ...
 
     def suggest_topics(self, *, domain: str | None = None,
-                       sub: str | None = None,
+                       tension: str | None = None,
                        avoid: list[str] | None = None,
                        config: dict | None = None) -> dict: ...
 

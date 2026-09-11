@@ -121,7 +121,14 @@ function quickWrite() {
     <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
       `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
     <label style="margin-top:14px">没有头绪?选个领域,让我来提</label>
-    <div id="qw-tax"></div>
+    <input id="qw-tax-search" placeholder="🔍 搜索领域或张力,如 教育 / 自由"
+           data-tip="输入即过滤下方两个下拉的选项">
+    <div class="trio">
+      <div><span class="muted small">领域</span>
+        <select id="qw-tax-domain" data-tip="话题的现实入口(可不限)"></select></div>
+      <div><span class="muted small">张力</span>
+        <select id="qw-tax-tension" data-tip="跨领域的目标冲突轴,如 自由↔安全(可不限)"></select></div>
+    </div>
     <p class="row" style="margin:10px 0 0">
       <button id="qw-topic-suggest" data-tip="按所选领域生成 3 个可争论的话题,点击候选即可填入;可换一批">✦ 给我一个话题</button>
       <button id="qw-topic-more" style="display:none" data-tip="避开刚看过的,再提 3 个">换一批</button>
@@ -160,28 +167,28 @@ function quickWrite() {
     $("#qw-topic").value = b.dataset.v;
   };
 
-  /* topic suggestion: taxonomy chips -> suggest -> candidates -> fill */
-  const TX = { tax: null, domain: "", sub: "", seen: [] };
+  /* topic suggestion: search+selects -> suggest -> candidates -> fill */
+  const TX = { tax: null, domain: "", tension: "", seen: [] };
+  const fillSelect = (sel, items, current) => {
+    const q = ($("#qw-tax-search").value || "").trim().toLowerCase();
+    const hit = s => !q || s.name.toLowerCase().includes(q)
+                  || s.id.toLowerCase().includes(q);
+    const opts = [{ id: "", name: "不限" }, ...items]
+      .filter(s => hit(s) || s.id === current);
+    sel.innerHTML = opts.map(s =>
+      `<option value="${esc(s.id)}"${s.id === current ? " selected" : ""}>${esc(s.name)}</option>`).join("");
+  };
   const renderTax = () => {
     const t = TX.tax; if (!t) return;
-    const dom = t.domains.find(d => d.id === TX.domain);
-    $("#qw-tax").innerHTML = `
-      <div class="tax-row">${[{ id: "", name: "不限" }, ...t.domains].map(d =>
-        `<button class="chip ${d.id === TX.domain ? "on" : ""}" data-dom="${esc(d.id)}">${esc(d.name)}</button>`).join("")}</div>
-      ${dom ? `<div class="tax-row">${[{ id: "", name: "不限张力" }, ...dom.subs].map(s =>
-        `<button class="chip ${s.id === TX.sub ? "on" : ""}" data-sub="${esc(s.id)}">${esc(s.name)}</button>`).join("")}</div>` : ""}`;
-    $("#qw-tax-sel").textContent = TX.domain
-      ? `${dom.name}${TX.sub ? " · " + dom.subs.find(s => s.id === TX.sub).name : ""}` : "";
+    fillSelect($("#qw-tax-domain"), t.domains, TX.domain);
+    fillSelect($("#qw-tax-tension"), t.tensions, TX.tension);
+    const dn = (t.domains.find(d => d.id === TX.domain) || {}).name || "";
+    const tn = (t.tensions.find(s => s.id === TX.tension) || {}).name || "";
+    $("#qw-tax-sel").textContent = [dn, tn].filter(Boolean).join(" · ");
   };
-  $("#qw-tax").onclick = e => {
-    const b = e.target.closest(".chip"); if (!b) return;
-    if (b.dataset.dom !== undefined) {
-      TX.domain = b.dataset.dom; TX.sub = "";
-    } else if (b.dataset.sub !== undefined) {
-      TX.sub = b.dataset.sub;
-    }
-    renderTax();
-  };
+  $("#qw-tax-search").oninput = renderTax;
+  $("#qw-tax-domain").onchange = e => { TX.domain = e.target.value; renderTax(); };
+  $("#qw-tax-tension").onchange = e => { TX.tension = e.target.value; renderTax(); };
   const renderSug = topics => {
     $("#qw-sug").innerHTML = topics.map(t =>
       `<button class="chip-sug" data-tip="点击填入;仍需你自己点 Write" data-v="${esc(t.text)}">
@@ -193,7 +200,8 @@ function quickWrite() {
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Thinking…';
     try {
       const r = await api("POST", "/topics/suggest",
-        { domain: TX.domain || null, sub: TX.sub || null, avoid: TX.seen });
+        { domain: TX.domain || null, tension: TX.tension || null,
+          avoid: TX.seen });
       TX.seen = [...TX.seen, ...r.topics.map(t => t.text)].slice(-9);
       renderSug(r.topics);
     } catch (e) { toast(e.message || "Could not suggest topics.", true); }

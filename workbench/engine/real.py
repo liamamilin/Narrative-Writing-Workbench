@@ -298,15 +298,13 @@ class RealWritingEngine:
             raise GenerationFailed("We couldn't draft an instruction. Please retry.")
         return text
 
-    def suggest_topics(self, *, domain=None, sub=None,
+    def suggest_topics(self, *, domain=None, tension=None,
                        avoid=None, config=None) -> dict:
         """Propose 3 discussable topics. AI proposes; nothing is persisted."""
         sys_prompt = _load_prompt(self.config.prompts_dir, "topic_suggest")
-        if domain or sub:
-            cat = f"domain={domain or ''}" + (f", tension_axis={sub}" if sub else "")
-        else:
-            cat = "(none — 不限, roam across all domains)"
-        parts = [f"## Category\n\n{cat}"]
+        parts = [
+            f"## Domain\n\n{domain or '(不限 — roam across all domains)'}",
+            f"## Tension\n\n{tension or '(不限 — any goal-conflict axis)'}"]
         if avoid:
             parts.append("## Avoid (genuinely different from these)\n\n"
                          + "\n".join(f"- {a}" for a in avoid[:8]))

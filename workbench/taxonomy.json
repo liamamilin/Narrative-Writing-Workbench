@@ -1,94 +1,90 @@
 {
-  "version": 1,
-  "note": "两级话题分类:一级=生活领域(锚点),二级=领域内的张力轴(可争论处)。id 供 API 使用,不可随意改名。",
+  "version": 2,
+  "note": "两级话题选择面,源自 docs/TOPIC_TAXONOMY.md (World Topic Taxonomy V1.0):domains=§1 Surface Domain(现实入口,平铺);tensions=§6 全局张力轴(与 domain 正交,不再挂域下)。其余分面(Object/Relation/Phenomenon/Mechanism/Pattern 等)由生成提示词内部使用,不进 UI。id 供 API 使用,不可随意改名。",
   "domains": [
-    {
-      "id": "self", "name": "自我",
-      "subs": [
-        {"id": "self.freedom", "name": "自由与纪律"},
-        {"id": "self.meaning", "name": "意义与空虚"},
-        {"id": "self.desire", "name": "欲望与节制"},
-        {"id": "self.solitude", "name": "孤独与联结"},
-        {"id": "self.identity", "name": "身份与扮演"},
-        {"id": "self.growth", "name": "成长与代价"}
-      ]
-    },
-    {
-      "id": "relations", "name": "他人与关系",
-      "subs": [
-        {"id": "relations.love", "name": "爱与依赖"},
-        {"id": "relations.friendship", "name": "友谊与利益"},
-        {"id": "relations.family", "name": "家庭与边界"},
-        {"id": "relations.trust", "name": "信任与背叛"},
-        {"id": "relations.empathy", "name": "同情与距离"},
-        {"id": "relations.debt", "name": "恩情与亏欠"}
-      ]
-    },
-    {
-      "id": "society", "name": "社会与公平",
-      "subs": [
-        {"id": "society.rules", "name": "规则与例外"},
-        {"id": "society.equality", "name": "平等与效率"},
-        {"id": "society.power", "name": "权力与责任"},
-        {"id": "society.majority", "name": "多数与少数"},
-        {"id": "society.mercy", "name": "惩罚与宽恕"},
-        {"id": "society.mobility", "name": "阶层与流动"}
-      ]
-    },
-    {
-      "id": "work", "name": "工作与创造",
-      "subs": [
-        {"id": "work.diligence", "name": "勤劳与懒惰"},
-        {"id": "work.mastery", "name": "专业与业余"},
-        {"id": "work.creation", "name": "创造与消费"},
-        {"id": "work.hustle", "name": "内卷与松弛"},
-        {"id": "work.craft", "name": "匠心与流量"},
-        {"id": "work.failure", "name": "失败与成功"}
-      ]
-    },
-    {
-      "id": "tech", "name": "技术与时代",
-      "subs": [
-        {"id": "tech.ai", "name": "AI与人的价值"},
-        {"id": "tech.convenience", "name": "便利与退化"},
-        {"id": "tech.connection", "name": "连接与孤独"},
-        {"id": "tech.speed", "name": "速度与深度"},
-        {"id": "tech.privacy", "name": "隐私与透明"},
-        {"id": "tech.progress", "name": "进步的代价"}
-      ]
-    },
-    {
-      "id": "truth", "name": "知识与真相",
-      "subs": [
-        {"id": "truth.expertise", "name": "专家与常识"},
-        {"id": "truth.memory", "name": "记忆与遗忘"},
-        {"id": "truth.doubt", "name": "怀疑与相信"},
-        {"id": "truth.narrative", "name": "事实与叙事"},
-        {"id": "truth.ignorance", "name": "无知的价值"},
-        {"id": "truth.lies", "name": "谎言的用处"}
-      ]
-    },
-    {
-      "id": "time", "name": "时间与自然",
-      "subs": [
-        {"id": "time.ending", "name": "终结与开始"},
-        {"id": "time.busy", "name": "忙碌与虚度"},
-        {"id": "time.nostalgia", "name": "乡愁与向前"},
-        {"id": "time.aging", "name": "衰老与成熟"},
-        {"id": "time.nature", "name": "人与万物"},
-        {"id": "time.renewal", "name": "灾难与新生"}
-      ]
-    },
-    {
-      "id": "art", "name": "美与艺术",
-      "subs": [
-        {"id": "art.useful", "name": "美与实用"},
-        {"id": "art.kitsch", "name": "高雅与媚俗"},
-        {"id": "art.imperfect", "name": "完美与残缺"},
-        {"id": "art.silence", "name": "沉默与表达"},
-        {"id": "art.originality", "name": "模仿与原创"},
-        {"id": "art.ethics", "name": "艺术与道德"}
-      ]
-    }
+    {"id": "politics", "name": "政治"},
+    {"id": "governance", "name": "公共治理"},
+    {"id": "intl", "name": "国际关系"},
+    {"id": "war", "name": "战争与安全"},
+    {"id": "economy", "name": "经济"},
+    {"id": "business", "name": "商业"},
+    {"id": "finance", "name": "金融"},
+    {"id": "labor", "name": "劳动与职场"},
+    {"id": "education", "name": "教育"},
+    {"id": "tech", "name": "科技"},
+    {"id": "internet", "name": "互联网"},
+    {"id": "ai", "name": "AI"},
+    {"id": "science", "name": "科学"},
+    {"id": "medicine", "name": "医学"},
+    {"id": "health", "name": "健康"},
+    {"id": "psychology", "name": "心理"},
+    {"id": "family", "name": "家庭"},
+    {"id": "love", "name": "爱情"},
+    {"id": "intimacy", "name": "性与亲密关系"},
+    {"id": "parenting", "name": "儿童与成长"},
+    {"id": "aging", "name": "老龄化"},
+    {"id": "law", "name": "法律"},
+    {"id": "crime", "name": "犯罪"},
+    {"id": "media", "name": "媒体"},
+    {"id": "socialmedia", "name": "社交媒体"},
+    {"id": "culture", "name": "文化"},
+    {"id": "literature", "name": "文学"},
+    {"id": "art", "name": "艺术"},
+    {"id": "entertainment", "name": "娱乐"},
+    {"id": "games", "name": "游戏"},
+    {"id": "sports", "name": "体育"},
+    {"id": "religion", "name": "宗教"},
+    {"id": "philosophy", "name": "哲学"},
+    {"id": "history", "name": "历史"},
+    {"id": "city", "name": "城市"},
+    {"id": "realestate", "name": "房地产"},
+    {"id": "transport", "name": "交通"},
+    {"id": "agriculture", "name": "农业"},
+    {"id": "industry", "name": "工业"},
+    {"id": "energy", "name": "能源"},
+    {"id": "environment", "name": "环境"},
+    {"id": "population", "name": "人口"},
+    {"id": "consumer", "name": "消费"},
+    {"id": "fashion", "name": "时尚"},
+    {"id": "food", "name": "食品"},
+    {"id": "travel", "name": "旅游"},
+    {"id": "class", "name": "社会阶层"},
+    {"id": "management", "name": "组织管理"},
+    {"id": "startup", "name": "创业"}
+  ],
+  "tensions": [
+    {"id": "t01", "name": "个体 ↔ 集体"},
+    {"id": "t02", "name": "自由 ↔ 秩序"},
+    {"id": "t03", "name": "自由 ↔ 安全"},
+    {"id": "t04", "name": "平等 ↔ 激励"},
+    {"id": "t05", "name": "公平 ↔ 效率"},
+    {"id": "t06", "name": "竞争 ↔ 合作"},
+    {"id": "t07", "name": "开放 ↔ 控制"},
+    {"id": "t08", "name": "隐私 ↔ 便利"},
+    {"id": "t09", "name": "统一 ↔ 多样"},
+    {"id": "t10", "name": "稳定 ↔ 创新"},
+    {"id": "t11", "name": "传统 ↔ 变化"},
+    {"id": "t12", "name": "专业治理 ↔ 大众参与"},
+    {"id": "t13", "name": "中央集权 ↔ 地方自治"},
+    {"id": "t14", "name": "规则 ↔ 灵活性"},
+    {"id": "t15", "name": "原则 ↔ 后果"},
+    {"id": "t16", "name": "真实 ↔ 舒适"},
+    {"id": "t17", "name": "透明 ↔ 隐私"},
+    {"id": "t18", "name": "忠诚 ↔ 自主"},
+    {"id": "t19", "name": "亲密 ↔ 边界"},
+    {"id": "t20", "name": "短期 ↔ 长期"},
+    {"id": "t21", "name": "效率 ↔ 韧性"},
+    {"id": "t22", "name": "优化 ↔ 冗余"},
+    {"id": "t23", "name": "增长 ↔ 可持续"},
+    {"id": "t24", "name": "生产 ↔ 分配"},
+    {"id": "t25", "name": "精英 ↔ 大众"},
+    {"id": "t26", "name": "能力 ↔ 机会"},
+    {"id": "t27", "name": "责任 ↔ 环境"},
+    {"id": "t28", "name": "个人选择 ↔ 结构约束"},
+    {"id": "t29", "name": "理性 ↔ 情感"},
+    {"id": "t30", "name": "确定性 ↔ 探索"},
+    {"id": "t31", "name": "专业化 ↔ 通才能力"},
+    {"id": "t32", "name": "便利 ↔ 自主能力"},
+    {"id": "t33", "name": "技术进步 ↔ 人类控制"}
   ]
 }

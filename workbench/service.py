@@ -1002,19 +1002,19 @@ class Service:
         payload = payload or {}
         taxonomy = _load_taxonomy()
         domain = str(payload.get("domain") or "").strip() or None
-        sub = str(payload.get("sub") or "").strip() or None
+        # "sub" kept as a legacy alias for tension (v1 taxonomy param name).
+        tension = str(payload.get("tension")
+                      or payload.get("sub") or "").strip() or None
         known_domains = {d["id"] for d in taxonomy["domains"]}
-        known_subs = {s["id"] for d in taxonomy["domains"] for s in d["subs"]}
+        known_tensions = {t["id"] for t in taxonomy["tensions"]}
         if domain is not None and domain not in known_domains:
             raise ApiError("VALIDATION", f"unknown domain: {domain}")
-        if sub is not None and sub not in known_subs:
-            raise ApiError("VALIDATION", f"unknown sub: {sub}")
-        if sub and domain and not sub.startswith(domain + "."):
-            raise ApiError("VALIDATION", f"sub {sub} does not belong to {domain}.")
+        if tension is not None and tension not in known_tensions:
+            raise ApiError("VALIDATION", f"unknown tension: {tension}")
         avoid = [str(x).strip() for x in payload.get("avoid") or []
                  if str(x).strip()]
         try:
-            data = self.engine.suggest_topics(domain=domain, sub=sub,
+            data = self.engine.suggest_topics(domain=domain, tension=tension,
                                               avoid=avoid, config=None)
         except EngineError as exc:
             raise ApiError("TOPIC_SUGGEST_FAILED",
