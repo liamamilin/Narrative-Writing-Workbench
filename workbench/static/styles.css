@@ -53,6 +53,7 @@ h1{font-size:1.6rem} h2{font-size:1.15rem} h3{font-size:1rem}
 .qw-right{position:sticky;top:70px;max-height:calc(100vh - 110px);overflow-y:auto}
 .qw-title{font-size:1.25rem;margin:2px 0 2px}
 .qw-sub{margin:0 0 10px}
+.qw-fld-label{display:block;margin:12px 0 4px;font-weight:600}
 .qw-col label{display:block;margin:14px 0 4px;font-weight:600}
 #qw-tax-search{margin-bottom:8px}
 #qw-tax-hint{margin-top:10px}

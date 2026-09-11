@@ -144,6 +144,7 @@ function quickWrite() {
       <p class="muted small qw-sub">左栏发现可争论的话题,点选填入右栏;开始写仍由你自己按下。</p>
       <input id="qw-tax-search" placeholder="🔍 搜索领域,如 教育 / 职场 / AI"
              data-tip="输入即过滤领域 chips">
+      <span class="muted small qw-fld-label">领域 <span class="muted">(点选一个;选中的会高亮)</span></span>
       <div class="tax-row" id="qw-tax-domains" data-tip="点选一个领域;不限 = 全领域漫游"></div>
       <input id="qw-tax-hint" placeholder="方向提示(可选),如 关注外卖骑手 / 只看平台经济"
              data-tip="想聚焦时填;空着则按领域全面铺开">
