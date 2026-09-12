@@ -16,11 +16,11 @@ Material → Intent → Generate → Read → Review → Patch → Accept
 
 | 层 | 状态 | 蓝图 |
 |---|---|---|
-| Engine V1 | ✅ 完成 | `docs/10`, `V1_IMPLEMENTATION_REPORT.md` |
-| V1.1 消融 | ✅ 完成(盲评进行中) | `docs/14`, `V1_1_ABLATION_REPORT.md` |
-| V1.2 干净因果消融 | ✅ 完成(23 对待人工盲评) | `docs/16-18`, `V1_2_RUN_REPORT.md` |
-| Product V0 Workbench | ✅ 完成(M0–M10) | `docs/narrative-writing-product-v0-spec/`, `PRODUCT_V0_IMPLEMENTATION_REPORT.md` |
-| Product V0.1 Quick Write | ✅ 完成(Q0–Q9) | `docs/narrative-writing-product-v0.1-quick-write-spec/`, `QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md` |
+| Engine V1 | ✅ 完成 | `docs/10`, `docs/reports/V1_IMPLEMENTATION_REPORT.md` |
+| V1.1 消融 | ✅ 完成(盲评进行中) | `docs/14`, `docs/reports/V1_1_ABLATION_REPORT.md` |
+| V1.2 干净因果消融 | ✅ 完成(23 对待人工盲评) | `docs/16-18`, `docs/reports/V1_2_RUN_REPORT.md` |
+| Product V0 Workbench | ✅ 完成(M0–M10) | `docs/narrative-writing-product-v0-spec/`, `docs/reports/PRODUCT_V0_IMPLEMENTATION_REPORT.md` |
+| Product V0.1 Quick Write | ✅ 完成(Q0–Q9) | `docs/narrative-writing-product-v0.1-quick-write-spec/`, `docs/reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md` |
 
 ## 目录结构
 
@@ -30,6 +30,7 @@ workbench/      产品层 V0/V0.1:FastAPI + SQLite + 无构建 SPA(引擎藏在 
 prompts/        外置提示词(引擎角色 + product_patch + meaning_discovery)
 schemas/        WIR / critique / outline JSON Schema
 docs/           引擎规范 00-18 + 产品规范 narrative-writing-product-v0-spec/
+docs/reports/   实现/消融/运行报告(V1、V1.1、V1.2、Product V0/V0.1)
 benchmarks/     测试用例、消融结果、盲评表导出/导入
 tests/          pytest(230 项:引擎 + 产品 + Quick Write + Settings)
 runs/           每次引擎运行的全量中间产物

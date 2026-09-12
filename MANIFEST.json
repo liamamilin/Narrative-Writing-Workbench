@@ -11,7 +11,7 @@
   },
   "files": [
     "AGENTS.md",
-    "IMPLEMENTATION_TASK.md",
+    "docs/reports/IMPLEMENTATION_TASK.md",
     "MANIFEST.json",
     "README.md",
     "benchmarks/README.md",

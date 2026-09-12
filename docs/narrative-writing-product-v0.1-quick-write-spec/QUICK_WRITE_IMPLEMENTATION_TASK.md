@@ -19,7 +19,7 @@ Read original Product V0 specs, then this V0.1 package in numerical order.
 Before coding create:
 
 ```text
-QUICK_WRITE_IMPLEMENTATION_REVIEW.md
+../reports/QUICK_WRITE_IMPLEMENTATION_REVIEW.md
 ```
 
 Include:
@@ -156,7 +156,7 @@ Q9 Acceptance Review
 Create:
 
 ```text
-QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md
+../reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md
 ```
 
 Include:

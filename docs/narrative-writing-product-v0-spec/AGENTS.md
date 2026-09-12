@@ -12,8 +12,8 @@ Coding Agent rules：
 6. 普通用户界面不要出现 WIR/Critic/Patcher。
 7. Patch/Version safety 是硬约束。
 8. 不做 V0 scope 之外的功能。
-9. 编码前创建 `PRODUCT_IMPLEMENTATION_REVIEW.md`。
-10. 完成后创建 `PRODUCT_V0_IMPLEMENTATION_REPORT.md`。
+9. 编码前创建 `../reports/PRODUCT_IMPLEMENTATION_REVIEW.md`。
+10. 完成后创建 `../reports/PRODUCT_V0_IMPLEMENTATION_REPORT.md`。
 
 冲突处理：
 - 报告冲突

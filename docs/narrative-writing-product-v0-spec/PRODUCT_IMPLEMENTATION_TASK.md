@@ -25,7 +25,7 @@ Engine 已由 Narrative Writing Harness 提供；本任务实现 Product Layer�
 
 编码前创建：
 
-`PRODUCT_IMPLEMENTATION_REVIEW.md`
+`../reports/PRODUCT_IMPLEMENTATION_REVIEW.md`
 
 内容必须包括：
 - Product understanding
@@ -185,7 +185,7 @@ M10 Tests + Acceptance
 
 创建：
 
-`PRODUCT_V0_IMPLEMENTATION_REPORT.md`
+`../reports/PRODUCT_V0_IMPLEMENTATION_REPORT.md`
 
 报告：
 - stack
