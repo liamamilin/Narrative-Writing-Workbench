@@ -1,25 +1,25 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Narrative Writing Workbench</title>
-<link rel="stylesheet" href="/static/styles.css?v=13">
+<title>纸墨写作台 · Narrative Writing Workbench</title>
+<link rel="stylesheet" href="/static/styles.css?v=17">
 </head>
 <body>
 <header id="topbar">
-  <a class="brand" href="#/">Narrative Writing Workbench</a>
-  <nav>
-    <a href="#/" data-tip="首页:三种开始方式与最近任务">Home</a>
-    <a href="#/quickwrite" data-tip="只有一个话题,系统先找到值得说的角度再写">Quick Write</a>
-    <a href="#/projects" data-tip="把相关素材和任务归到一起(可选)">Projects</a>
-    <a href="#/tasks/new" data-tip="粘贴素材与意图,生成初稿">Write from Material</a>
-    <a href="#/guide" data-tip="中文使用指南与小抄">Guide</a>
-    <a href="#/settings" data-tip="查看当前引擎模式(mock/real)">Settings</a>
+  <a class="brand" href="#/"><span class="brand-mark" aria-hidden="true">墨</span>纸墨写作台</a>
+  <nav aria-label="主导航">
+    <a href="#/" data-tip="三种开始方式与最近任务">首页</a>
+    <a href="#/quickwrite" data-tip="从一个话题开始写">快速写作</a>
+    <a href="#/projects" data-tip="整理相关素材和任务">项目</a>
+    <a href="#/tasks/new" data-tip="从素材与意图生成初稿">从素材写</a>
+    <a class="nav-minor" href="#/guide" data-tip="使用指南与操作小抄">指南</a>
+    <a class="nav-minor" href="#/settings" data-tip="引擎与模型设置">设置</a>
   </nav>
 </header>
 <main id="app"></main>
-<div id="toast"></div>
-<script src="/static/app.js?v=42"></script>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+<script src="/static/app.js?v=45"></script>
 </body>
 </html>
