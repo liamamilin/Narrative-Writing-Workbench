@@ -138,7 +138,7 @@ h3{font-size:1rem;font-weight:650}
   box-shadow:var(--shadow-paper);padding:var(--sp-6)}
 .qw-right label{display:block;margin:var(--sp-4) 0 var(--sp-1);font-weight:600;font-size:14px}
 .qw-right label:first-child{margin-top:0}
-.qw-left{padding:4px 2px 4px 0}
+.qw-left{padding:var(--sp-4)}
 .qw-title{font-size:1.6rem}
 .qw-sub{margin:0}
 .qw-fld-label{display:block;margin:var(--sp-3) 0 4px;font-weight:600;font-size:14px}
