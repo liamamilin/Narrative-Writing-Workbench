@@ -29,8 +29,20 @@ if [ "$1" = "stop" ]; then
   exit 0
 fi
 
+notify() {
+  /usr/bin/osascript -e "display notification \"$1\" with title \"纸墨写作台\"" \
+    >/dev/null 2>&1 || true
+}
+open_browser() {
+  open "$URL" 2>/dev/null || \
+  /usr/bin/osascript -e "open location \"$URL\"" >/dev/null 2>&1 || true
+}
+
 if curl -s -m 2 "$URL/settings" >/dev/null 2>&1; then
-  echo "已在运行: $URL"; open "$URL" 2>/dev/null || true; exit 0
+  echo "已在运行: $URL"
+  open_browser
+  notify "服务已在运行,浏览器已打开 $URL"
+  exit 0
 fi
 
 PY=""
@@ -50,4 +62,5 @@ if ! curl -s -m 2 "$URL/settings" >/dev/null 2>&1; then
   exit 1
 fi
 echo "启动完成: $URL (engine=$(curl -s "$URL/settings" | sed 's/.*"engine":"\([^"]*\)".*/\1/'))"
-open "$URL" 2>/dev/null || true
+open_browser
+notify "服务已启动 $URL"
