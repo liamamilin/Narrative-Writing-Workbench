@@ -143,7 +143,10 @@ def test_bad_numeric_settings_rejected():
     c = _client()
     r = c.post("/settings", json={"timeout_seconds": "abc"})
     assert r.status_code == 400 and "timeout_seconds" in r.json()["error"]["message"]
-    r = c.post("/settings", json={"writer_temperature": float("nan")})
+    # Send the malformed body explicitly: newer HTTP clients reject NaN
+    # before it reaches the server, which would not test our validation.
+    r = c.post("/settings", content='{"writer_temperature": NaN}',
+               headers={"Content-Type": "application/json"})
     assert r.status_code == 400 and "writer_temperature" in r.json()["error"]["message"]
     r = c.post("/settings", json={"writer_temperature": 3})
     assert r.status_code == 400 and "0-2" in r.json()["error"]["message"]

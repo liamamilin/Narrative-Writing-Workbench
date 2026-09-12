@@ -85,6 +85,8 @@ let routeSeq = 0;
 let activeHash = location.hash || "#/";
 async function route() {
   const seq = ++routeSeq;
+  try { await saveGoalPanel(); }
+  catch (_) { history.replaceState(null, "", activeHash); return; }
   // Hash navigation can replace the whole SPA tree. Capture the live editor
   // first and make a best-effort save before any screen is rendered.
   if ($("#editor") && WS.draft) {
@@ -466,6 +468,21 @@ const TASK_TYPES = [
 function newTask(projectId = "", mode = "source_grounded") {
   let chosenType = TASK_TYPES[0][0];
   const rev = mode === "draft_revision";
+  const composeKey = `compose:${mode}:${projectId}`;
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem(composeKey) || "{}") || {}; } catch (_) {}
+  const formIds = ["f-instruction", "f-material", "f-project", "f-immersion",
+    "f-explicitness", "f-intensity", "f-length", "f-lang", "c-facts",
+    "c-meaning", "c-avoid", "c-invent"];
+  const rememberForm = () => {
+    const fields = {};
+    for (const id of formIds) {
+      const el = $("#" + id);
+      fields[id] = el.type === "checkbox" ? el.checked : el.value;
+    }
+    try { localStorage.setItem(composeKey, JSON.stringify({ chosenType, fields })); }
+    catch (_) { /* Form remains usable if storage is unavailable. */ }
+  };
   $("#app").innerHTML = `
   <div class="form">
     <h1>${rev ? "修改一篇旧稿" : "从素材开始写"}</h1>
@@ -481,6 +498,7 @@ function newTask(projectId = "", mode = "source_grounded") {
       <input id="f-file" type="file" accept=".txt,.md" class="grow" data-tip="从 .txt/.md 文件载入素材,内容会填入下方素材框">
       <select id="f-project" class="grow" aria-label="所属项目" data-tip="可选：把任务归入某个项目"><option value="">不加入项目</option></select>
     </div>
+    <details class="compose-options"><summary>阅读感受与写作约束（可选）</summary>
     <label>阅读感受</label>
     <div class="trio">
       ${[["immersion", "高=偏场景呈现,让读者“身临其境”;低=偏概述与说明"],
@@ -488,8 +506,9 @@ function newTask(projectId = "", mode = "source_grounded") {
          ["intensity", "情绪与冲突的强度:高=浓烈,低=克制留白"]]
         .map(([k, tip]) => `
         <div data-tip="${tip}"><span class="muted small">${({immersion:"沉浸度",explicitness:"直白程度",intensity:"情绪强度"})[k]}</span>
-        <select id="f-${k}"><option>low</option><option${k !== "explicitness" ? " selected" : ""}>medium</option><option${k === "immersion" ? " selected" : ""}>high</option></select></div>`).join("")}
-      <div data-tip="正文目标字数,模型会在 ±20% 内调节">
+        <select id="f-${k}">${["low", "medium", "high"].map(v =>
+          `<option value="${v}"${v === ({immersion:"high", explicitness:"low", intensity:"medium"})[k] ? " selected" : ""}>${({low:"低",medium:"中",high:"高"})[v]}</option>`).join("")}</select></div>`).join("")}
+      <div data-tip="期望篇幅；实际字数可能有偏差">
         <label class="muted small" for="f-length">目标字数</label>
         <input id="f-length" type="number" min="100" step="50" value="800"></div>
       <div data-tip="正文输出语言;auto = 跟随你的素材/话题语言">
@@ -503,24 +522,44 @@ function newTask(projectId = "", mode = "source_grounded") {
       <label data-tip="少做把意义说破的解释"><input type="checkbox" id="c-avoid" checked> 避免过度解释</label>
       <label data-tip="允许文学性细节，但不编造改变故事走向的重大事件"><input type="checkbox" id="c-invent" checked> 不编造重大事件</label>
     </div>
+    </details>
+    <p class="small muted">未提交的内容会保留在当前浏览器，返回此入口可继续填写。</p>
     <p class="row" style="margin-top:22px">
-      <button class="primary" id="f-go" data-tip="创建任务并进入工作台">创建并开始写</button>
+      <button class="primary" id="f-go" data-tip="保存输入并进入工作台">${rev ? "进入修改工作台" : "进入写作工作台"}</button>
       <button onclick="location.hash='#/'">取消</button>
     </p>
   </div>`;
+  const form = $("#f-go").closest(".form");
+  for (const id of formIds) {
+    const el = $("#" + id), value = stored.fields?.[id];
+    if (value === undefined || id === "f-project") continue;
+    if (el.type === "checkbox") el.checked = Boolean(value);
+    else el.value = value;
+  }
+  if (TASK_TYPES.some(([v]) => v === stored.chosenType)) chosenType = stored.chosenType;
+  $("#types").querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x.dataset.v === chosenType));
+  form.addEventListener("input", rememberForm);
+  form.addEventListener("change", rememberForm);
   $("#types").onclick = e => {
     const b = e.target.closest(".chip"); if (!b) return;
     chosenType = b.dataset.v;
+    rememberForm();
     $("#types").querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === b));
   };
   (async () => {
     const ps = await api("GET", "/projects");
+    if (!form.isConnected) return;
     $("#f-project").innerHTML += ps.projects.map(p =>
       `<option value="${p.id}"${p.id === projectId ? " selected" : ""}>${esc(p.name)}</option>`).join("");
-  })();
+    if (stored.fields?.["f-project"] && ps.projects.some(p => p.id === stored.fields["f-project"]))
+      $("#f-project").value = stored.fields["f-project"];
+  })().catch(e => toast(e.message || "项目列表暂时无法加载，仍可直接写作。", true));
   $("#f-file").onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
-    $("#f-material").value = await f.text();
+    const text = await f.text();
+    if (!form.isConnected) return;
+    $("#f-material").value = text;
+    rememberForm();
   };
   $("#f-go").onclick = async () => {
     $("#f-go").disabled = true;
@@ -545,6 +584,7 @@ function newTask(projectId = "", mode = "source_grounded") {
         },
       };
       const t = await api("POST", "/tasks", payload);
+      try { localStorage.removeItem(composeKey); } catch (_) {}
       location.hash = `#/tasks/${t.id}`;
     } catch (e) { toast(e.message, true); $("#f-go").disabled = false; }
   };
@@ -558,7 +598,7 @@ function newTask(projectId = "", mode = "source_grounded") {
     for (const k of ["immersion", "explicitness", "intensity"])
       $("#f-" + k).value = ex.config[k];
     $("#f-length").value = ex.config.target_length;
-    toast("示例已填入，点击“创建并开始写”即可继续。");
+    toast("示例已填入，进入写作工作台即可继续。");
   }
 }
 
@@ -634,7 +674,7 @@ async function settings() {
     </div>
     <div class="trio" style="margin-top:10px">
       <div><span class="muted small">超时(秒)</span>
-        <input id="s-timeout" type="number" min="30" step="30" value="${s.timeout_seconds || 150}" data-tip="单次 LLM 调用超时"></div>
+        <input id="s-timeout" type="number" min="30" step="30" value="${s.timeout_seconds ?? ""}" placeholder="300" data-tip="单次 LLM 调用超时"></div>
       <div><span class="muted small">写作温度</span>
         <input id="s-temp" type="number" min="0" max="2" step="0.1" value="${s.writer_temperature ?? ""}" placeholder="0.7" data-tip="越高越发散,越低越克制(仅作用于正文写作)"></div>
     </div>
@@ -726,6 +766,7 @@ const WS = {
 };
 
 async function workspace(tid) {
+  if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
   WS.tid = tid; WS.sel.clear(); WS.proposals = []; WS.review = null; WS.map = null;
   await reloadTask();
   if (WS.task.status === "generating" && !GENERATING) {
@@ -813,8 +854,9 @@ function renderWorkspace() {
       toast("素材已添加，将用于下一次生成或检查。");
     } catch (e) { toast(e.message, true); }
   };
-   $("#pane-right").addEventListener("click", e => {
+   $("#pane-right").addEventListener("click", async e => {
      const b = e.target.closest(".panel-tabs button"); if (!b) return;
+     try { await saveGoalPanel(); } catch (_) { return; }
      WS.panelTab = b.dataset.t; renderPanel();
      document.querySelectorAll(".panel-tabs button").forEach(x => {
        x.classList.toggle("on", x === b); x.setAttribute("aria-selected", String(x === b));
@@ -1032,7 +1074,7 @@ function renderPanel() {
     <p class="small muted" style="margin-top:4px">你要这篇文字做到什么?写下核心意思、语气和读者读完该带走什么。可留空,但写清意图,成稿更贴近你想要的效果。<br>
       示例:"情感要克制,不出现『想念』『温暖』这类总结词,让物件和动作承担情绪。"(小说场景)<br>
       或:"分析『英雄远行-归来』为什么反复打动观众,讲机制,不要罗列术语。"(叙事分析)</p>
-    <p style="margin-top:8px"><button id="p-suggest" data-tip="让模型根据素材/话题与你现在的意图起草一版,再点『使用』填回(可先修改)。仅作为草稿,由你决定。">AI 帮我写/改进 Intent</button></p>
+    <p style="margin-top:8px"><button id="p-suggest" data-tip="让模型根据素材/话题与你现在的意图起草一版,再点『使用』填回(可先修改)。仅作为草稿,由你决定。">帮我完善写作目标</button></p>
     <div id="suggest-out"></div>
     <div class="trio" style="margin-top:10px">
       ${[["immersion", "高=偏场景呈现,让读者“身临其境”;低=偏概述与说明;auto=不注入此设置"],
@@ -1041,7 +1083,7 @@ function renderPanel() {
         .map(([k, tip]) => `
         <div data-tip="${tip}"><span class="muted small">${({immersion:"沉浸度",explicitness:"直白程度",intensity:"情绪强度"})[k]}</span>
         <select id="p-${k}">${["auto", "low", "medium", "high"].map(x =>
-          `<option${(c[k] || "auto") === x ? " selected" : ""}>${x}</option>`).join("")}</select></div>`).join("")}
+          `<option value="${x}"${(c[k] || "auto") === x ? " selected" : ""}>${({auto:"自动",low:"低",medium:"中",high:"高"})[x]}</option>`).join("")}</select></div>`).join("")}
     </div>
      <label class="small muted" for="p-len">目标字数</label>
     <input id="p-len" type="number" value="${c.target_length ?? ""}" placeholder="800" data-tip="正文目标字数;留空=不设目标(engine 默认 100 字下限)。改后重新生成生效">
@@ -1086,9 +1128,8 @@ function renderPanel() {
          await reloadTask(); renderWorkspace(); toast("版本节点已保存。");
        } catch (e) { toast(e.message || "版本节点保存失败。", true); }
      };
-    $("#p-instr").onchange = async () => {
-      await api("PATCH", `/tasks/${WS.tid}`, { instruction: $("#p-instr").value });
-    };
+    for (const id of ["p-instr", "p-immersion", "p-explicitness", "p-intensity", "p-len"])
+      $("#" + id).onchange = () => saveGoalPanel().catch(() => {});
     $("#p-suggest").onclick = suggestIntent;
   }
   if (WS.panelTab === "review") $("#r-run").onclick = runReview;
@@ -1098,18 +1139,39 @@ function renderPanel() {
       locks[cb.dataset.lock] = cb.checked;
       await api("PATCH", `/tasks/${WS.tid}`, { config: { locks } });
       WS.task.config.locks = locks;
-      toast("Locks saved.");
+      toast("保护项已保存。");
     });
   }
 }
 
 /* AI intent suggestion (AI proposes, user accepts) */
 const priorSuggestions = [];
+let goalSavePromise = Promise.resolve();
+async function saveGoalPanel() {
+  if (!$("#p-instr") || !WS.task) return goalSavePromise;
+  const task = WS.task, tid = WS.tid;
+  const { instruction, ...config } = collectPanelParams();
+  const save = goalSavePromise.catch(() => {}).then(async () => {
+    if (instruction === task.instruction && Object.entries(config).every(([k, v]) => task.config[k] === v)) return;
+    try {
+      await api("PATCH", `/tasks/${tid}`, { instruction, config });
+      task.instruction = instruction;
+      Object.assign(task.config, config);
+    } catch (e) {
+      toast("写作目标尚未保存，请重试。" + (e.message || ""), true);
+      throw e;
+    }
+  });
+  goalSavePromise = save;
+  return save;
+}
+
 async function suggestIntent() {
   const btn = $("#p-suggest");
-  const label = btn ? btn.textContent : "AI 帮我写/改进 Intent";
+  const label = btn ? btn.textContent : "帮我完善写作目标";
   if (btn) { btn.disabled = true; btn.textContent = "生成中…"; }
   try {
+    await saveGoalPanel();
     const data = await api("POST", `/tasks/${WS.tid}/suggest-intent`,
       priorSuggestions.length ? { avoid: priorSuggestions.slice(-3) } : {});
     const s = (data.suggestion || "").trim();
@@ -1136,10 +1198,9 @@ function showSuggestion(s) {
   $("#s-use").onclick = async () => {
     try {
       $("#p-instr").value = s;
-      await api("PATCH", `/tasks/${WS.tid}`, { instruction: s });
-      WS.task.instruction = s;
+      await saveGoalPanel();
       out.innerHTML = "";
-      toast("Intent 已更新,下次生成生效");
+      toast("写作目标已更新，下次生成生效");
     } catch (err) { toast(err.message, true); }
   };
   $("#s-again").onclick = suggestIntent;
@@ -1357,6 +1418,7 @@ async function retryGeneration(endpoint, label, body) {
 }
 
 async function flushAutosave({ checkpoint = true } = {}) {
+  await saveGoalPanel();
   // Persist any in-flight editor text before a destructive generation, and
   // snapshot it as a checkpoint so "your draft is safe in version history"
   // is actually true for edits made since the last version.

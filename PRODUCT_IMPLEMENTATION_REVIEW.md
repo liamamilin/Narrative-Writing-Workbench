@@ -137,3 +137,26 @@ M7 review → M8 writing map → M9 project → M10 tests+acceptance+report.
 - Vanilla SPA size creep → keep components flat; no framework.
 - SQLite concurrency → single-writer via `check_same_thread=False` +
   threading lock; V0 desktop-scale is fine.
+
+## 2026-09-12 Product polish pass
+
+Scope: preserve the current Python/FastAPI/SQLite and no-build SPA. No new
+writing modes, research features or comparative quality evaluation.
+
+Findings: new-material/revision forms discard input on navigation; goal
+changes PATCH the server but leave WS.task stale; experience controls reset
+on tab changes; conflicting selected options and an inaccurate timeout
+fallback confuse defaults. Product patch prompt contradicts the adapter's
+existing full-draft context.
+
+Implementation: restore browser-local compose forms by mode/project; serialize
+and flush task goal saves before navigation/tab changes and intent suggestions;
+clarify optional controls/defaults and product copy; correct the external patch
+prompt's context/output contract. Existing API/data model and patch acceptance
+semantics remain authoritative. Browser form recovery is not a version.
+
+Validation: focused existing product tests, JS syntax, and offline browser
+interaction checks for restoration, goal persistence and patch workflow. No
+live model calls or writing-quality claims. Record outcomes in the product
+implementation report. Main risk: async saves/navigation; failed goal saves
+must keep the user on the page with inputs intact.
