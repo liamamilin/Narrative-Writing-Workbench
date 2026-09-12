@@ -160,32 +160,16 @@ class OpenAIClient(LLMClient):
         self, messages, *, role: str, role_cfg: RoleConfig, on_delta=None
     ) -> GenerationResult:
         start = time.monotonic()
-        if on_delta is None:
-            resp = self._create(messages, role_cfg, json_mode=True)
-            return self._to_result(resp, role_cfg, time.monotonic() - start)
-        from openai import APIStatusError
-
-        try:
-            resp = self._create(messages, role_cfg, json_mode=True, stream=True)
-        except APIStatusError:
-            # Provider rejected stream + JSON constraint combination.
-            result = self._create(messages, role_cfg, json_mode=True)
-            out = self._to_result(result, role_cfg, time.monotonic() - start)
-            if out.text:
-                on_delta(out.text)
-            return out
-        parts: list[str] = []
-        for chunk in resp:
-            choices = getattr(chunk, "choices", None)
-            if not choices:
-                continue
-            piece = (getattr(choices[0].delta, "content", None) or "")
-            if piece:
-                parts.append(piece)
-                on_delta(piece)
-        return GenerationResult(
-            text="".join(parts), model=role_cfg.model,
-            latency_seconds=time.monotonic() - start)
+        # Never use the streaming transport for JSON-mode calls: several
+        # gateways truncate streamed json_object output mid-token (seen with
+        # reasoning models, e.g. mimo-v2.5), which poisons schema validation
+        # and the one repair attempt. Deliver the complete text to on_delta
+        # in a single call so debug previews still receive the stage output.
+        resp = self._create(messages, role_cfg, json_mode=True)
+        out = self._to_result(resp, role_cfg, time.monotonic() - start)
+        if on_delta is not None and out.text:
+            on_delta(out.text)
+        return out
 
 
 class MockClient(LLMClient):

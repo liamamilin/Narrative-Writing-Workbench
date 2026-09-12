@@ -894,9 +894,11 @@ def test_review_rejected_while_generating(monkeypatch):
     assert r.json()["error"]["code"] == "GENERATING"
 
 
-def test_stream_rejection_falls_back_to_nonstream_json_mode(tmp_path, monkeypatch):
-    """B2: provider rejecting stream+response_format must keep the JSON
-    constraint in the non-streaming fallback (not silently drop it)."""
+def test_structured_calls_never_stream(tmp_path, monkeypatch):
+    """B2: JSON-mode calls must not use the streaming transport — gateways
+    truncate streamed json_object output (reasoning models). The JSON
+    constraint stays on the single non-streaming call, and on_delta
+    receives the complete text in one shot."""
     import httpx
     import openai as oa
     from types import SimpleNamespace
@@ -924,10 +926,9 @@ def test_stream_rejection_falls_back_to_nonstream_json_mode(tmp_path, monkeypatc
     out = client.generate_structured([], role="architect",
                                      role_cfg=RoleConfig(model="m"),
                                      on_delta=parts.append)
-    assert calls[0].get("stream") is True
+    assert len(calls) == 1
+    assert not calls[0].get("stream")
     assert calls[0].get("response_format") == {"type": "json_object"}
-    assert len(calls) == 2 and not calls[1].get("stream")
-    assert calls[1].get("response_format") == {"type": "json_object"}
     assert out.text == '{"a": 1}' and "".join(parts) == '{"a": 1}'
 
 
