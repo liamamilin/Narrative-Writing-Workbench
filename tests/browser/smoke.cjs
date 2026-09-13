@@ -156,10 +156,17 @@ async function main() {
       await page.reload(); await editor().waitFor();
       assert.match(await page.locator('#toast').innerText(),/运行中断/);
       await page.locator('#gen-retry').click();
-      await until(async()=> {
+      try {
+        await until(async()=> {
+          const op=(await api('GET', `/tasks/${quick}`)).operation;
+          if (op.id !== interrupted && ['failed','interrupted'].includes(op.status))
+            throw new Error(`retry operation ${op.id} ended as ${op.status} (${op.error_code || 'no error code'})`);
+          return op.id !== interrupted && op.status === 'succeeded';
+        },'manual retry after restart',30000);
+      } catch (e) {
         const op=(await api('GET', `/tasks/${quick}`)).operation;
-        return op.id !== interrupted && op.status === 'succeeded';
-      },'manual retry after restart');
+        throw new Error(`${e.message}; latest operation=${JSON.stringify(op)}`, {cause:e});
+      }
       assert.equal((await api('GET', `/tasks/${quick}/operations/${interrupted}`)).status,'interrupted');
     });
     await check('B08 model failures, endpoint races and manual aliases', async()=>{
