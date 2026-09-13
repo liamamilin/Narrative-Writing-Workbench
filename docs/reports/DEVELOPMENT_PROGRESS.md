@@ -83,3 +83,11 @@
 - 结果中未发现 API Key、Authorization、Bearer 或常见密钥前缀。人工质量评分尚未填写，工程成功不能解释为写作质量已经证实。
 - 新增 [真实模型评估报告](REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)及[人工评分表](REAL_MODEL_EVALUATION_HUMAN_REVIEW_2026_09_13.md)。剩余关键项为人工质量评分、原生中文输入法/长文验收及历史 V1.2 盲评。
 - 评估器重试边界变更后的最终源码隔离回归：298 passed / 27.36 秒；没有读取用户数据库，也没有改写 `workbench/settings.json`。
+
+### 2026-09-13 13:47 — GitHub 交付与 Linux CI 竞态修复
+
+- 已创建并推送 `codex/v0-1-stabilization` 到 `git@github.com:liamamilin/Narrative-Writing-Workbench.git`；主实现提交为 `56f2f29`，浏览器失败诊断提交为 `1dbd35e`，远端对应 PR #2。
+- 首轮 push/PR 检查中，Python、Node、依赖安装和 Chromium 安装均通过；浏览器 B01、B02 通过，B03 等待 `#f-instruction` 超时。诊断输出现包含具体场景和 GitHub Actions 错误注解。
+- 根因是 B02 后端版本更新后，前端仍可能处于 `reloadTask()`：测试进入旧稿修改入口后，旧任务回调继续执行 `renderWorkspace()`，覆盖了新路由的表单。慢速 Linux CI 稳定暴露了这个窗口。
+- `runGeneration()` 与刷新后续接流程现会在异步任务重载前后都核对任务和路由；离开页面后旧回调不再重绘当前页面。
+- 修复后源码隔离测试 298 passed，JavaScript 语法和 diff 检查通过；独立浏览器 B01–B10 全部通过。下一步推送修复并观察远端 push/PR 两组检查。

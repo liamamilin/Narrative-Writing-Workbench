@@ -1612,6 +1612,7 @@ const render = renderBanner;
     if (!stillHere()) { toast("生成已完成，打开任务即可查看。"); }
     else {
       await reloadTask();
+      if (!stillHere()) return;
       WS.view = "draft"; renderWorkspace();
       toast(okMsg);
     }
@@ -1652,6 +1653,7 @@ function resumeInProgressGeneration() {
     if (!stillHere()) { genBanner(false); toast(errMsg || "生成已完成。", !!errMsg); return; }
     genBanner(false);
     reloadTask().then(() => {
+      if (!stillHere()) return;
       WS.view = "draft";
       renderWorkspace();
       if (errMsg) {
