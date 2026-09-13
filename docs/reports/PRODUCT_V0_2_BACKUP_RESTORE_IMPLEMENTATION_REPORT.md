@@ -28,6 +28,7 @@
 - 备份专项：10 passed，覆盖 WAL、隐私排除、篡改、缺文件、多文件/路径、SQLite 损坏、未来 schema、断链、上限、往返、失败清理和 API。
 - 源码隔离全量回归：317 passed / 28.94 秒；JavaScript 语法与 `git diff --check` 通过。
 - 桌面 Chrome：B01–B12 全部通过；B12 核对下载文件名、预检前按钮状态、预检摘要、独立目录/数据库和当前 Draft 不变。
+- 实现提交 `8160170` 已推送到 `codex/v0-1-stabilization`；GitHub Actions push [#19](https://github.com/liamamilin/Narrative-Writing-Workbench/actions/runs/34745056754) 1 分 39 秒通过，PR #2 [#20](https://github.com/liamamilin/Narrative-Writing-Workbench/actions/runs/34745058407) 1 分 35 秒通过。
 
 ## 使用恢复副本
 
