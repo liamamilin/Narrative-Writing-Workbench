@@ -63,7 +63,7 @@ async function main() {
         throw new Error(`${name}: ${message}`, {cause:e});
       }
     }
-    let source, quick, imported, firstVersion, firstMeaning;
+    let source, quick, imported, firstVersion, firstMeaning, releaseAcceptReload;
     await check('B01 source generation, manual edit and reload', async()=>{
       await go('/tasks/new');
       await page.locator('#f-material').fill('修好的钟放在桌上。老人仍每天等待邮递员。');
@@ -116,12 +116,19 @@ async function main() {
       await editor().click(); await page.locator('[data-i=shorter]').click();
       await page.locator('.patch-card').waitFor(); await page.locator('.act-retry').first().click();
       await until(async()=>await page.locator('.patch-card').count()===2,'retry proposal');
+      let acceptReloadStarted=false;
+      const acceptReloadHold=new Promise(resolve=>{ releaseAcceptReload=resolve; });
+      await page.route(`**/tasks/${imported}/preserved-spans`,async route=>{
+        acceptReloadStarted=true; await acceptReloadHold; await route.continue();
+      },{times:1});
       await page.locator('.act-accept').last().dblclick();
       await until(async()=> (await api('GET', `/tasks/${imported}`)).draft.versions.length===count+1,'accept one version');
+      await until(()=>acceptReloadStarted,'accept refresh held');
       assert.equal((await api('GET', `/tasks/${imported}`)).draft.versions.length,count+1);
     });
     await check('B05 restore original angle and structure reference', async()=>{
       await go(`/tasks/${quick}/versions`);
+      releaseAcceptReload();
       await page.locator(`.va-restore[data-v="${firstVersion}"]`).click(); await confirm();
       await until(async()=> (await api('GET', `/tasks/${quick}`)).draft.current_version_id !== firstVersion &&
         JSON.stringify(await api('GET', `/tasks/${quick}/meaning`))===JSON.stringify(firstMeaning), 'restore meaning');

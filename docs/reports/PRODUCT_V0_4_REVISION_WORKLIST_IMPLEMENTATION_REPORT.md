@@ -31,6 +31,7 @@ Patch 接受会在同一 SQLite 事务中完成：
 - 语法：`python -m py_compile ...`、`node --check workbench/static/app.js`、`node --check tests/browser/smoke.cjs` 通过。
 - Chrome 152 / Playwright 1.62.1：B01–B14 全部通过，没有未处理页面异常。B14 覆盖保留冲突拒绝、取消保留、拒绝提案后重开、接受后条目完成和新建一个版本。
 - 浏览器回归额外发现并修复双击 Accept 后的异步路由覆盖竞态。
+- 首次远程 push #27 / PR #28 在慢速 Linux runner 的 B09 失败；根因是 Accept 后刷新只在 `reloadTask()` 前校验路由。现改为重载前后双重校验，并用可控延迟固定该竞态为浏览器回归。
 
 ## 尚需真实使用验证
 

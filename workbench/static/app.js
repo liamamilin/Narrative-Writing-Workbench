@@ -1419,14 +1419,16 @@ document.addEventListener("click", async e => {
       await api("POST", `/patches/${id}/accept`);
       WS.proposals = WS.proposals.filter(x => x !== prog);
       if (location.hash === `#/tasks/${actionTask}`) {
-        await reloadTask(); renderWorkspace();
+        await reloadTask();
+        if (location.hash === `#/tasks/${actionTask}`) renderWorkspace();
       }
        toast("修改已接受，并保存为新版本。");
     } else if (e.target.classList.contains("act-reject")) {
       await api("POST", `/patches/${id}/reject`);
       WS.proposals = WS.proposals.filter(x => x.patch_id !== id);
       if (location.hash === `#/tasks/${actionTask}`) {
-        await reloadTask(); renderWorkspace();
+        await reloadTask();
+        if (location.hash === `#/tasks/${actionTask}`) renderWorkspace();
       }
     } else if (e.target.classList.contains("act-retry")) {
       await proposePatch(prog.instruction);
