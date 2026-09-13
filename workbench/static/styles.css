@@ -149,6 +149,22 @@ h3{font-size:1rem;font-weight:650}
 .qw-duo label{display:block;margin-bottom:4px}
 .qw-cta{margin:var(--sp-5) 0 0}
 .qw-cta .primary{min-width:140px;font-weight:650}
+.qw-angle-stage{margin-top:var(--sp-5);padding-top:var(--sp-4);border-top:1px solid var(--line)}
+.qw-angle-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--sp-3)}
+.qw-angle-head p{margin:4px 0 0}
+.qw-angle-list{display:grid;gap:8px;margin:var(--sp-3) 0}
+.qw-angle-card{display:flex;flex-direction:column;align-items:stretch;text-align:left;
+  padding:12px 14px;background:var(--paper);border-color:var(--line);line-height:1.55}
+.qw-angle-card.on{border-color:var(--accent);background:var(--sel);
+  box-shadow:0 0 0 1px var(--accent)}
+.qw-angle-card b{font-size:15px;margin-bottom:4px;color:var(--ink)}
+.qw-angle-card span{font-size:12.5px;color:var(--muted)}
+.qw-angle-card strong{display:inline-block;min-width:62px;color:var(--ink);font-weight:600}
+.qw-angle-edit{margin-top:var(--sp-3);padding:10px 12px;border:1px solid var(--line);
+  border-radius:var(--r);background:rgba(255,255,255,.35)}
+.qw-angle-edit summary{cursor:pointer;font-weight:600;color:var(--accent)}
+.qw-angle-edit label{margin-top:10px}
+.qw-angle-actions{margin:var(--sp-4) 0 0}
 .qw-lib-head{display:flex;align-items:center;gap:10px;margin:var(--sp-5) 0 var(--sp-2)}
 .qw-lib-head h3{margin:0;color:var(--muted);font-size:12.5px;letter-spacing:.08em;font-weight:650}
 .qw-lib-head .ghost{flex:none}

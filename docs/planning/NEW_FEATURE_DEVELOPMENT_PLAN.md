@@ -64,6 +64,8 @@ F04/F05 依赖 F03 的可定位、可过期诊断与修订入口；不是要求�
 
 优先级：第一批核心功能。预计 3–5 人日。
 
+实现状态（2026-09-13）：F02-1～F02-5 已完成并通过 Python 全量与浏览器 B13；F02-6 的固定 mock 编排试用已完成，真实候选质量、等待与最终保留率继续按试用指标收集。增量规格与证据见 `docs/narrative-writing-product-v0.3-angle-confirmation-spec/` 和 `docs/reports/PRODUCT_V0_3_ANGLE_CONFIRMATION_IMPLEMENTATION_REPORT.md`。
+
 ### MVP 用户流程
 
 Quick Write 保留“直接写”，新增可选“先定角度”。系统发现候选 → 展示简短卡片 → 用户选择或编辑 → 确认 → 使用该含义生成正文。第一次候选不满意时用户可再触发一次；不存在自动无限寻找角度。

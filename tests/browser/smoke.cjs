@@ -311,6 +311,38 @@ async function main() {
       assert.ok(fs.existsSync(path.join(restoredRoot,copies[0],'workbench.db')));
       assert.deepEqual((await api('GET', `/tasks/${source}`)).draft,before,'restore must not mutate current draft');
     });
+    await check('B13 preview, edit and confirm angle before writing', async()=>{
+      await go('/quickwrite');
+      await page.locator('#qw-topic').fill('为什么失败会改变过去努力的意义');
+      await page.locator('#qw-preview').click();
+      await page.locator('dialog[open]').waitFor(); await confirm();
+      const cards=page.locator('.qw-angle-card');
+      await until(async()=>await cards.count()===3,'three angle cards');
+      const newest=(await api('GET','/tasks')).tasks[0];
+      const previewTask=await api('GET',`/tasks/${newest.id}`);
+      assert.equal(previewTask.draft,null,'preview must not create a draft');
+      assert.equal(previewTask.operation.kind,'angle_options');
+      assert.equal(previewTask.operation.status,'succeeded');
+
+      await cards.nth(1).focus(); await page.keyboard.press('Enter');
+      assert.equal(await cards.nth(1).getAttribute('aria-selected'),'true');
+      await page.locator('.qw-angle-edit summary').click();
+      const editedLabel='失败不是结论，而是对既有投入的重新定价';
+      await page.locator('#qa-label').fill(editedLabel);
+      await page.locator('#qa-question').fill('结果为什么会反过来改写投入？');
+      await page.locator('#qa-meaning').fill('结果改变的是投入的解释框架。');
+      await page.locator('#qa-boundary').fill('只适用于投入意义依赖结果的情况。');
+      await page.locator('#qa-end').fill('以后先区分投入本身与结果评价。');
+      await page.locator('#qw-confirm-angle').click();
+      await editor().waitFor();
+      assert.equal(taskId(),newest.id);
+      const meaning=await api('GET',`/tasks/${newest.id}/meaning`);
+      assert.equal(meaning.selected_angle,editedLabel);
+      const written=await api('GET',`/tasks/${newest.id}`);
+      assert.ok(written.draft.working_content.length>0);
+      assert.equal(written.operation.kind,'generate');
+      await page.screenshot({path:path.join(output,'angle-confirmation.png'),fullPage:true});
+    });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({environment,results,pageErrors},null,2));

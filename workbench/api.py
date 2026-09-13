@@ -107,6 +107,18 @@ def create_app(service: Service | None = None) -> FastAPI:
     def generate(task_id: str, body: dict | None = None):
         return svc().generate(task_id, body or {})
 
+    @app.post("/tasks/{task_id}/angle-options")
+    def angle_options(task_id: str, body: dict | None = None):
+        return svc().angle_options(task_id, body or {})
+
+    @app.get("/tasks/{task_id}/angle-options")
+    def get_angle_options(task_id: str, discovery_id: str):
+        return svc().get_angle_options(task_id, discovery_id)
+
+    @app.post("/tasks/{task_id}/confirm-angle")
+    def confirm_angle(task_id: str, body: dict):
+        return svc().confirm_angle(task_id, body)
+
     @app.get("/tasks/{task_id}/meaning")
     def meaning(task_id: str):
         return svc().meaning_summary(task_id)

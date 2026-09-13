@@ -23,6 +23,13 @@ replaces — the V0 spec. Read the V0 spec first, then
 `QUICK_WRITE_IMPLEMENTATION_TASK.md` and `product/11..20`. Implemented:
 see `docs/reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md`.
 
+For export/backup work, read the **V0.2 extension** at
+`docs/narrative-writing-product-v0.2-export-backup-spec/`. For optional
+pre-writing angle confirmation, read V0 and V0.1 first, then the **V0.3
+extension** at `docs/narrative-writing-product-v0.3-angle-confirmation-spec/`.
+These extensions govern only their named product surfaces and do not reopen
+engine scope.
+
 Engine reference (internals only):
 
 1. `docs/00_PROJECT_OVERVIEW.md`

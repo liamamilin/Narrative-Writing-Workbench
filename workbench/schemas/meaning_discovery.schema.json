@@ -30,14 +30,17 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "label", "core_question", "deep_meaning", "reader_end_state"],
+        "required": ["id", "label", "mechanism", "core_question", "deep_meaning", "boundary", "reader_end_state"],
         "properties": {
           "id": { "type": "string", "pattern": "^A[0-9]$" },
           "label": { "type": "string", "minLength": 1 },
-          "mechanism": { "type": "string" },
-          "core_question": { "type": "string" },
-          "deep_meaning": { "type": "string" },
-          "reader_end_state": { "type": "string" },
+          "mechanism": { "type": "string", "minLength": 1 },
+          "core_question": { "type": "string", "minLength": 1 },
+          "deep_meaning": { "type": "string", "minLength": 1 },
+          "reader_end_state": { "type": "string", "minLength": 1 },
+          "boundary": { "type": "string", "minLength": 1 },
+          "crack": { "type": "string" },
+          "strongest_counterexample": { "type": "string" },
           "risks": { "type": "array", "items": { "type": "string" } }
         }
       }

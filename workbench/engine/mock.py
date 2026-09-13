@@ -12,16 +12,34 @@ _MOCK_CANDIDATES = [
     {"id": "A1", "label": "The topic as loss", "mechanism": "subtraction",
      "core_question": "What is taken away?",
      "deep_meaning": "The topic names a loss the reader has not priced.",
-     "reader_end_state": "the reader feels the missing thing precisely"},
+     "reader_end_state": "the reader feels the missing thing precisely",
+     "crack": "the usual account ignores what disappears",
+     "strongest_counterexample": "some losses are chosen and fully understood",
+     "boundary": "holds for unpriced loss, not deliberate exchange"},
     {"id": "A2", "label": "The topic as disguised self-question",
      "mechanism": "projection",
      "core_question": "What does the reader really ask about themselves?",
      "deep_meaning": "The topic stands in for a question about identity.",
-     "reader_end_state": "the reader recognizes their own question"},
+     "reader_end_state": "the reader recognizes their own question",
+     "crack": "the surface question never resolves the repeated unease",
+     "strongest_counterexample": "some questions are simply about the object",
+     "boundary": "holds when the question repeats across different objects"},
     {"id": "A3", "label": "The topic as revaluation", "mechanism": "repricing",
      "core_question": "What changes value once the topic is faced?",
      "deep_meaning": "The topic re-prices what the reader already paid.",
-     "reader_end_state": "the reader sees past effort in a new light"},
+     "reader_end_state": "the reader sees past effort in a new light",
+     "crack": "past effort changes meaning after the outcome",
+     "strongest_counterexample": "some past costs keep the same value",
+     "boundary": "holds where outcomes change the story attached to effort"},
+]
+
+_MOCK_CANDIDATES_ALT = [
+    {**_MOCK_CANDIDATES[0], "id": "A1", "label": "The topic as a threshold",
+     "mechanism": "phase change"},
+    {**_MOCK_CANDIDATES[1], "id": "A2", "label": "The topic as borrowed language",
+     "mechanism": "imitation"},
+    {**_MOCK_CANDIDATES[2], "id": "A3", "label": "The topic as delayed choice",
+     "mechanism": "option cost"},
 ]
 
 _MOCK_TOPICS = [
@@ -264,11 +282,15 @@ class MockWritingEngine:
         if on_delta:
             on_delta("{\"topic\": …}  # mock discovery")
         if angle_mode == "custom":
-            candidates = [dict(_MOCK_CANDIDATES[0])]
+            candidates = [dict(c) for c in _MOCK_CANDIDATES]
             candidates[0].update({"id": "A0", "label": custom_angle})
             selected = "A0"
         else:
-            candidates = [dict(c) for c in _MOCK_CANDIDATES]
+            pool = (_MOCK_CANDIDATES_ALT
+                    if all(c["label"] in set(avoid or [])
+                           for c in _MOCK_CANDIDATES)
+                    else _MOCK_CANDIDATES)
+            candidates = [dict(c) for c in pool]
             fresh = [c for c in candidates if c["label"] not in set(avoid or [])]
             if not fresh:
                 raise DiscoveryFailed("No distinct angles remain to try.")
@@ -285,11 +307,9 @@ class MockWritingEngine:
             "common_reading": "a generic answer",
             "new_reading": sel["deep_meaning"],
             "reader_end_state": sel["reader_end_state"],
-            "crack": "the generic answer keeps failing on repeat cases",
-            "strongest_counterexample":
-                "some losses are fully priced and simply accepted",
-            "boundary":
-                "holds where the loss is unpriced; fails for priced losses",
+            "crack": sel["crack"],
+            "strongest_counterexample": sel["strongest_counterexample"],
+            "boundary": sel["boundary"],
             "refined_thesis": f"{sel['deep_meaning']} — priced differently",
             "key_tensions": ["wanting vs. fearing"],
             "constraints": [], "fact_heavy": False, "language": "en",

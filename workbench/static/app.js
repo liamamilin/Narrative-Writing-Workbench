@@ -274,9 +274,11 @@ function quickWrite() {
       </div>
       <p class="row qw-cta">
         <button class="primary" id="qw-go" data-tip="先找意义，再写初稿；完成后进入工作台(⌘/Ctrl+Enter 同效)">开始写</button>
+        <button id="qw-preview" data-tip="只寻找候选角度，不写正文">先看角度</button>
         <button onclick="location.hash='#/'">取消</button>
       </p>
       <p class="muted small">系统先找到值得说的角度与读者旅程，再动笔；写完进入同一工作台审阅修改。</p>
+      <section id="qw-angle-stage" class="qw-angle-stage" hidden></section>
     </section>
     <section class="card qw-col qw-left">
       <h2 class="qw-title">找点灵感</h2>
@@ -313,17 +315,20 @@ function quickWrite() {
   $("#qw-ex").onclick = e => {
     const b = e.target.closest(".chip"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;
-    saveComposeNow();
+    saveComposeNow(); invalidateAngles();
   };
 
   /* topic suggestion v5: domain chips -> batch generate -> grouped library
      (localStorage). Objects/tensions stay engine-internal resources. */
   const TX = { tax: null, domain: "", lib: loadLib(), selected: saved.topic || "" };
+  const AF = { taskId: null, discoveryId: null, candidates: [], selected: null,
+               signature: null };
   const composeState = () => ({
     topic: $("#qw-topic").value, mode: $("#qw-mode").value,
     angle: $("#qw-angle").value, custom: $("#qw-custom").value,
     length: $("#qw-length").value, lang: $("#qw-lang").value });
   const saveComposeNow = () => saveCompose(composeState());
+  const composeSignature = () => JSON.stringify(composeState());
   const domainName = id => {
     const d = ((TX.tax || {}).domains || []).find(x => x.id === id);
     return d ? d.name : (id ? id : "不限领域");
@@ -402,7 +407,7 @@ function quickWrite() {
     const card = e.target.closest(".qw-card"); if (!card) return;
     TX.selected = TX.lib[+card.dataset.i].text;
     $("#qw-topic").value = TX.selected;
-    saveComposeNow();
+    saveComposeNow(); invalidateAngles();
     renderLib();
     $("#qw-topic").focus();
   };
@@ -459,23 +464,33 @@ function quickWrite() {
   }).catch(() => {});
   $("#qw-angle").onchange = e => {
     $("#qw-custom").style.display = e.target.value === "custom" ? "" : "none";
-    saveComposeNow();
+    saveComposeNow(); invalidateAngles();
   };
-  $("#qw-topic").oninput = () => { saveComposeNow(); refreshSuggestBtn(); };
-  $("#qw-mode").onchange = saveComposeNow;
-  $("#qw-length").oninput = saveComposeNow;
-  $("#qw-lang").onchange = saveComposeNow;
+  const invalidateAngles = () => {
+    if (!AF.discoveryId || AF.signature === composeSignature()) return;
+    AF.taskId = AF.discoveryId = AF.selected = null; AF.candidates = [];
+    const stage = $("#qw-angle-stage");
+    stage.hidden = false;
+    stage.innerHTML = '<p class="muted small">写作设置已变化，请重新寻找候选角度。</p>';
+  };
+  $("#qw-topic").oninput = () => {
+    saveComposeNow(); refreshSuggestBtn(); invalidateAngles();
+  };
+  $("#qw-mode").onchange = () => { saveComposeNow(); invalidateAngles(); };
+  $("#qw-custom").oninput = () => { saveComposeNow(); invalidateAngles(); };
+  $("#qw-length").oninput = () => { saveComposeNow(); invalidateAngles(); };
+  $("#qw-lang").onchange = () => { saveComposeNow(); invalidateAngles(); };
   $("#qw-topic").addEventListener("keydown", e => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
       $("#qw-go").click();
     }
   });
-  $("#qw-go").onclick = async () => {
-    const btn = $("#qw-go");
+  const createQuickWriteTask = async (btn, busyText) => {
     const topic = $("#qw-topic").value.trim();
-    if (!topic) { toast("先写下你想谈的话题。", true); return; }
-    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> 写作中…';
+    if (!topic) { toast("先写下你想谈的话题。", true); return null; }
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spin"></span> ${busyText}`;
     try {
       const t = await api("POST", "/tasks", {
         input_mode: "topic_only", topic,
@@ -491,18 +506,122 @@ function quickWrite() {
           "这个话题可能依赖具体事实",
           "你可以使用通用知识继续，文章不会假装引用来源；也可以先进入任务添加素材。",
           "使用通用知识继续", "先添加素材"))) {
-        btn.disabled = false; btn.textContent = "开始写";
         location.hash = `#/tasks/${t.id}`;   // don't orphan the created task
-        return;
+        return null;
       }
       saveComposeNow();
-      AUTOSTART = t.id;
-      location.hash = `#/tasks/${t.id}`;
+      return t;
     } catch (e) {
       toast(e.message || "无法开始写作。", true);
-      btn.disabled = false; btn.textContent = "开始写";
+      return null;
+    } finally {
+      btn.disabled = false;
     }
   };
+  $("#qw-go").onclick = async () => {
+    const btn = $("#qw-go");
+    const t = await createQuickWriteTask(btn, "写作中…");
+    btn.textContent = "开始写";
+    if (!t) return;
+    AUTOSTART = { tid: t.id, body: {} };
+    location.hash = `#/tasks/${t.id}`;
+  };
+
+  const angleValue = (candidate, key) => esc(candidate[key] || "");
+  const renderAngles = () => {
+    const stage = $("#qw-angle-stage");
+    stage.hidden = false;
+    if (!AF.candidates.length) {
+      stage.innerHTML = '<p class="muted small">这次没有可用候选，请再试一次。</p>';
+      return;
+    }
+    const selected = AF.candidates.find(c => c.id === AF.selected) || AF.candidates[0];
+    AF.selected = selected.id;
+    stage.innerHTML = `
+      <div class="qw-angle-head"><div><b>先选一个值得写的角度</b>
+        <p class="muted small">选择后可直接修改完整角度，再确认写作。</p></div>
+        <button class="small" id="qw-more-angles">再找一批</button></div>
+      <div class="qw-angle-list" role="listbox" aria-label="候选角度">
+        ${AF.candidates.map(c => `<button type="button" role="option"
+          aria-selected="${c.id === selected.id}" class="qw-angle-card${c.id === selected.id ? " on" : ""}"
+          data-angle-id="${esc(c.id)}"><b>${esc(c.label)}</b>
+          <span><strong>机制</strong>${esc(c.mechanism)}</span>
+          <span><strong>核心问题</strong>${esc(c.core_question)}</span>
+          <span><strong>边界</strong>${esc(c.boundary)}</span>
+          <span><strong>读者带走</strong>${esc(c.reader_end_state)}</span></button>`).join("")}
+      </div>
+      <details class="qw-angle-edit"><summary>编辑已选角度（可选）</summary>
+        <label for="qa-label">主张</label><textarea id="qa-label" rows="2">${angleValue(selected, "label")}</textarea>
+        <label for="qa-question">核心问题</label><textarea id="qa-question" rows="2">${angleValue(selected, "core_question")}</textarea>
+        <label for="qa-meaning">深层含义</label><textarea id="qa-meaning" rows="2">${angleValue(selected, "deep_meaning")}</textarea>
+        <label for="qa-boundary">适用边界</label><textarea id="qa-boundary" rows="2">${angleValue(selected, "boundary")}</textarea>
+        <label for="qa-end">读者收获</label><textarea id="qa-end" rows="2">${angleValue(selected, "reader_end_state")}</textarea>
+      </details>
+      <p class="row qw-angle-actions"><button class="primary" id="qw-confirm-angle">确认并开始写</button>
+        <button id="qw-back-form">返回修改设置</button></p>`;
+    stage.querySelector(".qw-angle-list").onclick = e => {
+      const card = e.target.closest("[data-angle-id]");
+      if (!card || card.dataset.angleId === AF.selected) return;
+      AF.selected = card.dataset.angleId; renderAngles();
+    };
+    $("#qw-back-form").onclick = () => {
+      stage.hidden = true; $("#qw-topic").focus();
+    };
+    $("#qw-more-angles").onclick = () => findAngles(true);
+    $("#qw-confirm-angle").onclick = confirmAngle;
+  };
+
+  const findAngles = async (reuseTask = false) => {
+    const btn = reuseTask ? $("#qw-more-angles") : $("#qw-preview");
+    const original = reuseTask ? "再找一批" : "先看角度";
+    let taskId = AF.taskId;
+    if (!reuseTask || !taskId || AF.signature !== composeSignature()) {
+      const t = await createQuickWriteTask(btn, "正在找角度…");
+      if (!t) { btn.textContent = original; return; }
+      taskId = t.id; AF.taskId = taskId; AF.signature = composeSignature();
+    }
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> 正在找角度…';
+    try {
+      const found = await api("POST", `/tasks/${taskId}/angle-options`, {});
+      AF.discoveryId = found.discovery_id;
+      AF.candidates = found.candidates;
+      AF.selected = found.candidates[0]?.id || null;
+      renderAngles();
+      $("#qw-angle-stage").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      toast(e.message || "寻找角度失败，请重试。", true);
+    } finally {
+      const current = reuseTask ? $("#qw-more-angles") : $("#qw-preview");
+      if (current) { current.disabled = false; current.textContent = original; }
+    }
+  };
+
+  const confirmAngle = async () => {
+    const btn = $("#qw-confirm-angle");
+    const values = {
+      label: $("#qa-label").value.trim(),
+      core_question: $("#qa-question").value.trim(),
+      deep_meaning: $("#qa-meaning").value.trim(),
+      boundary: $("#qa-boundary").value.trim(),
+      reader_end_state: $("#qa-end").value.trim(),
+    };
+    if (Object.values(values).some(v => !v)) {
+      toast("请补全角度的主张、问题、含义、边界和读者收获。", true); return;
+    }
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> 正在确认…';
+    try {
+      const confirmed = await api("POST", `/tasks/${AF.taskId}/confirm-angle`, {
+        discovery_id: AF.discoveryId, candidate_id: AF.selected, edits: values,
+      });
+      AUTOSTART = { tid: AF.taskId,
+                    body: { confirmed_meaning_id: confirmed.confirmed_meaning_id } };
+      location.hash = `#/tasks/${AF.taskId}`;
+    } catch (e) {
+      toast(e.message || "角度确认失败，请重试。", true);
+      btn.disabled = false; btn.textContent = "确认并开始写";
+    }
+  };
+  $("#qw-preview").onclick = () => findAngles(false);
 }
 
 function reviseDraft() {
@@ -930,9 +1049,11 @@ async function workspace(tid) {
       retry[0], retry[1], "生成已完成。");
   }
   if (AUTOSTART) {
-    if (AUTOSTART === tid) {
+    const start = typeof AUTOSTART === "string"
+      ? { tid: AUTOSTART, body: {} } : AUTOSTART;
+    if (start.tid === tid) {
       AUTOSTART = false;
-      if (!WS.draft && WS.task.input_mode === "topic_only") generateDraft();
+      if (!WS.draft && WS.task.input_mode === "topic_only") generateDraft(start.body);
     } else AUTOSTART = false;   // navigated elsewhere first: drop, don't misfire
   }
 }
@@ -1674,12 +1795,13 @@ function collectPanelParams() {
   return p;
 }
 
-async function generateDraft() {
+async function generateDraft(extraBody = {}) {
   if (GENERATING) return;
   if (WS.draft && !(await confirmDialog(
       "重新生成一稿？", "当前稿会先保存到版本历史，生成失败也不会改动正文。", "继续生成")))
     return;
-  await runGeneration("generate", collectPanelParams(), "初稿已生成。");
+  await runGeneration("generate", { ...collectPanelParams(), ...extraBody },
+                      "初稿已生成。");
 }
 
 async function retryGeneration(endpoint, label, body) {

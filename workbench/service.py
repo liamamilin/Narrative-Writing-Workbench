@@ -565,14 +565,19 @@ class Service:
 
     @tracked("generate")
     def generate(self, tid: str, payload: dict | None = None) -> dict:
-        task = self._generation_task(tid, payload or {})
+        payload = payload or {}
+        task = self._generation_task(tid, payload)
         if task.get("input_mode") == "draft_revision":
             raise ApiError("DRAFT_REVISION", "旧稿已保留，请使用检查与局部修改。", 409)
         ch = CURRENT.get().channel
         ch.emit("stage", {"stage": "queued"})
         material = self._material(task)
-        resume = bool((payload or {}).get("resume"))
+        resume = bool(payload.get("resume"))
+        confirmed_id = payload.get("confirmed_meaning_id")
         if task.get("input_mode") != "topic_only":
+            if confirmed_id:
+                raise ApiError("CONFIRMED_MEANING_REQUIRED",
+                               "Confirmed angles only apply to Quick Write tasks.", 409)
             if not material and not task["instruction"]:
                 ch.close()
                 raise ApiError("VALIDATION", "Add material or an intent first.")
@@ -583,6 +588,21 @@ class Service:
                 ch.close()
         # Quick Write golden path: Meaning Discovery -> Angle -> WIR -> Writer
         try:
+            if confirmed_id:
+                discovery = self._confirmed_discovery(task, confirmed_id)
+                CURRENT.get().bind_inputs(
+                    self._gen_inputs_fingerprint(task, discovery,
+                                                 material or task["topic"]))
+                ch.emit("angle", meaning_schema.product_safe_summary(discovery["data"]))
+                ch.emit("stage_summary", {
+                    "stage": "discovery",
+                    "text": "使用已确认角度 —— "
+                            + meaning_schema.selected_angle(discovery["data"])
+                                            .get("label", "已确定")})
+                plan = self._resumable_plan(task, discovery) if resume else None
+                return self._generate_with(task, meaning=discovery,
+                                           material=material or task["topic"],
+                                           plan=plan)
             if resume:
                 discovery = self._resumable_discovery(task)
                 if discovery:
@@ -594,7 +614,8 @@ class Service:
                     ch.emit("angle",
                             meaning_schema.product_safe_summary(discovery["data"]))
             if not resume or not discovery:
-                discovery = self.discover(task, emit=ch.emit)
+                discovery = self.discover(task, emit=ch.emit,
+                                          purpose="automatic")
             plan = self._resumable_plan(task, discovery) if resume else None
             if not material:
                 material = task["topic"]
@@ -604,11 +625,14 @@ class Service:
             ch.close()
 
     def discover(self, task: dict, avoid: list[str] | None = None,
-                 emit=None) -> dict:
+                 emit=None, purpose: str = "automatic") -> dict:
         """Run Meaning Discovery, validate, persist (append-only lineage)."""
         tid = task["id"]
-        avoid = avoid if avoid is not None else self._past_angle_labels(tid)
-        CURRENT.get().discovery_inputs = self._discovery_inputs(task, CURRENT.get().snapshot)
+        avoid = avoid if avoid is not None else self._past_angle_labels(
+            tid, include_options=purpose == "angle_options")
+        discovery_inputs = self._discovery_inputs(task, CURRENT.get().snapshot)
+        CURRENT.get().discovery_inputs = self._discovery_metadata(
+            task, purpose, discovery_inputs)
         self.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
                      (now(), tid))
         stage_cb = _stage_stream(emit, "discovery") if (emit and _debug_stream()) else None
@@ -689,31 +713,210 @@ class Service:
                 "angle_mode": task.get("angle_mode"), "custom_angle": task.get("custom_angle"),
                 "config": self._config_dict(task), "engine": snapshot}
 
+    def _angle_task_inputs(self, task: dict) -> dict:
+        return {
+            "input_mode": task.get("input_mode"),
+            "topic": task.get("topic"),
+            "instruction": task.get("instruction"),
+            "writing_mode": task.get("writing_mode"),
+            "angle_mode": task.get("angle_mode"),
+            "custom_angle": task.get("custom_angle"),
+            "expected_language": task.get("expected_language"),
+            "config": self._config_dict(task),
+        }
+
+    def _angle_task_fingerprint(self, task: dict) -> str:
+        payload = json.dumps(self._angle_task_inputs(task), sort_keys=True,
+                             ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _discovery_metadata(self, task: dict, purpose: str,
+                            discovery_inputs: dict, **extra) -> dict:
+        return {
+            "purpose": purpose,
+            "task_inputs": self._angle_task_inputs(task),
+            "task_fingerprint": self._angle_task_fingerprint(task),
+            "discovery_inputs": discovery_inputs,
+            **extra,
+        }
+
+    @staticmethod
+    def _discovery_meta(row: dict) -> dict:
+        try:
+            value = json.loads(row.get("inputs_json") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @classmethod
+    def _discovery_purpose(cls, row: dict) -> str:
+        return cls._discovery_meta(row).get("purpose") or "automatic"
+
+    @classmethod
+    def _stored_discovery_inputs(cls, row: dict) -> dict:
+        meta = cls._discovery_meta(row)
+        return meta.get("discovery_inputs", meta)
+
     def _resumable_discovery(self, task):
         row = self._latest_discovery(task["id"])
-        if row and json.loads(row.get("inputs_json") or "{}") == self._discovery_inputs(task, CURRENT.get().snapshot):
+        if row and self._stored_discovery_inputs(row) == self._discovery_inputs(task, CURRENT.get().snapshot):
             return row
         return None
 
-    def _past_angle_labels(self, tid: str) -> list[str]:
+    def _past_angle_labels(self, tid: str,
+                           include_options: bool = False) -> list[str]:
         labels = []
-        for r in self.db.q("SELECT data_json FROM meaning_discoveries "
+        for r in self.db.q("SELECT data_json,inputs_json FROM meaning_discoveries "
                            "WHERE task_id=? AND status='ready'", (tid,)):
             try:
                 d = json.loads(r["data_json"])
             except json.JSONDecodeError:
                 continue
             for c in d.get("candidate_angles", []):
-                if c.get("id") == d.get("selected_angle_id") and c.get("label"):
+                is_options = self._discovery_purpose(r) == "angle_options"
+                include_all = include_options and is_options
+                if c.get("label") and (include_all or
+                                       (not is_options and
+                                        c.get("id") == d.get("selected_angle_id"))):
                     labels.append(c["label"])
         return labels
 
     def _latest_discovery(self, tid: str) -> dict | None:
-        row = self.db.q1("SELECT * FROM meaning_discoveries WHERE task_id=?"
+        rows = self.db.q("SELECT * FROM meaning_discoveries WHERE task_id=?"
                          " AND status='ready'"
-                         " ORDER BY created_at DESC, rowid DESC LIMIT 1", (tid,))
+                         " ORDER BY created_at DESC, rowid DESC", (tid,))
+        for row in rows:
+            if self._discovery_purpose(row) == "angle_options":
+                continue
+            row["data"] = json.loads(row["data_json"])
+            return row
+        return None
+
+    def _angle_options_payload(self, task: dict, row: dict) -> dict:
+        meta = self._discovery_meta(row)
+        return {
+            "task_id": task["id"],
+            "discovery_id": row["id"],
+            "stale": meta.get("task_fingerprint") !=
+                     self._angle_task_fingerprint(task),
+            "candidates": meaning_schema.product_safe_candidates(row["data"]),
+        }
+
+    def _angle_options_row(self, tid: str, discovery_id: str) -> dict:
+        row = self.db.q1("SELECT * FROM meaning_discoveries WHERE id=?",
+                         (discovery_id,))
         if not row:
-            return None
+            raise ApiError("NOT_FOUND", "Angle options not found.", 404)
+        if row["task_id"] != tid:
+            raise ApiError("WRONG_TASK", "Angle options belong to another task.", 409)
+        if row["status"] != "ready" or self._discovery_purpose(row) != "angle_options":
+            raise ApiError("ANGLE_OPTIONS_REQUIRED",
+                           "Select from an angle-options discovery.", 409)
+        row["data"] = json.loads(row["data_json"])
+        return row
+
+    @tracked("angle_options")
+    def angle_options(self, tid: str, payload: dict | None = None) -> dict:
+        payload = payload or {}
+        task = self.get_task(tid)
+        if task.get("input_mode") != "topic_only":
+            raise ApiError("ANGLE_OPTIONS_REQUIRED",
+                           "Angle options are available for Quick Write tasks.", 409)
+        if self.db.q1("SELECT id FROM drafts WHERE task_id=?", (tid,)):
+            raise ApiError("ANGLE_OPTIONS_REQUIRED",
+                           "This task already has a draft.", 409)
+        task = self._apply_param_overrides(task, payload)
+        task["_engine_snapshot"] = CURRENT.get().snapshot
+        CURRENT.get().bind_inputs({"angle_options": self._angle_task_inputs(task)})
+        ch = CURRENT.get().channel
+        ch.emit("stage", {"stage": "queued"})
+        try:
+            row = self.discover(task, emit=ch.emit, purpose="angle_options")
+            self.db.exec("UPDATE tasks SET status='draft',updated_at=? WHERE id=?",
+                         (now(), tid))
+            return self._angle_options_payload(task, row)
+        finally:
+            ch.close()
+
+    def get_angle_options(self, tid: str, discovery_id: str) -> dict:
+        task = self.get_task(tid)
+        return self._angle_options_payload(
+            task, self._angle_options_row(tid, discovery_id))
+
+    @tracked("confirm_angle")
+    def confirm_angle(self, tid: str, payload: dict) -> dict:
+        task = self.get_task(tid)
+        if task.get("input_mode") != "topic_only":
+            raise ApiError("ANGLE_OPTIONS_REQUIRED",
+                           "Angle confirmation is available for Quick Write tasks.", 409)
+        discovery_id = payload.get("discovery_id")
+        candidate_id = payload.get("candidate_id")
+        if not isinstance(discovery_id, str) or not isinstance(candidate_id, str):
+            raise ApiError("VALIDATION", "discovery_id and candidate_id are required.")
+        source = self._angle_options_row(tid, discovery_id)
+        meta = self._discovery_meta(source)
+        if meta.get("task_fingerprint") != self._angle_task_fingerprint(task):
+            raise ApiError("STALE_ANGLE_OPTIONS",
+                           "Writing inputs changed. Find a new set of angles.", 409)
+        data = json.loads(json.dumps(source["data"], ensure_ascii=False))
+        selected = next((c for c in data.get("candidate_angles", [])
+                         if c.get("id") == candidate_id), None)
+        if not selected:
+            raise ApiError("VALIDATION", "candidate_id is not in this discovery.")
+        fields = {"label", "core_question", "deep_meaning", "boundary",
+                  "reader_end_state"}
+        edits = payload.get("edits")
+        if edits is not None:
+            if not isinstance(edits, dict) or set(edits) != fields:
+                raise ApiError("VALIDATION",
+                               "edits must contain the complete editable angle card.")
+            for key, value in edits.items():
+                if not isinstance(value, str) or not value.strip() or len(value.strip()) > 2000:
+                    raise ApiError("VALIDATION", f"Invalid angle field: {key}.")
+            changed = any(edits[k].strip() !=
+                          str(selected.get(k) or data.get(k) or "").strip()
+                          for k in fields)
+            selected.update({k: edits[k].strip() for k in fields})
+        else:
+            changed = False
+            selected["boundary"] = selected.get("boundary") or data.get("boundary", "")
+        data["selected_angle_id"] = candidate_id
+        for key in ("core_question", "deep_meaning", "boundary", "reader_end_state"):
+            data[key] = selected[key]
+        data["new_reading"] = selected["deep_meaning"]
+        data["refined_thesis"] = selected["label"]
+        data["crack"] = selected.get("crack") or data["crack"]
+        data["strongest_counterexample"] = (
+            selected.get("strongest_counterexample") or data["strongest_counterexample"])
+        errors = meaning_schema.validate_meaning(data)
+        if errors:
+            raise ApiError("VALIDATION", "The confirmed angle is incomplete or inconsistent.")
+        CURRENT.get().bind_inputs({"confirm_angle": self._angle_task_inputs(task),
+                                   "discovery_id": discovery_id,
+                                   "candidate_id": candidate_id})
+        CURRENT.get().discovery_inputs = self._discovery_metadata(
+            task, "confirmed", self._stored_discovery_inputs(source),
+            parent_discovery_id=discovery_id,
+            selected_candidate_id=candidate_id,
+            selection_source="edited" if changed else "candidate")
+        row = self._persist_discovery(tid, task["topic"], candidate_id,
+                                      "ready", data)
+        return {"task_id": tid, "confirmed_meaning_id": row["id"],
+                "meaning": meaning_schema.product_safe_summary(data)}
+
+    def _confirmed_discovery(self, task: dict, meaning_id: str) -> dict:
+        row = self.db.q1("SELECT * FROM meaning_discoveries WHERE id=?", (meaning_id,))
+        if not row:
+            raise ApiError("NOT_FOUND", "Confirmed angle not found.", 404)
+        if row["task_id"] != task["id"]:
+            raise ApiError("WRONG_TASK", "Confirmed angle belongs to another task.", 409)
+        meta = self._discovery_meta(row)
+        if row["status"] != "ready" or meta.get("purpose") != "confirmed":
+            raise ApiError("CONFIRMED_MEANING_REQUIRED",
+                           "Confirm an angle before using it to write.", 409)
+        if meta.get("task_fingerprint") != self._angle_task_fingerprint(task):
+            raise ApiError("STALE_ANGLE_OPTIONS",
+                           "Writing inputs changed. Confirm a new angle.", 409)
         row["data"] = json.loads(row["data_json"])
         return row
 
