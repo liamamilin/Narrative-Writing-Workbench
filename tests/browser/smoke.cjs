@@ -56,7 +56,12 @@ async function main() {
     async function check(name, fn) {
       const start = Date.now();
       try { await fn(); results.push({name, status:'passed', elapsed_ms:Date.now()-start}); console.log('PASS ' + name); }
-      catch(e) { results.push({name,status:'failed',error:String(e)}); await page.screenshot({path:path.join(output, 'failure.png'),fullPage:true}); throw e; }
+      catch(e) {
+        const message = e instanceof Error ? e.message : String(e);
+        results.push({name,status:'failed',error:String(e)});
+        await page.screenshot({path:path.join(output, 'failure.png'),fullPage:true});
+        throw new Error(`${name}: ${message}`, {cause:e});
+      }
     }
     let source, quick, imported, firstVersion, firstMeaning;
     await check('B01 source generation, manual edit and reload', async()=>{
@@ -200,4 +205,12 @@ async function main() {
     fs.rmSync(dataDir, {recursive:true, force:true});
   }
 }
-main().catch(e=>{console.error(e);process.exitCode=1});
+main().catch(e=>{
+  console.error(e);
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const message = String(e && e.message || e)
+      .replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A');
+    console.error(`::error title=Browser smoke failed::${message}`);
+  }
+  process.exitCode=1;
+});
