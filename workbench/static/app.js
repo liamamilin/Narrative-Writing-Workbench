@@ -1019,7 +1019,7 @@ async function settings() {
 const WS = {
   tid: null, task: null, draft: null, versions: [], sel: new Set(),
   selAnchor: null,
-  panelTab: "goal", view: "draft", review: null, evidence: null, map: null,
+  panelTab: "goal", view: "draft", review: null, evidence: null, map: null, reader: null,
   proposals: [], preserved: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
 };
 
@@ -1027,7 +1027,7 @@ async function workspace(tid) {
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
   WS.tid = tid; WS.sel.clear(); WS.selAnchor = null;
-  WS.proposals = []; WS.preserved = []; WS.review = null; WS.evidence = null; WS.map = null;
+  WS.proposals = []; WS.preserved = []; WS.review = null; WS.evidence = null; WS.map = null; WS.reader = null;
   await reloadTask();
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.task.operation?.status === "running" && !GENERATING) {
@@ -1097,7 +1097,8 @@ function renderWorkspace() {
         <span class="grow"></span>
          <div class="tabs" role="tablist" aria-label="稿件视图">
            <button role="tab" aria-selected="${WS.view === "draft"}" id="tab-draft" class="${WS.view === "draft" ? "on" : ""}" data-tip="正文：点段落即可编辑，选段可发起局部修改">正文</button>
-           <button role="tab" aria-selected="${WS.view === "map"}" id="tab-map" class="${WS.view === "map" ? "on" : ""}" data-tip="只读：查看读者理解如何推进，点击定位段落">写作地图</button>
+           <button role="tab" aria-selected="${WS.view === "map"}" id="tab-map" class="${WS.view === "map" ? "on" : ""}" data-tip="生成时的结构计划；段落映射为估算">原定路径</button>
+           <button role="tab" aria-selected="${WS.view === "reader"}" id="tab-reader" class="${WS.view === "reader" ? "on" : ""}" data-tip="只读：检查当前实际正文如何逐段推进">稿件检查</button>
          </div>
          <select id="export-format" class="export-format" aria-label="当前稿导出格式" data-tip="Markdown 保留可编辑的纯文本格式；纯文本适合直接粘贴">
            <option value="md">Markdown</option><option value="txt">纯文本</option>
@@ -1128,6 +1129,13 @@ function renderWorkspace() {
        WS.map = m; WS.view = "map"; renderWorkspace();
      } catch (e) { setEditorEditable(true); toast(e.message || "还没有可用的写作地图。", true); }
   };
+   $("#tab-reader").onclick = async () => {
+     try {
+       await flushAutosave({ checkpoint: false });
+       const result = await api("GET", `/tasks/${WS.tid}/reader-path-review`);
+       WS.reader = result; WS.view = "reader"; renderWorkspace();
+     } catch (e) { toast(e.message || "暂时无法读取稿件检查。", true); }
+   };
   $("#export-current").onclick = async () => {
     if (!WS.draft) return;
     const button = $("#export-current"); button.disabled = true;
@@ -1177,6 +1185,7 @@ function renderCenter() {
     return;
   }
   if (WS.view === "map") { box.innerHTML = mapView(); wireMap(); return; }
+  if (WS.view === "reader") { box.innerHTML = readerPathView(); wireReaderPath(); return; }
   box.innerHTML = `
     <div id="selbar"${WS.sel.size ? ' class="show"' : ''}>
        <button data-i="revise" data-tip="对选中段落写自定义修改指令">修改</button>
@@ -1283,6 +1292,7 @@ function captureEditorContent() {
   WS.draft.working_content = content;
   if (WS.review) WS.review.stale = true;
   if (WS.evidence) WS.evidence.stale = true;
+  if (WS.reader) WS.reader.stale = true;
   WS.preserved.forEach(s => { if (s.status === "active") s.status = "stale"; });
   WS.dirty = true;
   WS.editRevision += 1;
@@ -1638,6 +1648,7 @@ const STEP_LABELS = {
   writing: ["撰写正文", ""],
   review: ["检查中", ""],
   evidence_check: ["核查材料依据", ""],
+  reader_path_review: ["检查稿件路径", ""],
 };
 
 function genBanner(on, stg, stgZh) {
@@ -2186,10 +2197,104 @@ document.addEventListener("click", async e => {
   } catch (err) { toast(err.message, true); }
 });
 
+async function runReaderPathReview() {
+  if (GENERATING) { toast("正在生成，请稍候。", true); return; }
+  const tid = WS.tid;
+  const btn = $("#reader-run");
+  if (btn) { btn.disabled = true; btn.textContent = "检查中…"; }
+  genBanner(true);
+  const prog = openProgress(tid, renderBanner);
+  try {
+    const result = await api("POST", `/tasks/${tid}/reader-path-review`);
+    if (WS.tid === tid) WS.reader = result;
+  } catch (e) {
+    if (WS.tid === tid) toast(e.message, true);
+  } finally {
+    prog.close();
+    if (WS.tid === tid) { genBanner(false); renderCenter(); }
+  }
+}
+
+function readerPathView() {
+  const result = WS.reader || {steps:[], issues:[], stale:false};
+  if (!result.id) return `<div class="reader-intro card">
+    <h3>检查当前稿的实际推进</h3>
+    <p class="muted">逐段查看作用、增加的认识和问题回答关系。结果是模型对可能阅读效果的诊断，不是真实读者实验。</p>
+    <button class="primary" id="reader-run">开始检查稿件</button></div>`;
+  const statuses = {open:"待处理", proposed:"提案中", resolved:"已完成", dismissed:"已跳过", stale:"已失效"};
+  const types = {repetition:"内容重复", reasoning_gap:"推理跳跃",
+    unanswered_question:"问题未回答", unclear_transition:"转折不清"};
+  return `<div class="reader-path">
+    <div class="reader-path-head"><div><b>当前稿件路径</b>
+      <p class="muted small">${esc(result.overview)} 这是模型诊断，不是真实读者实验。</p></div>
+      <button id="reader-run">${result.stale ? "重新检查" : "再次检查"}</button></div>
+    ${result.stale ? '<p class="card muted">正文已经改变；本轮稿件检查已过期，旧问题不能继续处理。</p>' : ""}
+    <div class="reader-path-grid"><section><h3>逐段推进</h3>${result.steps.map((step, index) => `
+      <article class="path-step" role="button" tabindex="0" data-reader-step="${step.id}">
+        <div class="row"><span class="path-number">${index + 1}</span><b>¶${step.location.paragraph_start} · ${esc(step.primary_function)}</b></div>
+        <blockquote class="issue-quote">${esc(step.quote)}</blockquote>
+        <p class="small"><span class="muted">增加的认识：</span>${esc(step.knowledge_gain)}</p>
+        ${step.question_raised ? `<p class="small"><span class="muted">提出：</span>${esc(step.question_raised)}</p>` : ""}
+        ${step.question_answered ? `<p class="small"><span class="muted">回答：</span>${esc(step.question_answered)}</p>` : ""}
+      </article>`).join("")}</section>
+      <aside><h3>路径问题</h3>${result.issues.length ? result.issues.map(issue => `
+        <article class="issue reader-issue ${esc(issue.status)}">
+          <div class="row"><span class="label">${esc(types[issue.type] || issue.type)}</span><span class="small muted">${esc(statuses[issue.status] || issue.status)}</span></div>
+          <p class="small"><b>${esc(issue.message)}</b></p><p class="small muted">可能影响：${esc(issue.effect)}</p>
+          <blockquote class="issue-quote">${esc(issue.quote)}</blockquote>
+          <p class="small">修改目标：${esc(issue.goal)}</p>
+          <div class="row"><button class="small" data-reader-show="${issue.revision_item_id}">定位</button>
+            ${issue.status === "open" && !result.stale ? `<button class="small" data-reader-fix="${issue.revision_item_id}">处理</button>
+              <button class="small" data-reader-dismiss="${issue.revision_item_id}">跳过</button>` : ""}</div>
+        </article>`).join("") : '<p class="muted small">没有发现可可靠定位的路径问题。</p>'}</aside>
+    </div></div>`;
+}
+
+function wireReaderPath() {
+  const run = $("#reader-run"); if (run) run.onclick = runReaderPathReview;
+  $("#center-body").querySelectorAll("[data-reader-step]").forEach(element => {
+    const activate = () => locateReaderTarget(WS.reader.steps.find(step => step.id === element.dataset.readerStep));
+    element.onclick = activate;
+    element.onkeydown = event => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); activate(); } };
+  });
+  $("#center-body").querySelectorAll("[data-reader-show],[data-reader-fix],[data-reader-dismiss]").forEach(button => {
+    button.onclick = async () => {
+      const id = button.dataset.readerShow || button.dataset.readerFix || button.dataset.readerDismiss;
+      const issue = WS.reader.issues.find(item => item.revision_item_id === id);
+      if (!issue) return;
+      if (button.dataset.readerDismiss) {
+        try {
+          await api("POST", `/revision-items/${id}/dismiss`);
+          WS.reader = await api("GET", `/tasks/${WS.tid}/reader-path-review`);
+          renderCenter(); toast("已跳过这一项，正文未改变。");
+        } catch (error) { toast(error.message, true); }
+        return;
+      }
+      await locateReaderTarget(issue);
+      if (button.dataset.readerFix)
+        proposePatch(issue.goal, WS.reader.id, issue.revision_item_id);
+    };
+  });
+}
+
+async function locateReaderTarget(item) {
+  if (!item) return;
+  if (WS.reader && WS.reader.stale) { toast("正文已改变，请重新检查。", true); return; }
+  WS.view = "draft"; renderWorkspace();
+  const a = item.location.paragraph_start, b = item.location.paragraph_end;
+  WS.sel.clear(); WS.selAnchor = a;
+  for (let number = a; number <= b; number++) WS.sel.add(number);
+  renderCenter();
+  const paragraph = $(`.para[data-p="${a}"]`);
+  if (paragraph) { paragraph.classList.add("hl");
+    paragraph.scrollIntoView({behavior:"smooth", block:"center"});
+    setTimeout(() => paragraph.classList.remove("hl"), 2600); }
+}
+
 /* writing map */
 function mapView() {
   const beats = (WS.map && WS.map.beats) || [];
-  return `<p class="muted small">这是生成时的结构参考，段落对应关系为估算；手工修改后可能偏移。写作地图只读。</p>` +
+  return `<p class="muted small">这是生成时的原定路径，段落对应关系为估算；手工修改后可能偏移。原定路径只读。</p>` +
     (beats.length ? beats.map((b, i) => `
       <div class="beat" role="button" tabindex="0" data-a="${b.paragraph_start}" data-b="${b.paragraph_end}">
         <div class="t">第 ${i + 1} 步 · ${esc(b.function)}</div>

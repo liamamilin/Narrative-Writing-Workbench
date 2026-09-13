@@ -213,6 +213,14 @@ def create_app(service: Service | None = None) -> FastAPI:
     def dismiss_claim_link(link_id: str):
         return svc().dismiss_claim_link(link_id)
 
+    @app.post("/tasks/{task_id}/reader-path-review")
+    def review_reader_path(task_id: str):
+        return svc().review_reader_path(task_id)
+
+    @app.get("/tasks/{task_id}/reader-path-review")
+    def reader_path_review(task_id: str):
+        return svc().reader_path_review(task_id)
+
     @app.get("/tasks/{task_id}/revision-worklist")
     def revision_worklist(task_id: str):
         return svc().revision_worklist(task_id)

@@ -301,6 +301,27 @@ h3{font-size:1rem;font-weight:650}
 .beat .t{font-weight:650}
 .beat .arrow{color:var(--muted)}
 
+/* current-draft reader path */
+.reader-intro{max-width:620px;margin:72px auto;text-align:center;padding:34px}
+.reader-path{max-width:980px;margin:0 auto;padding-bottom:12vh}
+.reader-path-head{display:flex;align-items:flex-start;gap:var(--sp-4);
+  justify-content:space-between;margin-bottom:var(--sp-3)}
+.reader-path-head p{margin:5px 0 0;max-width:680px}
+.reader-path-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(260px,.85fr);
+  gap:var(--sp-4);align-items:start}
+.reader-path-grid h3{font-size:14px;color:var(--muted);margin:0 0 var(--sp-2);
+  letter-spacing:.04em}
+.path-step{border:1px solid var(--line);border-left:3px solid var(--line-strong);
+  border-radius:var(--r-sm);padding:11px 13px;margin:8px 0;
+  background:rgba(255,253,248,.55);cursor:pointer}
+.path-step:hover,.path-step:focus-visible{border-left-color:var(--cinnabar);
+  background:var(--sheet);outline:none}
+.path-step p{margin:6px 0}
+.path-number{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;
+  border-radius:50%;background:var(--sel);color:var(--accent);font-size:12px;font-weight:700}
+.reader-issue{border-left:3px solid var(--cinnabar)}
+.reader-issue.resolved,.reader-issue.dismissed,.reader-issue.stale{opacity:.68}
+
 /* versions */
 #vlist{display:flex;flex-direction:column;gap:6px;margin:var(--sp-3) 0}
 .vrow{display:flex;gap:12px;align-items:center;border:1px solid var(--line);
@@ -391,6 +412,7 @@ h3{font-size:1rem;font-weight:650}
   #pane-right{grid-column:2;grid-row:1}
   #pane-left{grid-column:1/-1;grid-row:2;max-height:300px}
   .diff{grid-template-columns:1fr}
+  .reader-path-grid{grid-template-columns:1fr}
 }
 @media (max-width:640px){
   #topbar .brand{width:100%}
@@ -405,6 +427,7 @@ h3{font-size:1rem;font-weight:650}
   #editor{padding-inline:0}
   .para{font-size:16px}
   .draft-head{flex-wrap:wrap}
+  .reader-path-head{flex-direction:column}
   .vrow{align-items:flex-start;flex-wrap:wrap}
   .vacts{width:100%;justify-content:flex-end}
   .row{flex-wrap:wrap}

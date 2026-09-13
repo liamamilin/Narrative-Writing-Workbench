@@ -26,9 +26,12 @@ from ..meaning_schema import (JUDGE_SCHEMA, MEANING_SCHEMA, judge_failed,
                               selected_angle, validate_judge, validate_meaning,
                               meaning_to_wir_block)
 from ..evidence_schema import SCHEMA as EVIDENCE_SCHEMA, validate_evidence
+from ..reader_path_schema import (SCHEMA as READER_PATH_SCHEMA,
+                                  validate_reader_path)
 from ..topic_schema import validate_topics
 from . import (DiscoveryFailed, EvidenceCheckFailed, GenerationFailed, GenerateResult,
                LockConflict, map_beats_to_paragraphs, split_paragraphs)
+from . import ReaderPathReviewFailed
 
 _TASK_TYPE_MAP = {
     "fiction_scene": "narrative_commentary",
@@ -379,6 +382,33 @@ class RealWritingEngine:
                 "材料依据检查未能产生可靠结果，请重试。") from exc
         _operation_record("evidence_check", data={
             "claim_count": len(stage.data.get("claims") or []),
+            "repair_used": bool(getattr(stage, "repair_used", False))})
+        return stage.data
+
+    def review_reader_path(self, *, content, on_delta=None) -> dict:
+        numbered = [{"paragraph": number, "content": paragraph}
+                    for number, paragraph in enumerate(content.split("\n\n"), 1)
+                    if paragraph.strip()]
+        user = (
+            "## Current draft paragraphs (JSON)\n\n"
+            f"```json\n{json.dumps(numbered, ensure_ascii=False)}\n```\n\n"
+            "## Required Output Schema (JSON Schema draft 2020-12)\n\n"
+            f"```json\n{json.dumps(READER_PATH_SCHEMA, ensure_ascii=False)}\n```\n\n"
+            "Return JSON only."
+        )
+        try:
+            stage = structured_call(
+                self.client, role="reader_path_review",
+                role_cfg=self.config.role("critic"),
+                system_prompt=_load_prompt(self.config.prompts_dir, "reader_path_review"),
+                user_message=user, validator=validate_reader_path,
+                on_delta=on_delta)
+        except StructuredOutputError as exc:
+            raise ReaderPathReviewFailed(
+                "稿件路径检查未能产生完整结果，请重试。") from exc
+        _operation_record("reader_path_review", data={
+            "step_count": len(stage.data.get("steps") or []),
+            "issue_count": len(stage.data.get("issues") or []),
             "repair_used": bool(getattr(stage, "repair_used", False))})
         return stage.data
 

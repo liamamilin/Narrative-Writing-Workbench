@@ -267,6 +267,9 @@ def test_v3_backup_is_accepted_and_upgrades_to_current(tmp_path):
     db = Database(path)
     db.conn.close()
     with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX reader_path_steps_review")
+        conn.execute("DROP TABLE reader_path_steps")
+        conn.execute("ALTER TABLE reviews DROP COLUMN analysis_type")
         conn.execute("DROP INDEX claim_checks_task")
         conn.execute("DROP INDEX claim_links_check")
         conn.execute("DROP TABLE claim_links")

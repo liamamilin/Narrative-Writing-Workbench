@@ -89,6 +89,7 @@ class Operation:
             "writer": "writing",
             "critic": "review",
             "evidence_check": "evidence_check",
+            "reader_path_review": "reader_path_review",
             "patcher": "revision",
         }
         usage = call.get("usage")

@@ -140,7 +140,7 @@ async function main() {
         JSON.stringify(await api('GET', `/tasks/${quick}/meaning`))===JSON.stringify(firstMeaning), 'restore meaning');
       await go(`/tasks/${quick}`); await page.locator('#tab-map').click();
       const beat=page.locator('.beat').first(); await beat.waitFor();
-      assert.match(await page.locator('#center-body').innerText(),/结构参考/);
+      assert.match(await page.locator('#center-body').innerText(),/原定路径/);
       await beat.focus(); await page.keyboard.press('Enter');
       await page.locator('#selbar.show').waitFor();
       assert.ok(await page.locator('#editor .para.sel').count());
@@ -423,6 +423,55 @@ async function main() {
       const after=(await api('GET',`/tasks/${created.id}`)).draft;
       assert.equal(after.versions.length,before.versions.length+1);
       await page.screenshot({path:path.join(output,'evidence-cards.png'),fullPage:true});
+    });
+    await check('B16 current-draft reader path and revision lifecycle', async()=>{
+      const repeated='老人把钟放回桌上。';
+      const created=await api('POST','/tasks',{
+        input_mode:'draft_revision',type:'essay',title:'稿件路径测试',
+        instruction:'检查实际推进，删去重复。',
+        material:`${repeated}\n\n${repeated}\n\n因此，他已经不再等待。`
+      });
+      await go(`/tasks/${created.id}`); await editor().waitFor();
+      assert.match(await page.locator('.tabs').innerText(),/原定路径/);
+      assert.match(await page.locator('.tabs').innerText(),/稿件检查/);
+      await page.locator('#tab-reader').click();
+      await page.locator('#reader-run').waitFor();
+      assert.match(await page.locator('#center-body').innerText(),/不是真实读者实验/);
+      await page.locator('#reader-run').click();
+      await until(async()=>await page.locator('.path-step').count()===3,'three reader path steps');
+      await page.locator('[data-reader-fix]').first().waitFor();
+      const pathReview=await api('GET',`/tasks/${created.id}/reader-path-review`);
+      assert.equal(pathReview.steps.length,3);
+      assert.ok(pathReview.issues.some(issue=>issue.type==='repetition'));
+      assert.ok(pathReview.issues.some(issue=>issue.type==='reasoning_gap'));
+      const before=(await api('GET',`/tasks/${created.id}`)).draft;
+
+      await page.locator('.path-step').nth(1).focus();
+      await page.keyboard.press('Enter');
+      await page.locator('.para[data-p="2"].hl').waitFor();
+      await page.locator('#tab-reader').click();
+      await page.locator('[data-reader-fix]').first().click();
+      await page.locator('.patch-card').waitFor();
+      assert.equal((await api('GET',`/tasks/${created.id}`)).draft.working_content,
+        before.working_content,'reader path proposal must not edit the draft');
+      await page.locator('.act-reject').click();
+      await until(async()=>await page.locator('.patch-card').count()===0,
+        'reader path rejection refresh');
+      await page.locator('#tab-reader').click();
+      await until(async()=>/待处理/.test(await page.locator('.reader-issue').first().innerText()),
+        'rejected path issue reopens');
+
+      await page.locator('[data-reader-fix]').first().click();
+      await page.locator('.patch-card').waitFor();
+      await page.locator('.act-accept').click();
+      await until(async()=>await page.locator('.patch-card').count()===0,
+        'reader path acceptance refresh');
+      await page.locator('#tab-reader').click();
+      await until(async()=>/已过期/.test(await page.locator('#center-body').innerText()),
+        'reader path stales after accepted patch');
+      const after=(await api('GET',`/tasks/${created.id}`)).draft;
+      assert.equal(after.versions.length,before.versions.length+1);
+      await page.screenshot({path:path.join(output,'reader-path.png'),fullPage:true});
     });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {

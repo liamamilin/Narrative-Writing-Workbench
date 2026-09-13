@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import meaning_schema
 from .evidence_schema import validate_evidence
+from .reader_path_schema import validate_reader_path
 from . import settings as settings_mod
 from .backup import (BackupError, create_backup as build_workspace_backup,
                      inspect_backup as inspect_workspace_backup,
@@ -51,6 +52,9 @@ EVIDENCE_TASK_TYPES = {"narrative_analysis", "character_analysis", "essay"}
 EVIDENCE_MAX_DRAFT_CHARS = 20_000
 EVIDENCE_MAX_SOURCES = 20
 EVIDENCE_MAX_SOURCE_CHARS = 60_000
+READER_PATH_MAX_DRAFT_CHARS = 30_000
+READER_PATH_MAX_PARAGRAPHS = 80
+READER_PATH_MAX_PARAGRAPH_CHARS = 10_000
 # writing_mode -> engine task type (engine task types are closed; map onto them)
 _WRITING_MODE_TO_TYPE = {
     "deep_narrative": "essay",
@@ -449,7 +453,7 @@ class Service:
         task["operation"] = self._operation_view(tid)
         task["review"] = None
         if draft:
-            row = self.db.q1("SELECT * FROM reviews WHERE draft_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            row = self.db.q1("SELECT * FROM reviews WHERE draft_id=? AND analysis_type='writing' ORDER BY created_at DESC,rowid DESC LIMIT 1",
                              (draft["id"],))
             if row:
                 task["review"] = self._review_payload(row, task, draft)
@@ -1274,7 +1278,7 @@ class Service:
         if not draft:
             raise ApiError("NO_DRAFT", "Generate a draft before review.", 409)
         row = self.db.q1(
-            "SELECT * FROM reviews WHERE draft_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            "SELECT * FROM reviews WHERE draft_id=? AND analysis_type='writing' ORDER BY created_at DESC,rowid DESC LIMIT 1",
             (draft["id"],))
         if not row:
             return {"review_id": None, "revision": draft["revision"], "stale": False,
@@ -1502,6 +1506,187 @@ class Service:
     def dismiss_claim_link(self, link_id: str) -> dict:
         return self._update_claim_status(link_id, "dismissed")
 
+    # ------------------------------------------------------ reader path ----
+
+    @staticmethod
+    def _reader_path_is_stale(review: dict, draft: dict) -> bool:
+        return (review["draft_id"] != draft["id"]
+                or review["draft_revision"] != draft["revision"]
+                or review["content_hash"] != content_hash(draft["working_content"]))
+
+    def _reader_path_payload(self, review: dict, draft: dict) -> dict:
+        stale = self._reader_path_is_stale(review, draft)
+        steps = [{
+            "id": step["id"], "step_id": step["step_id"],
+            "location": {"paragraph_start": step["paragraph_start"],
+                         "paragraph_end": step["paragraph_end"]},
+            "quote": step["quote"], "primary_function": step["primary_function"],
+            "knowledge_gain": step["knowledge_gain"],
+            "question_raised": step.get("question_raised"),
+            "question_answered": step.get("question_answered"),
+        } for step in self.db.q(
+            "SELECT * FROM reader_path_steps WHERE review_id=? ORDER BY paragraph_start,rowid",
+            (review["id"],))]
+        items = {item["issue_id"]: item for item in self.db.q(
+            "SELECT * FROM revision_items WHERE review_id=? ORDER BY rowid",
+            (review["id"],))}
+        issues = []
+        for raw in json.loads(review["issues_json"]):
+            issue = dict(raw)
+            item = items.get(issue["id"])
+            if not item:
+                continue
+            status = ("stale" if stale and item["status"] in ("open", "proposed")
+                      else item["status"])
+            issue.update({
+                "revision_item_id": item["id"], "status": status,
+                "severity": item["severity"], "message": item["message"],
+                "effect": item["effect"], "goal": item["goal"],
+                "quote": item["quote"],
+                "location": {"paragraph_start": item["paragraph_start"],
+                             "paragraph_end": item["paragraph_end"]},
+                "fixable": status == "open",
+            })
+            issues.append(issue)
+        priority = {"major": 0, "moderate": 1, "minor": 2}
+        issues.sort(key=lambda item: (
+            0 if item["status"] in ("open", "proposed") else 1,
+            priority.get(item["severity"], 9), item["location"]["paragraph_start"]))
+        return {"id": review["id"], "revision": review["draft_revision"],
+                "stale": stale,
+                "overview": json.loads(review["summary_json"])["overview"],
+                "steps": steps, "issues": issues}
+
+    @tracked("reader_path_review")
+    def review_reader_path(self, tid: str) -> dict:
+        task = self.get_task(tid)
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        if not draft or not draft["working_content"].strip():
+            raise ApiError("NO_DRAFT", "请先生成或导入正文。", 409)
+        content = draft["working_content"]
+        numbered = [(number, paragraph) for number, paragraph in
+                    enumerate(paragraphs(content), 1) if paragraph.strip()]
+        if len(content) > READER_PATH_MAX_DRAFT_CHARS:
+            raise ApiError("READER_PATH_INPUT_TOO_LARGE",
+                           "正文超过 30,000 字符，请缩小检查范围。", 413)
+        if len(numbered) > READER_PATH_MAX_PARAGRAPHS:
+            raise ApiError("READER_PATH_INPUT_TOO_LARGE",
+                           "正文超过 80 个非空段落，请缩小检查范围。", 413)
+        if any(len(paragraph) > READER_PATH_MAX_PARAGRAPH_CHARS
+               for _, paragraph in numbered):
+            raise ApiError("READER_PATH_INPUT_TOO_LARGE",
+                           "单个段落超过 10,000 字符，请先拆分段落。", 413)
+        digest = content_hash(content)
+        CURRENT.get().bind_inputs({"revision": draft["revision"],
+                                   "content_hash": digest,
+                                   "paragraph_count": len(numbered)})
+        ch = CURRENT.get().channel
+        callback = _stage_stream(ch.emit, "reader_path_review") if _debug_stream() else None
+        ch.emit("stage", {"stage": "reader_path_review"})
+        try:
+            payload = CURRENT.get().engine.review_reader_path(
+                content=content, on_delta=callback)
+        except EngineError as exc:
+            raise ApiError("READER_PATH_REVIEW_FAILED", str(exc), 500, True) from exc
+        except Exception as exc:
+            log.exception("ungrouped reader-path review error for %s", tid)
+            raise ApiError("READER_PATH_REVIEW_FAILED",
+                           f"稿件路径检查失败:{type(exc).__name__} — 请重试。",
+                           500, True) from exc
+        finally:
+            if callback:
+                callback.flush()
+        if validate_reader_path(payload):
+            raise ApiError("READER_PATH_REVIEW_FAILED",
+                           "稿件路径检查返回了无法验证的结构，请重试。", 500, True)
+        by_number = {number: paragraph for number, paragraph in numbered}
+        step_numbers = [step["paragraph"] for step in payload["steps"]]
+        if (len(step_numbers) != len(set(step_numbers))
+                or set(step_numbers) != set(by_number)
+                or any(step["paragraph_quote"] != by_number.get(step["paragraph"])
+                       for step in payload["steps"])):
+            raise ApiError("READER_PATH_INCOMPLETE",
+                           "稿件路径没有完整对应当前正文，请重试。", 500, True)
+
+        review_id, ts = new_id("rpath"), now()
+        normalized_issues = []
+        for raw in payload["issues"]:
+            ps, pe = raw["paragraph_start"], raw["paragraph_end"]
+            try:
+                region_start, region_end = paragraph_span(content, ps, pe)
+            except ApiError:
+                continue
+            anchor = unique_quote_span(content, raw["quote"], region_start, region_end)
+            if not anchor:
+                continue
+            normalized_issues.append({**raw, "anchor": anchor})
+
+        with self.db.transaction() as tx:
+            current = tx.q1("SELECT * FROM drafts WHERE id=?", (draft["id"],))
+            if (not current or current["revision"] != draft["revision"]
+                    or content_hash(current["working_content"]) != digest):
+                raise ApiError("STALE_BASE",
+                               "正文在稿件检查期间发生了变化，请重新检查。", 409, True)
+            tx.exec(
+                "UPDATE revision_items SET status='stale',updated_at=? WHERE review_id IN "
+                "(SELECT id FROM reviews WHERE draft_id=? AND analysis_type='reader_path') "
+                "AND status IN ('open','proposed')", (ts, draft["id"]))
+            issues_for_json = []
+            for raw in normalized_issues:
+                item_id = new_id("item")
+                anchor = raw["anchor"]
+                tx.exec(
+                    "INSERT INTO revision_items(id,review_id,draft_id,issue_id,base_revision,"
+                    "content_hash,paragraph_start,paragraph_end,char_start,char_end,quote,type,"
+                    "severity,message,effect,goal,status,created_at,updated_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?,?)",
+                    (item_id, review_id, draft["id"], raw["id"], draft["revision"],
+                     digest, raw["paragraph_start"], raw["paragraph_end"],
+                     anchor[0], anchor[1], raw["quote"], f"reader_path:{raw['type']}",
+                     raw["severity"], raw["message"], raw["effect"], raw["goal"], ts, ts))
+                issues_for_json.append({key: raw[key] for key in
+                                        ("id", "type", "severity", "message", "effect", "goal")})
+            tx.exec(
+                "INSERT INTO reviews(id,draft_id,version_id,summary_json,issues_json,created_at,"
+                "content_hash,draft_revision,config_json,operation_id,analysis_type)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,'reader_path')",
+                (review_id, draft["id"], draft["current_version_id"],
+                 json.dumps({"overview": payload["overview"]}, ensure_ascii=False),
+                 json.dumps(issues_for_json, ensure_ascii=False), ts, digest,
+                 draft["revision"], json.dumps({"analysis_type": "reader_path"}),
+                 CURRENT.get().id))
+            for step in payload["steps"]:
+                char_start, char_end = paragraph_span(
+                    content, step["paragraph"], step["paragraph"])
+                tx.exec(
+                    "INSERT INTO reader_path_steps(id,review_id,draft_id,step_id,base_revision,"
+                    "content_hash,paragraph_start,paragraph_end,char_start,char_end,quote,"
+                    "primary_function,knowledge_gain,question_raised,question_answered,created_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (new_id("rstep"), review_id, draft["id"], step["id"],
+                     draft["revision"], digest, step["paragraph"], step["paragraph"],
+                     char_start, char_end, step["paragraph_quote"],
+                     step["primary_function"], step["knowledge_gain"],
+                     step["question_raised"], step["question_answered"], ts))
+        ch.emit("stage_summary", {"stage": "reader_path_review",
+                                  "text": f"稿件路径：{len(numbered)} 段 · {len(normalized_issues)} 个问题"})
+        ch.emit("done", {"reader_path_review_id": review_id})
+        review = self.db.q1("SELECT * FROM reviews WHERE id=?", (review_id,))
+        return self._reader_path_payload(review, draft)
+
+    def reader_path_review(self, tid: str) -> dict:
+        self.get_task(tid)
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        if not draft:
+            raise ApiError("NO_DRAFT", "请先生成或导入正文。", 409)
+        review = self.db.q1(
+            "SELECT * FROM reviews WHERE draft_id=? AND analysis_type='reader_path' "
+            "ORDER BY created_at DESC,rowid DESC LIMIT 1", (draft["id"],))
+        if not review:
+            return {"id": None, "revision": draft["revision"], "stale": False,
+                    "overview": "", "steps": [], "issues": []}
+        return self._reader_path_payload(review, draft)
+
     @staticmethod
     def _invalidate_revision_context(tx, draft_id: str, *, preserve: bool) -> None:
         ts = now()
@@ -1687,7 +1872,12 @@ class Service:
         if payload.get("review_id"):
             row = self.db.q1("SELECT * FROM reviews WHERE id=? AND draft_id=?",
                              (payload["review_id"], draft["id"]))
-            if not row or self._review_payload(row, task, draft)["stale"]:
+            stale = (not row or
+                     (row["analysis_type"] == "writing"
+                      and self._review_payload(row, task, draft)["stale"]) or
+                     (row["analysis_type"] == "reader_path"
+                      and self._reader_path_is_stale(row, draft)))
+            if stale:
                 raise ApiError("STALE_REVIEW", "正文或目标已改变，请重新检查后再修改。", 409, True)
         content = draft["working_content"]
         char_start, char_end = paragraph_span(content, ps, pe)

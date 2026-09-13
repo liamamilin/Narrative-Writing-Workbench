@@ -176,3 +176,12 @@
 - 右侧检查页新增正文—依据卡—素材定位、独立用户确认/忽略和局部处理；提案复用 F03 的 Before/After、Accept/Reject 与 Version 安全。
 - F04/F03/备份/运行事务专项 42 passed；全量 349 passed / 31.34 秒，纯源码副本 349 passed / 33.15 秒；Chrome B01–B15 全部通过且无未处理页面异常。
 - 工程验收不能证明真实模型的支持关系判断质量。F04-7 的错误支持、遗漏和用户核查耗时仍待真实样本评估。
+
+### 2026-09-13 — F05 读者路径检查
+
+- 新建 Product V0.6 增量规格、离线可行性门槛和实施评审；固定样例覆盖逐字重复、无中间依据的结论和提出后未回答的问题，产物必须增加完整逐段路径，不能只是改写现有 Review 评分。
+- adapter 新增有界 `review_reader_path()`；Real 使用外置 prompt/schema，Mock 保持同形。服务端要求每个非空段落恰好一个逐字匹配步骤，遗漏或重复使整轮失败；问题 quote 无法唯一定位时不创建工作单。
+- 数据库升至 schema v6，以 `reviews.analysis_type` 隔离普通写作检查和稿件路径检查，新增 `reader_path_steps`，路径问题复用 F03 `revision_items`。严格备份预检支持 v3–v6，并验证步骤、Review 与 Draft 关系。
+- 工作台中栏将旧 Writing Map 明确命名为“原定路径”，新增“稿件检查”双栏视图。逐段路径和问题都可定位正文；问题可跳过或生成 ProposedPatch，拒绝后重开，接受后新建 Version 并使旧检查过期。
+- F05 专项 10 passed，F03–F05/备份/operation 相关 52 passed；全量 359 passed / 31.65 秒，纯源码副本 359 passed / 31.97 秒。Chrome 152 / Playwright 1.62.1 的 B01–B16 全部通过，无未处理页面异常。
+- F05-5 仍待真实模型自然文章评估，需记录相对 Review 的新增有效问题、误报/遗漏、修订改善和等待成本。下一工程候选为 F06 本地选题箱。

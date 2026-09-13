@@ -23,6 +23,9 @@ Material → Intent → Generate → Read → Review → Patch → Accept
 | Product V0.1 Quick Write | ✅ 完成(Q0–Q9) | `docs/narrative-writing-product-v0.1-quick-write-spec/`, `docs/reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md` |
 | Product V0.2 Export/Backup | ✅ 完成(E0–E6) | `docs/narrative-writing-product-v0.2-export-backup-spec/`, `docs/reports/PRODUCT_V0_2_BACKUP_RESTORE_IMPLEMENTATION_REPORT.md` |
 | Product V0.3 Angle Confirmation | ✅ 完成(A0–A5) | `docs/narrative-writing-product-v0.3-angle-confirmation-spec/`, `docs/reports/PRODUCT_V0_3_ANGLE_CONFIRMATION_IMPLEMENTATION_REPORT.md` |
+| Product V0.4 Revision Worklist | ✅ 完成(W0–W6) | `docs/narrative-writing-product-v0.4-revision-worklist-spec/`, `docs/reports/PRODUCT_V0_4_REVISION_WORKLIST_IMPLEMENTATION_REPORT.md` |
+| Product V0.5 Evidence Cards | ✅ 完成(E0–E6) | `docs/narrative-writing-product-v0.5-evidence-cards-spec/`, `docs/reports/PRODUCT_V0_5_EVIDENCE_CARDS_IMPLEMENTATION_REPORT.md` |
+| Product V0.6 Reader Path | ✅ 工程完成(R0–R6；真实效果待评估) | `docs/narrative-writing-product-v0.6-reader-path-spec/`, `docs/reports/PRODUCT_V0_6_READER_PATH_IMPLEMENTATION_REPORT.md` |
 
 本轮稳定性修复与剩余验收见 [实施报告](docs/reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md)，持续进度见 [开发日志](docs/reports/DEVELOPMENT_PROGRESS.md)。
 
@@ -74,6 +77,7 @@ Accept(生成版本)→ Versions → Restore。工作台可把最新保存稿导
 检查面板会把问题整理为最多三项优先修订工作单；可定位、处理或跳过，也可先把已满意段落标为“保留原文”。
 
 有材料的观点与分析任务还可运行“检查材料依据”：关键陈述卡会并列展示正文原句、材料关系和可回查的 Source 原句。关系与用户确认状态分开保存；正文或素材变化后旧检查会过期，从卡片发起的修改仍须经过 Before/After 和人工接受。
+中栏把生成时的“原定路径”和当前正文的“稿件检查”分开：稿件检查逐段显示作用、认识增量与问题回答关系，可定位重复或推理跳跃，并把可靠定位的问题交给同一套安全修订流程。它是模型诊断，不代表真实读者实验。
 设置页的“本地数据”可下载全工作区备份，上传预检后恢复到独立目录；备份不包含模型设置或 API 密钥。
 
 硬规则:**AI proposes, user accepts** —— 补丁在 Accept 前绝不改动草稿;

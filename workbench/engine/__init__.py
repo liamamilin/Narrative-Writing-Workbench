@@ -32,6 +32,10 @@ class EvidenceCheckFailed(EngineError):
     retryable = True
 
 
+class ReaderPathReviewFailed(EngineError):
+    retryable = True
+
+
 class GenerateResult:
     def __init__(self, text: str, plan: dict):
         self.text = text
@@ -59,6 +63,8 @@ class WritingEngine(Protocol):
 
     def check_evidence(self, *, content: str,
                        sources: list[dict], on_delta=None) -> dict: ...
+
+    def review_reader_path(self, *, content: str, on_delta=None) -> dict: ...
 
     def patch(self, *, content: str, before_text: str, instruction: str,
               locks: dict, config: dict) -> str: ...

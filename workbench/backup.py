@@ -38,11 +38,12 @@ REQUIRED_COLUMNS = {
     "drafts": {"id", "task_id", "current_version_id", "working_content", "updated_at", "revision"},
     "versions": {"id", "draft_id", "parent_version_id", "content", "source_type", "instruction", "created_at", "engine_plan_id", "restore_source_version_id"},
     "proposed_patches": {"id", "draft_id", "base_version_id", "selection_json", "instruction", "before_text", "after_text", "status", "locks_json", "error", "created_at", "base_revision", "accepted_version_id", "task_locks_json"},
-    "reviews": {"id", "draft_id", "version_id", "summary_json", "issues_json", "created_at", "content_hash", "draft_revision", "config_json", "operation_id"},
+    "reviews": {"id", "draft_id", "version_id", "summary_json", "issues_json", "created_at", "content_hash", "draft_revision", "config_json", "operation_id", "analysis_type"},
     "revision_items": {"id", "review_id", "draft_id", "issue_id", "base_revision", "content_hash", "paragraph_start", "paragraph_end", "char_start", "char_end", "quote", "type", "severity", "message", "effect", "goal", "status", "patch_id", "created_at", "updated_at"},
     "preserved_spans": {"id", "draft_id", "base_revision", "content_hash", "paragraph_start", "paragraph_end", "char_start", "char_end", "quote", "status", "created_at", "updated_at"},
     "claim_checks": {"id", "task_id", "draft_id", "operation_id", "draft_revision", "content_hash", "sources_json", "created_at"},
     "claim_links": {"id", "check_id", "draft_id", "claim_id", "claim_type", "relation", "explanation", "revision_goal", "paragraph_start", "paragraph_end", "draft_char_start", "draft_char_end", "draft_quote", "source_id", "source_content_hash", "source_char_start", "source_char_end", "source_quote", "user_status", "patch_id", "created_at", "updated_at"},
+    "reader_path_steps": {"id", "review_id", "draft_id", "step_id", "base_revision", "content_hash", "paragraph_start", "paragraph_end", "char_start", "char_end", "quote", "primary_function", "knowledge_gain", "question_raised", "question_answered", "created_at"},
     "writing_operations": {"id", "task_id", "kind", "process_id", "status", "stage", "started_at", "finished_at", "elapsed_ms", "input_fingerprint", "snapshot_json", "retry_of", "error_code", "result_json", "usage_json"},
     "operation_events": {"operation_id", "seq", "kind", "data_json", "elapsed_ms", "created_at"},
     "operation_records": {"id", "operation_id", "category", "name", "status", "data_json", "elapsed_ms", "created_at"},
@@ -58,14 +59,24 @@ REQUIRED_INDEX_SQL = {
     "preserved_spans_draft": "create index preserved_spans_draft on preserved_spans(draft_id)",
     "claim_checks_task": "create index claim_checks_task on claim_checks(task_id)",
     "claim_links_check": "create index claim_links_check on claim_links(check_id)",
+    "reader_path_steps_review": "create index reader_path_steps_review on reader_path_steps(review_id)",
+}
+V5_REQUIRED_COLUMNS = {
+    table: set(columns) for table, columns in REQUIRED_COLUMNS.items()
+    if table != "reader_path_steps"
+}
+V5_REQUIRED_COLUMNS["reviews"].discard("analysis_type")
+V5_REQUIRED_INDEX_SQL = {
+    name: sql for name, sql in REQUIRED_INDEX_SQL.items()
+    if name != "reader_path_steps_review"
 }
 V4_REQUIRED_COLUMNS = {
-    table: set(columns) for table, columns in REQUIRED_COLUMNS.items()
+    table: set(columns) for table, columns in V5_REQUIRED_COLUMNS.items()
     if table not in {"claim_checks", "claim_links"}
 }
 V4_REQUIRED_COLUMNS["proposed_patches"].discard("claim_link_id")
 V4_REQUIRED_INDEX_SQL = {
-    name: sql for name, sql in REQUIRED_INDEX_SQL.items()
+    name: sql for name, sql in V5_REQUIRED_INDEX_SQL.items()
     if name not in {"claim_checks_task", "claim_links_check"}
 }
 V3_REQUIRED_COLUMNS = {
@@ -82,6 +93,8 @@ V3_REQUIRED_INDEX_SQL = {
 def _schema_contract(version: int):
     if version == SCHEMA_VERSION:
         return REQUIRED_COLUMNS, REQUIRED_INDEX_SQL
+    if version == 5:
+        return V5_REQUIRED_COLUMNS, V5_REQUIRED_INDEX_SQL
     if version == 4:
         return V4_REQUIRED_COLUMNS, V4_REQUIRED_INDEX_SQL
     if version == 3:
@@ -235,6 +248,10 @@ def _orphan_checks(version: int) -> list[tuple[str, str]]:
             ("claim_links.source", "SELECT 1 FROM claim_links x JOIN claim_checks c ON c.id=x.check_id LEFT JOIN sources s ON s.id=x.source_id LEFT JOIN task_sources ts ON ts.source_id=x.source_id AND ts.task_id=c.task_id WHERE x.source_id IS NOT NULL AND (s.id IS NULL OR ts.source_id IS NULL) LIMIT 1"),
             ("claim_links.patch", "SELECT 1 FROM claim_links x LEFT JOIN proposed_patches p ON p.id=x.patch_id WHERE x.patch_id IS NOT NULL AND (p.id IS NULL OR p.draft_id<>x.draft_id OR p.claim_link_id<>x.id) LIMIT 1"),
             ("patches.claim_link", "SELECT 1 FROM proposed_patches p LEFT JOIN claim_links x ON x.id=p.claim_link_id WHERE p.claim_link_id IS NOT NULL AND (x.id IS NULL OR x.draft_id<>p.draft_id OR x.patch_id<>p.id) LIMIT 1"),
+        ])
+    if version >= 6:
+        checks.extend([
+            ("reader_path_steps.review_draft", "SELECT 1 FROM reader_path_steps x LEFT JOIN reviews r ON r.id=x.review_id LEFT JOIN drafts d ON d.id=x.draft_id WHERE r.id IS NULL OR d.id IS NULL OR r.draft_id<>x.draft_id OR r.analysis_type<>'reader_path' LIMIT 1"),
         ])
     return checks
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "workbench" / "workbench.db"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects(
@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS proposed_patches(
 CREATE TABLE IF NOT EXISTS reviews(
   id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, version_id TEXT NOT NULL,
   summary_json TEXT NOT NULL, issues_json TEXT NOT NULL,
-  created_at TEXT NOT NULL);
+  created_at TEXT NOT NULL, analysis_type TEXT NOT NULL DEFAULT 'writing'
+    CHECK(analysis_type IN ('writing','reader_path')));
 CREATE TABLE IF NOT EXISTS revision_items(
   id TEXT PRIMARY KEY, review_id TEXT NOT NULL, draft_id TEXT NOT NULL,
   issue_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
@@ -114,6 +115,15 @@ CREATE TABLE IF NOT EXISTS claim_links(
     CHECK(user_status IN ('unreviewed','confirmed','dismissed')),
   patch_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(check_id, claim_id));
+CREATE TABLE IF NOT EXISTS reader_path_steps(
+  id TEXT PRIMARY KEY, review_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  step_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, paragraph_start INTEGER NOT NULL,
+  paragraph_end INTEGER NOT NULL, char_start INTEGER NOT NULL,
+  char_end INTEGER NOT NULL, quote TEXT NOT NULL,
+  primary_function TEXT NOT NULL, knowledge_gain TEXT NOT NULL,
+  question_raised TEXT, question_answered TEXT, created_at TEXT NOT NULL,
+  UNIQUE(review_id, step_id), UNIQUE(review_id, paragraph_start));
 CREATE TABLE IF NOT EXISTS writing_operations(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
   process_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','interrupted')),
@@ -134,6 +144,7 @@ CREATE INDEX IF NOT EXISTS revision_items_review ON revision_items(review_id);
 CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id);
 CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id);
 CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id);
+CREATE INDEX IF NOT EXISTS reader_path_steps_review ON reader_path_steps(review_id);
 CREATE TABLE IF NOT EXISTS generation_results(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, engine_plan_id TEXT,
   content TEXT NOT NULL, accepted_version_id TEXT, created_at TEXT NOT NULL);
@@ -177,7 +188,7 @@ class Database:
                 raise RuntimeError("Database schema is newer than this Workbench; use a compatible version.")
             if version < SCHEMA_VERSION and self.path != ":memory:" and self.conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
-                self.migration_backup = f"{self.path}.pre-v5-{new_id('backup')}.sqlite3"
+                self.migration_backup = f"{self.path}.pre-v6-{new_id('backup')}.sqlite3"
                 with sqlite3.connect(self.migration_backup) as backup:
                     self.conn.backup(backup)
             try:
@@ -227,7 +238,8 @@ class Database:
                                  ("revision_item_id", "TEXT"),
                                  ("claim_link_id", "TEXT")],
             "reviews": [("content_hash", "TEXT"), ("draft_revision", "INTEGER"),
-                        ("config_json", "TEXT"), ("operation_id", "TEXT")],
+                        ("config_json", "TEXT"), ("operation_id", "TEXT"),
+                        ("analysis_type", "TEXT NOT NULL DEFAULT 'writing'")],
         }
         for table, fields in additions.items():
             existing = cols(table)
@@ -255,6 +267,7 @@ class Database:
         self.conn.execute("CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS reader_path_steps_review ON reader_path_steps(review_id)")
         self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     # -- tiny helpers ----------------------------------------------------

@@ -162,6 +162,8 @@ Quick Write 保留“直接写”，新增可选“先定角度”。系统发�
 
 优先级：实验。预计 5–8 人日，其中先用 1–2 日做离线样例验证。
 
+实施状态：已于 2026-09-13 完成 F05-1～F05-4 的工程实现与固定样例门槛；F05-5 的真实模型命中、修订改善和等待成本待评估。规格与工程验收见 `docs/narrative-writing-product-v0.6-reader-path-spec/` 和 `docs/reports/PRODUCT_V0_6_READER_PATH_IMPLEMENTATION_REPORT.md`。
+
 ### 最小设计
 
 从实际正文生成只读诊断：段落主作用、增加的认识、留下/回答的问题、重复或跳跃的引用依据。与“原定结构”分开显示。
