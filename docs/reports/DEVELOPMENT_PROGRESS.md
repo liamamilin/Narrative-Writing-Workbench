@@ -223,3 +223,10 @@
 - 服务层识别 SDK/httpx/Python 超时链，进度事件和 API 返回同一条中文可操作信息，包含本次快照中的超时值；生成、检查也复用同一处理，避免先发笼统错误掩盖真实原因。
 - 页面刷新并重新接入运行时，从 operation `started_at` 恢复累计耗时；排队步骤改为“已开始”，超过 180 秒时说明会按设置中的单次超时停止。
 - 专项 94 项、全量 371 项通过，Python/JavaScript 语法与 diff 检查通过；Google Chrome 152 下 B01–B17 全部通过。修复后的 real Workbench 已重新启动，现场任务仍为 failed、Draft 为空。本轮没有重试真实模型，也没有修改任务正文或用户设置。
+
+### 2026-09-13 19:21 — 更换 API/模型后的现场复查
+
+- 用户将设置切换到 OpenCode Go 与 `mimo-v2.5` 后，原任务以 `op_8331ea0fb108` 续跑，operation 正确引用前一次失败；新 API、Key 和模型均被本次运行采用。
+- 这次不是连接或超时失败。首轮 meaning discovery 在 208.38 秒返回 1,955/6,000 tokens；结构修复在 125.69 秒返回 2,011/6,000 tokens。两轮都达到 6,000 输出上限，operation 在 334,087 ms 后以 `DISCOVERY_FAILED` 结束。
+- 内存 debug 流显示修复结果只生成到第一个候选角度标签开头，随后用大量空白耗尽输出上限；`json.loads` 在字符 21,139 后报告缺少分隔符。当前角色已经使用 `reasoning_effort: low`、`structured_mode: auto`，因此这是 `mimo-v2.5` 在该长结构 JSON 请求上的兼容/稳定性问题，不是 Workbench 卡死。
+- Draft、Version 和未应用结果仍为空，失败安全再次成立。没有继续自动重试。下一步应先换用已通过完整评估的模型，或单独实现结构调用的 finish-reason/截断诊断与模型兼容策略后再试 `mimo-v2.5`。
