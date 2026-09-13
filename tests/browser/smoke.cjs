@@ -287,6 +287,30 @@ async function main() {
       assert.equal(fs.readFileSync(await historical.path(),'utf8'),expected);
       assert.equal((await api('GET', `/tasks/${source}`)).draft.working_content,exportText);
     });
+    await check('B12 workspace backup inspection and independent restore', async()=>{
+      const before=(await api('GET', `/tasks/${source}`)).draft;
+      await go('/settings'); await page.locator('#backup-download').waitFor();
+      const download=page.waitForEvent('download');
+      await page.locator('#backup-download').click();
+      const saved=await download;
+      const backupPath=await saved.path();
+      assert.match(saved.suggestedFilename(),/\.nwb-backup\.zip$/);
+      assert.ok(fs.statSync(backupPath).size>0);
+
+      await page.locator('#backup-file').setInputFiles(backupPath);
+      assert.equal(await page.locator('#backup-restore').isDisabled(),true);
+      await page.locator('#backup-inspect').click();
+      await until(async()=>await page.locator('#backup-restore').isEnabled(),'backup inspection');
+      assert.match(await page.locator('#backup-result').innerText(),/预检通过.*任务.*版本/);
+
+      await page.locator('#backup-restore').click(); await confirm();
+      await until(async()=>/恢复完成/.test(await page.locator('#backup-result').innerText()),'independent restore');
+      const restoredRoot=path.join(dataDir,'restored');
+      const copies=fs.readdirSync(restoredRoot).filter(name=>name.startsWith('restored-'));
+      assert.equal(copies.length,1);
+      assert.ok(fs.existsSync(path.join(restoredRoot,copies[0],'workbench.db')));
+      assert.deepEqual((await api('GET', `/tasks/${source}`)).draft,before,'restore must not mutate current draft');
+    });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({environment,results,pageErrors},null,2));

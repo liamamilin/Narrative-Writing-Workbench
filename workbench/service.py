@@ -21,6 +21,9 @@ from pathlib import Path
 
 from . import meaning_schema
 from . import settings as settings_mod
+from .backup import (BackupError, create_backup as build_workspace_backup,
+                     inspect_backup as inspect_workspace_backup,
+                     restore_backup as restore_workspace_backup)
 from .db import Database, new_id
 from .engine import (EngineError, LockConflict,
                      get_engine)
@@ -207,9 +210,16 @@ def paragraph_span(content: str, start: int, end: int) -> tuple[int, int]:
 
 
 class Service:
-    def __init__(self, db: Database | None = None, engine=None):
+    def __init__(self, db: Database | None = None, engine=None,
+                 restore_root: str | Path | None = None):
         self.db = db or Database()
         self.engine = engine or get_engine()
+        if restore_root is None:
+            base = (Path(self.db.path).resolve().parent
+                    if self.db.path != ":memory:"
+                    else Path(__file__).resolve().parent)
+            restore_root = base / "restored"
+        self.restore_root = Path(restore_root)
         recover_interrupted(self.db)
 
     def _operation_view(self, tid):
@@ -1119,6 +1129,28 @@ class Service:
         return build_export(
             content=row["content"], title=row["title"], identifier=version_id,
             format_=format_, include_title=include_title)
+
+    def create_workspace_backup(self):
+        try:
+            return build_workspace_backup(self.db)
+        except BackupError as exc:
+            raise ApiError("BACKUP_FAILED", str(exc), 409) from exc
+
+    def inspect_workspace_backup(self, content: bytes) -> dict:
+        try:
+            return inspect_workspace_backup(content).summary
+        except BackupError as exc:
+            raise ApiError("INVALID_BACKUP", str(exc), 400) from exc
+
+    def restore_workspace_backup(self, content: bytes) -> dict:
+        try:
+            return restore_workspace_backup(content, self.restore_root)
+        except BackupError as exc:
+            raise ApiError("INVALID_BACKUP", str(exc), 400) from exc
+        except OSError as exc:
+            log.exception("Independent workspace restore failed")
+            raise ApiError("RESTORE_FAILED", "Could not create the restored workspace.",
+                           500, retryable=True) from exc
 
     def restore_version(self, version_id: str, expected_revision=None) -> dict:
         with self.db.transaction() as tx:

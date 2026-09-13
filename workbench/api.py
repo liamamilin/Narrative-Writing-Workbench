@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from .progress import BROKER, sse_format
+from .backup import MAX_ARCHIVE_BYTES
 from .service import ApiError, Service
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -44,6 +45,19 @@ def create_app(service: Service | None = None) -> FastAPI:
             "retryable": True}})
 
     svc = lambda: app.state.service  # noqa: E731
+
+    async def backup_body(request: Request) -> bytes:
+        length = request.headers.get("content-length")
+        if length:
+            try:
+                if int(length) > MAX_ARCHIVE_BYTES:
+                    raise ApiError("BACKUP_TOO_LARGE", "The backup file is too large.", 413)
+            except ValueError:
+                raise ApiError("VALIDATION", "Content-Length must be an integer.")
+        content = await request.body()
+        if len(content) > MAX_ARCHIVE_BYTES:
+            raise ApiError("BACKUP_TOO_LARGE", "The backup file is too large.", 413)
+        return content
 
     # ---------------------------------------------------------- projects ----
 
@@ -256,6 +270,22 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.post("/settings/test")
     def test_settings(body: dict):
         return svc().test_connection(body)
+
+    # ----------------------------------------------------------- backups ----
+
+    @app.get("/backups/export")
+    def export_backup():
+        artifact = svc().create_workspace_backup()
+        return Response(content=artifact.content, media_type=artifact.media_type,
+                        headers=artifact.headers)
+
+    @app.post("/backups/inspect")
+    async def inspect_backup(request: Request):
+        return svc().inspect_workspace_backup(await backup_body(request))
+
+    @app.post("/backups/restore")
+    async def restore_backup(request: Request):
+        return svc().restore_workspace_backup(await backup_body(request))
 
     @app.get("/")
     def index():

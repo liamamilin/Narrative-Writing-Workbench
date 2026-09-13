@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "workbench" / "workbench.db"
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects(
@@ -126,7 +127,7 @@ class Database:
         self.migration_backup = None
         with self._lock:
             version = self.conn.execute("PRAGMA user_version").fetchone()[0]
-            if version > 3:
+            if version > SCHEMA_VERSION:
                 self.conn.close()
                 raise RuntimeError("Database schema is newer than this Workbench; use a compatible version.")
             if version < 3 and self.path != ":memory:" and self.conn.execute(
@@ -203,7 +204,7 @@ class Database:
                               (vid, did, original["content"], "恢复旧稿入口的原稿", at))
             self.conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (original["id"],))
         self.conn.execute("CREATE INDEX IF NOT EXISTS versions_plan ON versions(engine_plan_id)")
-        self.conn.execute("PRAGMA user_version=3")
+        self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     # -- tiny helpers ----------------------------------------------------
 
@@ -232,3 +233,18 @@ class Database:
     def q1(self, sql: str, params: tuple = ()):
         rows = self.q(sql, params)
         return rows[0] if rows else None
+
+    def backup_to(self, destination: str | Path) -> None:
+        """Write a transactionally consistent SQLite snapshot.
+
+        SQLite's backup API includes committed WAL pages and keeps the snapshot
+        internally consistent while ordinary Workbench reads and writes may
+        continue around it.
+        """
+        destination = str(destination)
+        with self._lock, sqlite3.connect(destination) as target:
+            self.conn.backup(target)
+            # A source in WAL mode can copy that persistent journal setting.
+            # The portable snapshot is a single file, so normalize the target
+            # before closing instead of depending on sidecar -wal/-shm files.
+            target.execute("PRAGMA journal_mode=DELETE")

@@ -13,13 +13,13 @@
 | [项目现状与检查结果](../reports/PROJECT_STATUS_AND_NEXT_STEPS_2026_09_13.md) | 已有什么能力，有哪些已复现问题，还有哪些证据缺口？ | 已完成本地检查 |
 | [现有产品详细开发计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md) | 先修什么，怎样实现、测试、迁移和验收？ | 开发中，核心修复已落地 |
 | [产品演进方向与功能路线图](PRODUCT_EVOLUTION_ROADMAP.md) | 产品应往哪里发展，哪些新功能值得先做？ | 提案 |
-| [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md) | 每项候选功能怎样拆成可交付工作？ | F01 开发中，其余待选择 |
+| [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md) | 每项候选功能怎样拆成可交付工作？ | F01 已完成，F02 为下一候选 |
 
-[本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.2 导出规格](../narrative-writing-product-v0.2-export-backup-spec/README.md) · [文本导出报告](../reports/PRODUCT_V0_2_EXPORT_IMPLEMENTATION_REPORT.md)
+[本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.2 导出规格](../narrative-writing-product-v0.2-export-backup-spec/README.md) · [文本导出报告](../reports/PRODUCT_V0_2_EXPORT_IMPLEMENTATION_REPORT.md) · [备份恢复报告](../reports/PRODUCT_V0_2_BACKUP_RESTORE_IMPLEMENTATION_REPORT.md)
 
 ## 当前建议
 
-先完成现有产品的提交安全、版本关联与主流程可靠性，再推进“本地导出与备份”和“写前确认卡”。随后依据真实使用中的主要问题，选择“修订工作单”或“论点与素材依据”；其余候选按验证结果启动。
+F01 “本地导出与备份”已完成。下一候选是 F02 “写前确认卡”，实施前应先把候选角度、用户编辑边界和过期语义固化为新的增量规格。随后依据真实使用中的主要问题，选择“修订工作单”或“论点与素材依据”。
 
 | 阶段 | 任务编号 | 退出条件 |
 |---|---|---|

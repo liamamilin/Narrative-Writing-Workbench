@@ -21,7 +21,7 @@ Material → Intent → Generate → Read → Review → Patch → Accept
 | V1.2 干净因果消融 | ✅ 完成(23 对待人工盲评) | `docs/16-18`, `docs/reports/V1_2_RUN_REPORT.md` |
 | Product V0 Workbench | ✅ 完成(M0–M10) | `docs/narrative-writing-product-v0-spec/`, `docs/reports/PRODUCT_V0_IMPLEMENTATION_REPORT.md` |
 | Product V0.1 Quick Write | ✅ 完成(Q0–Q9) | `docs/narrative-writing-product-v0.1-quick-write-spec/`, `docs/reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md` |
-| Product V0.2 Export/Backup | 🚧 文本导出完成，备份恢复开发中 | `docs/narrative-writing-product-v0.2-export-backup-spec/`, `docs/reports/PRODUCT_V0_2_EXPORT_IMPLEMENTATION_REPORT.md` |
+| Product V0.2 Export/Backup | ✅ 完成(E0–E6) | `docs/narrative-writing-product-v0.2-export-backup-spec/`, `docs/reports/PRODUCT_V0_2_BACKUP_RESTORE_IMPLEMENTATION_REPORT.md` |
 
 本轮稳定性修复与剩余验收见 [实施报告](docs/reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md)，持续进度见 [开发日志](docs/reports/DEVELOPMENT_PROGRESS.md)。
 
@@ -67,9 +67,10 @@ cp workbench/settings.example.json workbench/settings.json
 > 密钥只存本地 `workbench/settings.json`(已在 `.gitignore` 中,永不入库);
 > 服务启动时把它注入进程环境,API 只回传掩码。`scripts/launch_workbench.sh stop` 停止。
 
-体验金路径:Start Writing → 粘贴素材 + 意图 → Create & Write → Generate
+体验路径:Start Writing → 粘贴素材 + 意图 → Create & Write → Generate
 Draft → 点选段落 → Revise/Shorter… → Generate Patch → Before/After →
 Accept(生成版本)→ Versions → Restore。工作台可把最新保存稿导出为 Markdown/纯文本，版本页也可下载任意历史版本。
+设置页的“本地数据”可下载全工作区备份，上传预检后恢复到独立目录；备份不包含模型设置或 API 密钥。
 
 硬规则:**AI proposes, user accepts** —— 补丁在 Accept 前绝不改动草稿;
 Reject 保留提案记录、不创建正文版本;生成/补丁失败不破坏已有正文;Restore 自身可逆;

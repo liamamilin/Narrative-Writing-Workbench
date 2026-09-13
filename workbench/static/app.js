@@ -53,6 +53,20 @@ async function downloadExport(path) {
   return filename;
 }
 
+async function uploadBackup(path, file) {
+  let r;
+  try {
+    r = await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: file,
+    });
+  } catch (_) {
+    throw { code: "BACKEND_DOWN", message: "连不上本机 Workbench 服务。", retryable: true };
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw data.error || { code: "NETWORK", message: r.statusText, retryable: false };
+  return data;
+}
+
 let toastTimer;
 function toast(msg, err = false) {
   const t = $("#toast");
@@ -725,6 +739,20 @@ async function settings() {
       <button id="s-test" data-tip="用当前参数发一次最小请求，不保存">测试连接</button>
       <span id="s-result" class="small"></span>
     </p>
+    <section class="card" style="margin-top:28px">
+      <h2>本地数据</h2>
+      <p class="muted small">备份包含已保存的项目、素材、正文和版本，不包含 settings.json、API 密钥、环境变量或日志。
+      恢复会创建新的独立工作区，不会改写当前数据。</p>
+      <p><button id="backup-download" data-tip="下载当前整个工作区的一致性快照">下载工作区备份</button></p>
+      <label for="backup-file">预检并恢复备份</label>
+      <input id="backup-file" type="file" accept=".zip,application/zip"
+        data-tip="先校验包格式、hash、数据库完整性和引用关系">
+      <p class="row">
+        <button id="backup-inspect" disabled>预检备份</button>
+        <button class="primary" id="backup-restore" disabled>恢复到新工作区</button>
+      </p>
+      <p id="backup-result" class="muted small" role="status"></p>
+    </section>
   </div>`;
 
   const PROVIDERS = pr.providers;
@@ -813,6 +841,58 @@ async function settings() {
       else showResult(`<span style="color:var(--warn)">✗ ${esc(r.error)}</span>`);
     } catch (e) { showResult(`<span style="color:var(--warn)">✗ ${esc(e.message)}</span>`); }
     finally { btn.disabled = false; btn.textContent = "测试连接"; }
+  };
+
+  let backupFile = null, inspectedFile = null;
+  const backupResult = (message, error = false) => {
+    if (!stillHere()) return;
+    const out = $("#backup-result");
+    out.textContent = message;
+    out.style.color = error ? "var(--warn)" : "";
+  };
+  $("#backup-download").onclick = async () => {
+    const btn = $("#backup-download"); btn.disabled = true;
+    try {
+      const filename = await downloadExport("/backups/export");
+      toast(`已下载 ${filename}`);
+    } catch (e) { toast(e.message, true); }
+    finally { if (stillHere()) btn.disabled = false; }
+  };
+  $("#backup-file").onchange = e => {
+    backupFile = e.target.files[0] || null;
+    inspectedFile = null;
+    $("#backup-inspect").disabled = !backupFile;
+    $("#backup-restore").disabled = true;
+    backupResult(backupFile ? `已选择 ${backupFile.name}，请先预检。` : "");
+  };
+  $("#backup-inspect").onclick = async () => {
+    if (!backupFile) return;
+    const btn = $("#backup-inspect"); btn.disabled = true;
+    inspectedFile = null; $("#backup-restore").disabled = true;
+    backupResult("正在预检…");
+    try {
+      const r = await uploadBackup("/backups/inspect", backupFile);
+      if (!stillHere()) return;
+      inspectedFile = backupFile;
+      $("#backup-restore").disabled = false;
+      const c = r.table_counts;
+      backupResult(`预检通过 · schema v${r.schema_version} · ${c.projects} 个项目 · ${c.tasks} 个任务 · ${c.drafts} 份正文 · ${c.versions} 个版本`);
+    } catch (e) { backupResult(`预检失败：${e.message}`, true); }
+    finally { if (stillHere()) btn.disabled = !backupFile; }
+  };
+  $("#backup-restore").onclick = async () => {
+    if (!backupFile || inspectedFile !== backupFile) return;
+    if (!(await confirmDialog("恢复工作区",
+      "将在本机创建一个新的独立工作区。当前数据不会改变。",
+      "创建恢复副本", "取消"))) return;
+    const btn = $("#backup-restore"); btn.disabled = true;
+    backupResult("正在创建独立副本…");
+    try {
+      const r = await uploadBackup("/backups/restore", backupFile);
+      backupResult(`恢复完成。新工作区：${r.restored_directory}`);
+      toast("已创建独立恢复副本。");
+    } catch (e) { backupResult(`恢复失败：${e.message}`, true); }
+    finally { if (stillHere()) btn.disabled = inspectedFile !== backupFile; }
   };
 }
 

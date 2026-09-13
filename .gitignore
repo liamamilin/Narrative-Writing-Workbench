@@ -4,6 +4,7 @@ workbench/env.sh
 .env
 workbench/workbench.db
 workbench/workbench.db-*
+workbench/restored/
 *.db
 *.db.server.lock
 *.db.pre-v*-*.sqlite3
