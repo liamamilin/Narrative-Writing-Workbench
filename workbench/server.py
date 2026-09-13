@@ -6,6 +6,13 @@ import os
 
 
 def main() -> None:
+    from .db import DEFAULT_DB
+    from .instance import server_lease
+    with server_lease(os.environ.get("WORKBENCH_DB", DEFAULT_DB)):
+        serve()
+
+
+def serve() -> None:
     import uvicorn
     from .api import create_app
     from .idle import IdleTracker, install, timeout_from_env

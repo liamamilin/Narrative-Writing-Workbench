@@ -25,9 +25,13 @@ from app.structured import structured_call
 from ..meaning_schema import (JUDGE_SCHEMA, MEANING_SCHEMA, judge_failed,
                               selected_angle, validate_judge, validate_meaning,
                               meaning_to_wir_block)
+from ..evidence_schema import SCHEMA as EVIDENCE_SCHEMA, validate_evidence
+from ..reader_path_schema import (SCHEMA as READER_PATH_SCHEMA,
+                                  validate_reader_path)
 from ..topic_schema import validate_topics
-from . import (DiscoveryFailed, GenerationFailed, GenerateResult,
+from . import (DiscoveryFailed, EvidenceCheckFailed, GenerationFailed, GenerateResult,
                LockConflict, map_beats_to_paragraphs, split_paragraphs)
+from . import ReaderPathReviewFailed
 
 _TASK_TYPE_MAP = {
     "fiction_scene": "narrative_commentary",
@@ -52,6 +56,15 @@ _TASK_DESCRIPTIONS = {
 _MATERIAL_CAP = 8000
 
 
+def _operation_record(name: str, status: str = "completed",
+                      data: dict | None = None) -> None:
+    """Persist product-safe diagnostics when called inside a Workbench run."""
+    from ..operations import CURRENT
+    operation = CURRENT.get()
+    if operation:
+        operation.record("stage_result", name, status, data)
+
+
 def _extract_json(text: str) -> dict:
     for candidate in (text, text.strip()):
         try:
@@ -71,7 +84,15 @@ def _extract_json(text: str) -> dict:
 class RealWritingEngine:
     name = "real"
 
-    def __init__(self, config_path: str | None = None):
+    def __init__(self, config_path: str | None = None, *, max_retries: int = 0):
+        """Build the product adapter with a bounded provider call.
+
+        Workbench operations already expose an explicit user-controlled retry.
+        Provider SDK retries multiply the configured per-call timeout and make
+        a stalled local model look like an indefinitely stuck task, so the
+        product adapter disables them by default. Engine/evaluation callers
+        may still opt into a different value explicitly.
+        """
         if config_path is None:
             config_path = os.environ.get("WORKBENCH_CONFIG")
         if config_path is None:
@@ -80,7 +101,7 @@ class RealWritingEngine:
             config_path = str(live) if live.exists() else None
         self.config = Config.load(config_path) if config_path else Config.default()
         self._apply_settings()
-        self.client = build_client(self.config)
+        self.client = build_client(self.config, max_retries=max_retries)
         self.schemas = SchemaSet(self.config.schemas_dir)
         from app.architect import ArchitectAgent
         from app.critic import CriticAgent
@@ -118,10 +139,15 @@ class RealWritingEngine:
         if emit:
             emit("stage", {"stage": "discovery"})
         base_avoid = list(avoid or [])
-        data = self._discover_once(
-            topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
-            custom_angle=custom_angle, avoid=base_avoid, feedback=None,
-            on_delta=on_delta)
+        try:
+            data = self._discover_once(
+                topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
+                custom_angle=custom_angle, avoid=base_avoid, feedback=None,
+                on_delta=on_delta)
+        except BaseException:
+            _operation_record("meaning_attempt", "failed", {"attempt": 1})
+            raise
+        _operation_record("meaning_attempt", data={"attempt": 1})
         verdict = self._judge_meaning(topic, data, on_delta=on_delta)
         if not judge_failed(verdict):
             return data
@@ -130,10 +156,15 @@ class RealWritingEngine:
         label = selected_angle(data).get("label", "")
         retry_avoid = [a for a in base_avoid + [label] if a]
         feedback = verdict
-        data = self._discover_once(
-            topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
-            custom_angle=custom_angle, avoid=retry_avoid, feedback=feedback,
-            on_delta=on_delta)
+        try:
+            data = self._discover_once(
+                topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
+                custom_angle=custom_angle, avoid=retry_avoid, feedback=feedback,
+                on_delta=on_delta)
+        except BaseException:
+            _operation_record("meaning_attempt", "failed", {"attempt": 2})
+            raise
+        _operation_record("meaning_attempt", data={"attempt": 2})
         verdict = self._judge_meaning(topic, data, on_delta=on_delta)
         if judge_failed(verdict):
             hint = (verdict.get("hint") or verdict.get("weakest") or "").strip()
@@ -211,10 +242,15 @@ class RealWritingEngine:
                 role_cfg=self.config.role("architect"),
                 system_prompt=_load_prompt(self.config.prompts_dir, "thesis_judge"),
                 user_message=user, validator=validate_judge, on_delta=on_delta)
-            return stage.data
+            verdict = stage.data
+            _operation_record(
+                "meaning_review",
+                "rejected" if judge_failed(verdict) else "accepted")
+            return verdict
         except Exception:
             log.warning("thesis judge unavailable; accepting discovery",
                         exc_info=True)
+            _operation_record("meaning_review", "unavailable")
             return None
 
     def generate(self, *, material, instruction, task_type, config,
@@ -242,6 +278,7 @@ class RealWritingEngine:
             # re-running the Architect (failure retry resumes at the last
             # successful node).
             wir = (plan or {}).get("wir") or {}
+            _operation_record("structure", "reused")
             if emit:
                 emit("stage_summary", {"stage": "structure",
                                        "text": "复用上次的结构:" + _outline_summary(wir)})
@@ -252,6 +289,7 @@ class RealWritingEngine:
             except StructuredOutputError as exc:
                 raise GenerationFailed("The draft could not be generated correctly.") from exc
             wir = arch.data
+            _operation_record("structure", data={"repair_used": arch.repair_used})
             if emit:
                 emit("stage_summary", {"stage": "structure",
                                        "text": _outline_summary(wir)})
@@ -266,12 +304,18 @@ class RealWritingEngine:
             self.writer, material=material, instruction=instruction,
             structure=wir, expected_language=expected, target_length=target,
             on_delta=on_delta)
+        _operation_record("language_check",
+                          "failed" if lw.functional_failure else "completed",
+                          {"attempts": lw.attempts, "repaired": lw.repaired,
+                           "final_language": lw.final_language})
         if lw.functional_failure or not (lw.text or "").strip():
             raise GenerationFailed("The draft could not be generated correctly.")
         gate = hard_gates(lw.text, {"material": material, "instruction": instruction,
                                     "target_length": target,
                                     "expected_language": expected,
                                     "allow_new_facts": allow_new_facts})
+        _operation_record("output_gate",
+                          "failed" if gate["functional_failure"] else "completed")
         if gate["functional_failure"]:
             log.warning("gate failure task=%s reasons=%s", task_type,
                         gate["failure_reasons"])
@@ -310,10 +354,71 @@ class RealWritingEngine:
             issues.append({
                 "id": f"issue_{i}", "location": para,
                 "type": (issue.get("diagnosis") or {}).get("type", "issue"),
+                "severity": issue.get("severity", "moderate"),
                 "message": (issue.get("diagnosis") or {}).get("description", ""),
+                "effect": issue.get("effect", ""),
+                "goal": issue.get("action", "Revise this passage."),
                 "fixable": True,
             })
+        _operation_record("review", data={
+            "decision": critique.get("decision", ""),
+            "issue_count": len(issues),
+            "repair_used": bool(getattr(stage, "repair_used", False))})
         return {"summary": summary, "issues": issues}
+
+    def check_evidence(self, *, content, sources, on_delta=None) -> dict:
+        compact_sources = [{"id": item["id"], "title": item.get("title", ""),
+                            "content": item.get("content", "")}
+                           for item in sources]
+        user = (
+            f"## Current draft\n\n{content}\n\n"
+            "## User-supplied sources (JSON)\n\n"
+            f"```json\n{json.dumps(compact_sources, ensure_ascii=False)}\n```\n\n"
+            "## Required Output Schema (JSON Schema draft 2020-12)\n\n"
+            f"```json\n{json.dumps(EVIDENCE_SCHEMA, ensure_ascii=False)}\n```\n\n"
+            "Return JSON only."
+        )
+        try:
+            stage = structured_call(
+                self.client, role="evidence_check",
+                role_cfg=self.config.role("critic"),
+                system_prompt=_load_prompt(self.config.prompts_dir, "evidence_check"),
+                user_message=user, validator=validate_evidence,
+                on_delta=on_delta)
+        except StructuredOutputError as exc:
+            raise EvidenceCheckFailed(
+                "材料依据检查未能产生可靠结果，请重试。") from exc
+        _operation_record("evidence_check", data={
+            "claim_count": len(stage.data.get("claims") or []),
+            "repair_used": bool(getattr(stage, "repair_used", False))})
+        return stage.data
+
+    def review_reader_path(self, *, content, on_delta=None) -> dict:
+        numbered = [{"paragraph": number, "content": paragraph}
+                    for number, paragraph in enumerate(content.split("\n\n"), 1)
+                    if paragraph.strip()]
+        user = (
+            "## Current draft paragraphs (JSON)\n\n"
+            f"```json\n{json.dumps(numbered, ensure_ascii=False)}\n```\n\n"
+            "## Required Output Schema (JSON Schema draft 2020-12)\n\n"
+            f"```json\n{json.dumps(READER_PATH_SCHEMA, ensure_ascii=False)}\n```\n\n"
+            "Return JSON only."
+        )
+        try:
+            stage = structured_call(
+                self.client, role="reader_path_review",
+                role_cfg=self.config.role("critic"),
+                system_prompt=_load_prompt(self.config.prompts_dir, "reader_path_review"),
+                user_message=user, validator=validate_reader_path,
+                on_delta=on_delta)
+        except StructuredOutputError as exc:
+            raise ReaderPathReviewFailed(
+                "稿件路径检查未能产生完整结果，请重试。") from exc
+        _operation_record("reader_path_review", data={
+            "step_count": len(stage.data.get("steps") or []),
+            "issue_count": len(stage.data.get("issues") or []),
+            "repair_used": bool(getattr(stage, "repair_used", False))})
+        return stage.data
 
     # --------------------------------------------------------------- patch ----
 

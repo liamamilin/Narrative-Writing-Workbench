@@ -12,16 +12,34 @@ _MOCK_CANDIDATES = [
     {"id": "A1", "label": "The topic as loss", "mechanism": "subtraction",
      "core_question": "What is taken away?",
      "deep_meaning": "The topic names a loss the reader has not priced.",
-     "reader_end_state": "the reader feels the missing thing precisely"},
+     "reader_end_state": "the reader feels the missing thing precisely",
+     "crack": "the usual account ignores what disappears",
+     "strongest_counterexample": "some losses are chosen and fully understood",
+     "boundary": "holds for unpriced loss, not deliberate exchange"},
     {"id": "A2", "label": "The topic as disguised self-question",
      "mechanism": "projection",
      "core_question": "What does the reader really ask about themselves?",
      "deep_meaning": "The topic stands in for a question about identity.",
-     "reader_end_state": "the reader recognizes their own question"},
+     "reader_end_state": "the reader recognizes their own question",
+     "crack": "the surface question never resolves the repeated unease",
+     "strongest_counterexample": "some questions are simply about the object",
+     "boundary": "holds when the question repeats across different objects"},
     {"id": "A3", "label": "The topic as revaluation", "mechanism": "repricing",
      "core_question": "What changes value once the topic is faced?",
      "deep_meaning": "The topic re-prices what the reader already paid.",
-     "reader_end_state": "the reader sees past effort in a new light"},
+     "reader_end_state": "the reader sees past effort in a new light",
+     "crack": "past effort changes meaning after the outcome",
+     "strongest_counterexample": "some past costs keep the same value",
+     "boundary": "holds where outcomes change the story attached to effort"},
+]
+
+_MOCK_CANDIDATES_ALT = [
+    {**_MOCK_CANDIDATES[0], "id": "A1", "label": "The topic as a threshold",
+     "mechanism": "phase change"},
+    {**_MOCK_CANDIDATES[1], "id": "A2", "label": "The topic as borrowed language",
+     "mechanism": "imitation"},
+    {**_MOCK_CANDIDATES[2], "id": "A3", "label": "The topic as delayed choice",
+     "mechanism": "option cost"},
 ]
 
 _MOCK_TOPICS = [
@@ -264,11 +282,15 @@ class MockWritingEngine:
         if on_delta:
             on_delta("{\"topic\": …}  # mock discovery")
         if angle_mode == "custom":
-            candidates = [dict(_MOCK_CANDIDATES[0])]
+            candidates = [dict(c) for c in _MOCK_CANDIDATES]
             candidates[0].update({"id": "A0", "label": custom_angle})
             selected = "A0"
         else:
-            candidates = [dict(c) for c in _MOCK_CANDIDATES]
+            pool = (_MOCK_CANDIDATES_ALT
+                    if all(c["label"] in set(avoid or [])
+                           for c in _MOCK_CANDIDATES)
+                    else _MOCK_CANDIDATES)
+            candidates = [dict(c) for c in pool]
             fresh = [c for c in candidates if c["label"] not in set(avoid or [])]
             if not fresh:
                 raise DiscoveryFailed("No distinct angles remain to try.")
@@ -285,11 +307,9 @@ class MockWritingEngine:
             "common_reading": "a generic answer",
             "new_reading": sel["deep_meaning"],
             "reader_end_state": sel["reader_end_state"],
-            "crack": "the generic answer keeps failing on repeat cases",
-            "strongest_counterexample":
-                "some losses are fully priced and simply accepted",
-            "boundary":
-                "holds where the loss is unpriced; fails for priced losses",
+            "crack": sel["crack"],
+            "strongest_counterexample": sel["strongest_counterexample"],
+            "boundary": sel["boundary"],
             "refined_thesis": f"{sel['deep_meaning']} — priced differently",
             "key_tensions": ["wanting vs. fearing"],
             "constraints": [], "fact_heavy": False, "language": "en",
@@ -362,7 +382,10 @@ class MockWritingEngine:
                     "id": f"issue_{i}",
                     "location": {"paragraph_start": i, "paragraph_end": i},
                     "type": "over_explanation",
+                    "severity": "moderate",
                     "message": "This paragraph may explain more than the reader needs.",
+                    "effect": "It leaves less room for the reader to infer the meaning.",
+                    "goal": "Make this shorter while preserving the concrete meaning.",
                     "fixable": True,
                 })
         return {
@@ -375,6 +398,78 @@ class MockWritingEngine:
             },
             "issues": issues,
         }
+
+    def check_evidence(self, *, content, sources, on_delta=None) -> dict:
+        if on_delta:
+            on_delta('{"claims": […]}  # mock evidence check')
+        paras = split_paragraphs(content)
+        if not paras:
+            return {"claims": []}
+        source = next((item for item in sources if item.get("content", "").strip()), None)
+        source_quote = (source["content"].split("\n\n")[0].strip()
+                        if source else None)
+        return {"claims": [{
+            "id": "claim_1", "claim_type": "author_inference",
+            "draft_quote": paras[0], "paragraph_start": 1, "paragraph_end": 1,
+            "relation": "inference",
+            "explanation": "The draft goes beyond the supplied passage; review the inference explicitly.",
+            "source_id": source["id"] if source else None,
+            "source_quote": source_quote,
+            "revision_goal": "Make this an explicit inference and retain the source's limits.",
+        }]}
+
+    def review_reader_path(self, *, content, on_delta=None) -> dict:
+        if on_delta:
+            on_delta('{"steps": […], "issues": […]}  # mock reader path')
+        numbered = [(number, paragraph) for number, paragraph in
+                    enumerate(content.split("\n\n"), 1) if paragraph.strip()]
+        steps = []
+        for index, (number, paragraph) in enumerate(numbered):
+            steps.append({
+                "id": f"step_{number}", "paragraph": number,
+                "paragraph_quote": paragraph,
+                "primary_function": ("Introduce the subject." if index == 0
+                                     else "Advance the draft with another statement."),
+                "knowledge_gain": f"The draft adds the point made in paragraph {number}.",
+                "question_raised": paragraph if paragraph.rstrip().endswith(("?", "？")) else None,
+                "question_answered": None,
+            })
+        issues = []
+        first_seen = {}
+        for number, paragraph in numbered:
+            key = "".join(paragraph.split()).lower()
+            if key in first_seen:
+                issues.append({
+                    "id": f"repeat_{number}", "type": "repetition", "severity": "moderate",
+                    "paragraph_start": number, "paragraph_end": number, "quote": paragraph,
+                    "message": "This paragraph repeats an earlier point without adding a new step.",
+                    "effect": "The progression may pause instead of advancing.",
+                    "goal": "Remove the repetition or add a distinct consequence.",
+                })
+            first_seen.setdefault(key, number)
+            if paragraph.lstrip().lower().startswith(("因此", "所以", "therefore")):
+                issues.append({
+                    "id": f"gap_{number}", "type": "reasoning_gap", "severity": "major",
+                    "paragraph_start": number, "paragraph_end": number, "quote": paragraph,
+                    "message": "This conclusion arrives without an explicit intermediate step.",
+                    "effect": "The stated conclusion may feel insufficiently connected to what precedes it.",
+                    "goal": "Add the missing reasoning or narrow the conclusion.",
+                })
+        questions = [(number, paragraph) for number, paragraph in numbered
+                     if paragraph.rstrip().endswith(("?", "？"))]
+        for number, paragraph in questions:
+            later = "\n".join(p for n, p in numbered if n > number)
+            if not any(marker in later for marker in ("因为", "答案", "回答", "the answer", "because")):
+                issues.append({
+                    "id": f"question_{number}", "type": "unanswered_question",
+                    "severity": "moderate", "paragraph_start": number,
+                    "paragraph_end": number, "quote": paragraph,
+                    "message": "The draft raises this question but does not visibly answer it.",
+                    "effect": "A promised line of inquiry may remain open.",
+                    "goal": "Answer this question later or remove the promise.",
+                })
+        return {"overview": "A paragraph-by-paragraph view of how the current draft progresses.",
+                "steps": steps, "issues": issues[:12]}
 
     def patch(self, *, content, before_text, instruction, locks, config) -> str:
         if locks.get("facts") and "invent" in instruction.lower():

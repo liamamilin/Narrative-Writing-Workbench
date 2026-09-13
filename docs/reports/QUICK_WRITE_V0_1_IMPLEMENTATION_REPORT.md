@@ -199,3 +199,7 @@ hot-swap; pending-patch restore; navigation guards.
 
 Suite: **194 passed** (16 new regression tests). Verified end-to-end on the
 real provider (English topic, auto language, 97 delta events, status ready).
+
+## 2026-09-13 稳定性修正索引
+
+后续实现与当前验收范围见 [本轮稳定性报告](V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md)。新增版本来源和有条件续跑，修复旧稿入口，保留原报告作为历史记录。真实模型效果和人工评价尚未因 mock 回归通过而视为完成。

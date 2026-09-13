@@ -7,9 +7,40 @@ import sys
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+
+
+class RevisionClient(TestClient):
+    """Convenience for sequential legacy flow tests: read the current revision.
+
+    Explicit expected_revision (including None) is never replaced. Safety and
+    multi-client tests use plain TestClient so missing/stale headers are tested.
+    """
+
+    def request(self, method, url, **kwargs):
+        path = urlparse(str(url)).path.strip("/").split("/")
+        body = kwargs.get("json")
+        if body is None or isinstance(body, dict):
+            payload = dict(body or {})
+            draft = None
+            db = self.app.state.service.db
+            if "expected_revision" not in payload:
+                if method.upper() == "PATCH" and len(path) == 2 and path[0] == "drafts":
+                    draft = db.q1("SELECT * FROM drafts WHERE id=?", (path[1],))
+                elif method.upper() == "POST" and len(path) == 3:
+                    if path[0] == "tasks" and path[2] in (
+                            "generate", "regenerate", "rediscover-angle", "patch", "checkpoint"):
+                        draft = db.q1("SELECT * FROM drafts WHERE task_id=?", (path[1],))
+                    elif path[0] == "versions" and path[2] == "restore":
+                        draft = db.q1("SELECT d.* FROM drafts d JOIN versions v ON v.draft_id=d.id WHERE v.id=?",
+                                      (path[1],))
+                if draft:
+                    kwargs["json"] = {**payload, "expected_revision": draft["revision"]}
+        return super().request(method, url, **kwargs)
 
 from app.config import Config  # noqa: E402
 from app.schemas import SchemaSet  # noqa: E402

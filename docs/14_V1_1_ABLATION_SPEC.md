@@ -121,7 +121,7 @@ The existing 10 smoke cases (`benchmarks/smoke_cases.jsonl`). Do not expand to
 ## 9. Stopping Rule
 
 V1.1 ends with: implementation + tests green, 10-case ablation outputs
-generated, blind-review packages produced, V1_1_IMPLEMENTATION_REPORT.md and
-V1_1_ABLATION_REPORT.md written (the latter reports gates and package paths;
+generated, blind-review packages produced, reports/V1_1_IMPLEMENTATION_REPORT.md and
+reports/V1_1_ABLATION_REPORT.md written (the latter reports gates and package paths;
 pairwise outcomes are interpreted only after human review). V2 Pattern Library
 must not be started.

@@ -10,6 +10,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,11 @@ from .config import Config, RoleConfig
 from .utils import parse_json_output  # noqa: F401 (re-export convenience)
 
 logger = logging.getLogger(__name__)
+
+# Product adapters may attach a request-local observer without coupling engine
+# code to persistence. The callback receives metadata only, never messages or
+# generated text.
+CALL_OBSERVER = ContextVar("llm_call_observer", default=None)
 
 
 @dataclass
@@ -26,6 +32,28 @@ class GenerationResult:
     input_tokens: int = 0
     output_tokens: int = 0
     latency_seconds: float = 0.0
+    usage_known: bool = True
+
+
+def _notify_call(role: str, kind: str, *, result: GenerationResult | None = None,
+                 error: BaseException | None = None,
+                 latency_seconds: float | None = None,
+                 model: str | None = None) -> None:
+    observer = CALL_OBSERVER.get()
+    if observer is None:
+        return
+    record = {
+        "role": role,
+        "kind": kind,
+        "status": "failed" if error else "completed",
+        "model": result.model if result else model,
+        "latency_seconds": (result.latency_seconds if result
+                            else latency_seconds),
+        "usage": ({"input_tokens": result.input_tokens,
+                   "output_tokens": result.output_tokens}
+                  if result and result.usage_known else None),
+    }
+    observer(record)
 
 
 class LLMClient(ABC):
@@ -134,27 +162,39 @@ class OpenAIClient(LLMClient):
             input_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
             output_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
             latency_seconds=latency,
+            usage_known=usage is not None,
         )
 
     def generate_text(self, messages, *, role: str, role_cfg: RoleConfig,
                       on_delta=None) -> GenerationResult:
         start = time.monotonic()
-        if on_delta is None:
-            resp = self._create(messages, role_cfg, json_mode=False)
-            return self._to_result(resp, role_cfg, time.monotonic() - start)
-        resp = self._create(messages, role_cfg, json_mode=False, stream=True)
-        parts: list[str] = []
-        for chunk in resp:
-            choices = getattr(chunk, "choices", None)
-            if not choices:
-                continue
-            piece = (getattr(choices[0].delta, "content", None) or "")
-            if piece:
-                parts.append(piece)
-                on_delta(piece)
-        return GenerationResult(
-            text="".join(parts), model=role_cfg.model,
-            latency_seconds=time.monotonic() - start)
+        try:
+            if on_delta is None:
+                resp = self._create(messages, role_cfg, json_mode=False)
+                result = self._to_result(resp, role_cfg, time.monotonic() - start)
+            else:
+                resp = self._create(messages, role_cfg, json_mode=False, stream=True)
+                parts: list[str] = []
+                for chunk in resp:
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
+                        continue
+                    piece = (getattr(choices[0].delta, "content", None) or "")
+                    if piece:
+                        parts.append(piece)
+                        on_delta(piece)
+                # Chat-completions streams do not currently request usage.
+                result = GenerationResult(
+                    text="".join(parts), model=role_cfg.model,
+                    latency_seconds=time.monotonic() - start,
+                    usage_known=False)
+        except BaseException as exc:
+            _notify_call(role, "text", error=exc,
+                         latency_seconds=time.monotonic() - start,
+                         model=role_cfg.model)
+            raise
+        _notify_call(role, "text", result=result)
+        return result
 
     def generate_structured(
         self, messages, *, role: str, role_cfg: RoleConfig, on_delta=None
@@ -165,10 +205,17 @@ class OpenAIClient(LLMClient):
         # reasoning models, e.g. mimo-v2.5), which poisons schema validation
         # and the one repair attempt. Deliver the complete text to on_delta
         # in a single call so debug previews still receive the stage output.
-        resp = self._create(messages, role_cfg, json_mode=True)
-        out = self._to_result(resp, role_cfg, time.monotonic() - start)
-        if on_delta is not None and out.text:
-            on_delta(out.text)
+        try:
+            resp = self._create(messages, role_cfg, json_mode=True)
+            out = self._to_result(resp, role_cfg, time.monotonic() - start)
+            if on_delta is not None and out.text:
+                on_delta(out.text)
+        except BaseException as exc:
+            _notify_call(role, "structured", error=exc,
+                         latency_seconds=time.monotonic() - start,
+                         model=role_cfg.model)
+            raise
+        _notify_call(role, "structured", result=out)
         return out
 
 
@@ -206,29 +253,46 @@ class MockClient(LLMClient):
 
     def generate_text(self, messages, *, role: str, role_cfg: RoleConfig,
                       on_delta=None) -> GenerationResult:
-        result = self._next(role, "text", messages, role_cfg)
+        start = time.monotonic()
+        try:
+            result = self._next(role, "text", messages, role_cfg)
+        except BaseException as exc:
+            _notify_call(role, "text", error=exc,
+                         latency_seconds=time.monotonic() - start,
+                         model=role_cfg.model)
+            raise
         if on_delta is not None and result.text:
             for i in range(0, len(result.text), 24):
                 on_delta(result.text[i:i + 24])
+        _notify_call(role, "text", result=result)
         return result
 
     def generate_structured(
         self, messages, *, role: str, role_cfg: RoleConfig, on_delta=None
     ) -> GenerationResult:
-        result = self._next(role, "structured", messages, role_cfg)
+        start = time.monotonic()
+        try:
+            result = self._next(role, "structured", messages, role_cfg)
+        except BaseException as exc:
+            _notify_call(role, "structured", error=exc,
+                         latency_seconds=time.monotonic() - start,
+                         model=role_cfg.model)
+            raise
         if on_delta is not None and result.text:
             for i in range(0, len(result.text), 24):
                 on_delta(result.text[i:i + 24])
+        _notify_call(role, "structured", result=result)
         return result
 
 
-def build_client(config: Config) -> LLMClient:
+def build_client(config: Config, *, max_retries: int = 3) -> LLMClient:
     """Instantiate the configured provider."""
     if config.provider == "mock":
         return MockClient()
     if config.provider == "openai":
         return OpenAIClient(
             api_key=config.api_key, base_url=config.base_url,
+            max_retries=max_retries,
             default_headers=_opencode_session_headers())
     raise ValueError(f"unknown provider: {config.provider}")
 

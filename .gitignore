@@ -4,7 +4,10 @@ workbench/env.sh
 .env
 workbench/workbench.db
 workbench/workbench.db-*
+workbench/restored/
 *.db
+*.db.server.lock
+*.db.pre-v*-*.sqlite3
 
 # Research data & run artifacts (personal material, not published)
 benchmarks/
@@ -16,6 +19,7 @@ ablation_*.txt
 __pycache__/
 *.pyc
 .pytest_cache/
+node_modules/
 *.log
 .DS_Store
 NarrativeWorkbench.app/

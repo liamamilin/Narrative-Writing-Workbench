@@ -6,10 +6,13 @@ import os
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "workbench" / "workbench.db"
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects(
@@ -65,18 +68,118 @@ CREATE TABLE IF NOT EXISTS proposed_patches(
   selection_json TEXT NOT NULL, instruction TEXT NOT NULL,
   before_text TEXT NOT NULL, after_text TEXT, status TEXT NOT NULL
     CHECK(status IN ('proposed','accepted','rejected')),
-  locks_json TEXT DEFAULT '{}', error TEXT, created_at TEXT NOT NULL);
+  locks_json TEXT DEFAULT '{}', error TEXT, created_at TEXT NOT NULL,
+  base_revision INTEGER, accepted_version_id TEXT, task_locks_json TEXT,
+  revision_item_id TEXT, claim_link_id TEXT);
 CREATE TABLE IF NOT EXISTS reviews(
   id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, version_id TEXT NOT NULL,
   summary_json TEXT NOT NULL, issues_json TEXT NOT NULL,
+  created_at TEXT NOT NULL, analysis_type TEXT NOT NULL DEFAULT 'writing'
+    CHECK(analysis_type IN ('writing','reader_path')));
+CREATE TABLE IF NOT EXISTS revision_items(
+  id TEXT PRIMARY KEY, review_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  issue_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, paragraph_start INTEGER NOT NULL,
+  paragraph_end INTEGER NOT NULL, char_start INTEGER NOT NULL,
+  char_end INTEGER NOT NULL, quote TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'issue', severity TEXT NOT NULL DEFAULT 'moderate',
+  message TEXT NOT NULL, effect TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK(status IN ('open','proposed','resolved','dismissed','stale')),
+  patch_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(review_id, issue_id));
+CREATE TABLE IF NOT EXISTS preserved_spans(
+  id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, paragraph_start INTEGER NOT NULL,
+  paragraph_end INTEGER NOT NULL, char_start INTEGER NOT NULL,
+  char_end INTEGER NOT NULL, quote TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stale')),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS claim_checks(
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  operation_id TEXT, draft_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, sources_json TEXT NOT NULL,
   created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS claim_links(
+  id TEXT PRIMARY KEY, check_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  claim_id TEXT NOT NULL, claim_type TEXT NOT NULL
+    CHECK(claim_type IN ('fact','author_inference','value_judgment')),
+  relation TEXT NOT NULL
+    CHECK(relation IN ('supported','inference','insufficient','conflict')),
+  explanation TEXT NOT NULL DEFAULT '', revision_goal TEXT NOT NULL,
+  paragraph_start INTEGER NOT NULL, paragraph_end INTEGER NOT NULL,
+  draft_char_start INTEGER NOT NULL, draft_char_end INTEGER NOT NULL,
+  draft_quote TEXT NOT NULL, source_id TEXT, source_content_hash TEXT,
+  source_char_start INTEGER, source_char_end INTEGER, source_quote TEXT,
+  user_status TEXT NOT NULL DEFAULT 'unreviewed'
+    CHECK(user_status IN ('unreviewed','confirmed','dismissed')),
+  patch_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(check_id, claim_id));
+CREATE TABLE IF NOT EXISTS reader_path_steps(
+  id TEXT PRIMARY KEY, review_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  step_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, paragraph_start INTEGER NOT NULL,
+  paragraph_end INTEGER NOT NULL, char_start INTEGER NOT NULL,
+  char_end INTEGER NOT NULL, quote TEXT NOT NULL,
+  primary_function TEXT NOT NULL, knowledge_gain TEXT NOT NULL,
+  question_raised TEXT, question_answered TEXT, created_at TEXT NOT NULL,
+  UNIQUE(review_id, step_id), UNIQUE(review_id, paragraph_start));
+CREATE TABLE IF NOT EXISTS ideas(
+  id TEXT PRIMARY KEY, topic TEXT NOT NULL, normalized_topic TEXT NOT NULL UNIQUE,
+  hook TEXT NOT NULL DEFAULT '', domain TEXT NOT NULL DEFAULT '',
+  domain_name TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL CHECK(origin IN ('manual','generated','legacy')),
+  source_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'to_write'
+    CHECK(status IN ('to_write','written','archived')),
+  task_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS writing_operations(
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
+  process_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','interrupted')),
+  stage TEXT, started_at TEXT NOT NULL, finished_at TEXT, elapsed_ms INTEGER,
+  input_fingerprint TEXT, snapshot_json TEXT NOT NULL DEFAULT '{}',
+  retry_of TEXT, error_code TEXT, result_json TEXT, usage_json TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS one_running_operation ON writing_operations(task_id) WHERE status='running';
+CREATE TABLE IF NOT EXISTS operation_events(
+  operation_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL,
+  data_json TEXT NOT NULL, elapsed_ms INTEGER NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(operation_id,seq));
+CREATE TABLE IF NOT EXISTS operation_records(
+  id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, category TEXT NOT NULL,
+  name TEXT NOT NULL, status TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}',
+  elapsed_ms INTEGER NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS operation_records_operation ON operation_records(operation_id);
+CREATE INDEX IF NOT EXISTS revision_items_review ON revision_items(review_id);
+CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id);
+CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id);
+CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id);
+CREATE INDEX IF NOT EXISTS reader_path_steps_review ON reader_path_steps(review_id);
+CREATE INDEX IF NOT EXISTS ideas_status_updated ON ideas(status,updated_at);
+CREATE INDEX IF NOT EXISTS ideas_task ON ideas(task_id);
+CREATE TABLE IF NOT EXISTS generation_results(
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, engine_plan_id TEXT,
+  content TEXT NOT NULL, accepted_version_id TEXT, created_at TEXT NOT NULL);
 """
-
-_lock = threading.Lock()
-
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+class Transaction:
+    """Queries on a transaction-owned connection; never commits implicitly."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def exec(self, sql: str, params: tuple = ()):
+        return self.conn.execute(sql, params)
+
+    def q(self, sql: str, params: tuple = ()):
+        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def q1(self, sql: str, params: tuple = ()):
+        rows = self.q(sql, params)
+        return rows[0] if rows else None
 
 
 class Database:
@@ -86,11 +189,28 @@ class Database:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
         self.conn.execute("PRAGMA foreign_keys=ON")
-        with _lock:
-            self.conn.executescript(SCHEMA)
-            self._migrate()
-            self.conn.commit()
+        self.migration_backup = None
+        with self._lock:
+            version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                self.conn.close()
+                raise RuntimeError("Database schema is newer than this Workbench; use a compatible version.")
+            if version < SCHEMA_VERSION and self.path != ":memory:" and self.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
+                self.migration_backup = f"{self.path}.pre-v7-{new_id('backup')}.sqlite3"
+                with sqlite3.connect(self.migration_backup) as backup:
+                    self.conn.backup(backup)
+            try:
+                # executescript normally commits implicitly; put BEGIN inside it.
+                self.conn.executescript("BEGIN IMMEDIATE;\n" + SCHEMA)
+                self._migrate()
+                self.conn.commit()
+            except BaseException:
+                self.conn.rollback()
+                self.conn.close()
+                raise
 
     def _migrate(self):
         """Idempotent additive migration for pre-V0.1 databases."""
@@ -115,18 +235,93 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE engine_plans ADD COLUMN inputs_json TEXT")
 
+        # Additive migration: old versions/patches have unknown provenance.
+        additions = {
+            "meaning_discoveries": [("operation_id", "TEXT"), ("inputs_json", "TEXT")],
+            "engine_plans": [("operation_id", "TEXT")],
+            "generation_results": [("operation_id", "TEXT")],
+            "drafts": [("revision", "INTEGER NOT NULL DEFAULT 0")],
+            "versions": [("engine_plan_id", "TEXT"),
+                         ("restore_source_version_id", "TEXT")],
+            "proposed_patches": [("base_revision", "INTEGER"),
+                                 ("accepted_version_id", "TEXT"),
+                                 ("task_locks_json", "TEXT"),
+                                 ("revision_item_id", "TEXT"),
+                                 ("claim_link_id", "TEXT")],
+            "reviews": [("content_hash", "TEXT"), ("draft_revision", "INTEGER"),
+                        ("config_json", "TEXT"), ("operation_id", "TEXT"),
+                        ("analysis_type", "TEXT NOT NULL DEFAULT 'writing'")],
+        }
+        for table, fields in additions.items():
+            existing = cols(table)
+            for name, ddl in fields:
+                if name not in existing:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        # Old draft-revision entry stored the original only as a primary Source.
+        # Recover only an unambiguous, nonempty original, and never replace a draft.
+        originals = self.conn.execute(
+            "SELECT t.id,s.content FROM tasks t JOIN task_sources ts ON ts.task_id=t.id "
+            "JOIN sources s ON s.id=ts.source_id WHERE t.input_mode='draft_revision' "
+            "AND ts.role='primary' AND NOT EXISTS(SELECT 1 FROM drafts d WHERE d.task_id=t.id) "
+            "AND (SELECT count(*) FROM task_sources p WHERE p.task_id=t.id AND p.role='primary')=1").fetchall()
+        for original in originals:
+            if not original["content"].strip():
+                continue
+            did, vid, at = new_id("draft"), new_id("v"), datetime.now(timezone.utc).isoformat()
+            self.conn.execute("INSERT INTO drafts(id,task_id,current_version_id,working_content,updated_at,revision) VALUES(?,?,?,?,?,1)",
+                              (did, original["id"], vid, original["content"], at))
+            self.conn.execute("INSERT INTO versions(id,draft_id,content,source_type,instruction,created_at) VALUES(?,?,?,'manual_checkpoint',?,?)",
+                              (vid, did, original["content"], "恢复旧稿入口的原稿", at))
+            self.conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (original["id"],))
+        self.conn.execute("CREATE INDEX IF NOT EXISTS versions_plan ON versions(engine_plan_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS revision_items_review ON revision_items(review_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS reader_path_steps_review ON reader_path_steps(review_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ideas_status_updated ON ideas(status,updated_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ideas_task ON ideas(task_id)")
+        self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
     # -- tiny helpers ----------------------------------------------------
 
     def exec(self, sql: str, params: tuple = ()):
-        with _lock:
-            cur = self.conn.execute(sql, params)
-            self.conn.commit()
-            return cur
+        with self.transaction() as tx:
+            return tx.exec(sql, params)
+
+    @contextmanager
+    def transaction(self):
+        """Serialize a complete write operation, including its validation reads."""
+        with self._lock:
+            if self.conn.in_transaction:
+                raise RuntimeError("Use the transaction handle inside a transaction")
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield Transaction(self.conn)
+                self.conn.commit()
+            except BaseException:
+                self.conn.rollback()
+                raise
 
     def q(self, sql: str, params: tuple = ()):
-        with _lock:
+        with self._lock:
             return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
 
     def q1(self, sql: str, params: tuple = ()):
         rows = self.q(sql, params)
         return rows[0] if rows else None
+
+    def backup_to(self, destination: str | Path) -> None:
+        """Write a transactionally consistent SQLite snapshot.
+
+        SQLite's backup API includes committed WAL pages and keeps the snapshot
+        internally consistent while ordinary Workbench reads and writes may
+        continue around it.
+        """
+        destination = str(destination)
+        with self._lock, sqlite3.connect(destination) as target:
+            self.conn.backup(target)
+            # A source in WAL mode can copy that persistent journal setting.
+            # The portable snapshot is a single file, so normalize the target
+            # before closing instead of depending on sidecar -wal/-shm files.
+            target.execute("PRAGMA journal_mode=DELETE")

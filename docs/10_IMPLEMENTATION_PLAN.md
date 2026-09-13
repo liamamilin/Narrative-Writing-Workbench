@@ -10,7 +10,7 @@ Before coding:
 - freeze V1 implementation assumptions
 
 Deliverable:
-`IMPLEMENTATION_REVIEW.md`
+`reports/IMPLEMENTATION_REVIEW.md`
 
 ---
 

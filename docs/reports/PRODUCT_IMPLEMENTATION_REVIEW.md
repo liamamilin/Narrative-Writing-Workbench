@@ -160,3 +160,31 @@ interaction checks for restoration, goal persistence and patch workflow. No
 live model calls or writing-quality claims. Record outcomes in the product
 implementation report. Main risk: async saves/navigation; failed goal saves
 must keep the user on the page with inputs intact.
+
+## 2026-09-13：稳定性开发启动（S00–S08）
+
+用户已要求开始开发并定期记录进展。执行范围为规划中的现有产品稳定性收口；新功能 F01–F09 保留为后续候选。进展记录于 `DEVELOPMENT_PROGRESS.md`，每个里程碑、重要验证后更新，长阶段至少每 30 分钟记录一次。
+
+### 实施决定
+
+- 保留 FastAPI / SQLite / 无构建 SPA，主要修改 `workbench/`、测试、开发脚本与文档；不变更引擎语义。
+- 增加显式短事务句柄。校验、版本插入、正文更新与补丁终态在同一事务内完成；模型调用放在事务外。
+- Draft 增加 revision。autosave、checkpoint、restore、已有稿件的生成以及 patch proposal 必须携带 expected_revision；缺失返回明确的刷新提示。accept 使用提案内持久化的 base_revision 检查，重复接受仍返回 409。
+- 生成完成后根据开始时的 revision 条件提交；冲突保存生成产物，不能覆盖已更新正文。
+- Version 增加 engine_plan_id、restore_source_version_id；patch/checkpoint 继承基稿 plan，restore 继承被恢复版本 plan。旧版本来源无法证明时保留为空。
+- Review 绑定正文 hash/revision 与配置快照；当前稿件结构查询和失败续跑结构查询分开。修改后旧诊断不能直接定位修稿。
+- 长操作采用单进程有界运行登记、operation 标识与持久终态，启动后标记中断，不自动继续模型调用。设置变更只作用于后续操作。
+- 前后端同批更新写入契约；既有测试使用显式 revision 测试辅助，新契约、并发及故障测试独立验证缺失/过期 revision。
+- 验证先使用合成数据、临时库、mock/可控 adapter；真实模型效果与人工盲评单列，不能以 mock 测试替代。
+
+### 文件与接口
+
+`workbench/db.py`：事务与增量迁移；`service.py`：写入一致性、来源与运行状态；`api.py`：revision/状态契约；`static/app.js`：保存冲突、设置及状态恢复。按职责需要添加轻量辅助模块，不整体改写框架。
+
+测试新增产品提交安全、版本来源、运行恢复与浏览器主流程案例；公共合成 benchmark fixture 置于 `tests/fixtures/`。干净环境测试不读取忽略的私人研究数据或真实设置。
+
+风险：旧页面与新 API 的契约切换、数据库迁移、长操作状态与前端保存交错。迁移先在临时旧库演练；保留已有未提交变更快照；不使用运行中的用户数据库验证。
+
+### 浏览器验收追加决定：旧稿导入（2026-09-13）
+
+B03 发现旧实现将 `draft_revision.material` 仅作为 Source 保存，随后 Generate 全文，违背 Quick Write `product/12_INPUT_MODES_SPEC.md` 的 Draft → Diagnose → Patch 契约。修正为创建任务时原子保存原稿及 `manual_checkpoint` 初始版本，来源 plan 为空；UI 默认检查页且隐藏全文生成。该模式的 Generate API 返回明确冲突，要求检查/局部修订。保留四种既有 version source_type，不将导入稿伪标为 AI generation。

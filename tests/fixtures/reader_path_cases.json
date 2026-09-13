@@ -1,0 +1,17 @@
+[
+  {
+    "name": "exact_repetition",
+    "draft": "门一直开着。\n\n门一直开着。\n\n直到夜里，人才回来。",
+    "expected_issue": "repetition"
+  },
+  {
+    "name": "unsupported_jump",
+    "draft": "这次试验只记录了十名参与者。\n\n因此，这项制度改善了所有人的生活。",
+    "expected_issue": "reasoning_gap"
+  },
+  {
+    "name": "unanswered_question",
+    "draft": "真正的问题是，谁承担了这笔成本？\n\n文章随后转去描述界面颜色。",
+    "expected_issue": "unanswered_question"
+  }
+]

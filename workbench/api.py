@@ -6,13 +6,22 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .progress import BROKER, sse_format
+from .backup import MAX_ARCHIVE_BYTES
 from .service import ApiError, Service
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _export_bool(value: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ApiError("VALIDATION", "include_title must be true or false.")
 
 
 def create_app(service: Service | None = None) -> FastAPI:
@@ -36,6 +45,19 @@ def create_app(service: Service | None = None) -> FastAPI:
             "retryable": True}})
 
     svc = lambda: app.state.service  # noqa: E731
+
+    async def backup_body(request: Request) -> bytes:
+        length = request.headers.get("content-length")
+        if length:
+            try:
+                if int(length) > MAX_ARCHIVE_BYTES:
+                    raise ApiError("BACKUP_TOO_LARGE", "The backup file is too large.", 413)
+            except ValueError:
+                raise ApiError("VALIDATION", "Content-Length must be an integer.")
+        content = await request.body()
+        if len(content) > MAX_ARCHIVE_BYTES:
+            raise ApiError("BACKUP_TOO_LARGE", "The backup file is too large.", 413)
+        return content
 
     # ---------------------------------------------------------- projects ----
 
@@ -85,6 +107,18 @@ def create_app(service: Service | None = None) -> FastAPI:
     def generate(task_id: str, body: dict | None = None):
         return svc().generate(task_id, body or {})
 
+    @app.post("/tasks/{task_id}/angle-options")
+    def angle_options(task_id: str, body: dict | None = None):
+        return svc().angle_options(task_id, body or {})
+
+    @app.get("/tasks/{task_id}/angle-options")
+    def get_angle_options(task_id: str, discovery_id: str):
+        return svc().get_angle_options(task_id, discovery_id)
+
+    @app.post("/tasks/{task_id}/confirm-angle")
+    def confirm_angle(task_id: str, body: dict):
+        return svc().confirm_angle(task_id, body)
+
     @app.get("/tasks/{task_id}/meaning")
     def meaning(task_id: str):
         return svc().meaning_summary(task_id)
@@ -109,68 +143,119 @@ def create_app(service: Service | None = None) -> FastAPI:
     def suggest_topics(body: dict | None = None):
         return svc().suggest_topics(body or {})
 
-    @app.get("/tasks/{task_id}/progress")
-    def progress(task_id: str):
-        """Server-Sent Events stream of generation stage/angle events.
+    @app.get("/ideas")
+    def list_ideas(q: str = "", status: str = "all", limit: int = 100):
+        return svc().list_ideas(q, status, limit)
 
-        Replays buffered history (so a late/refreshing client catches up),
-        then follows live until the channel closes.
-        """
-        svc().get_task(task_id)  # 404 guard
-        # Two situations involve a *closed* channel with events:
-        #  (a) a second run is about to start (client opens SSE a few ms
-        #      before POST resets the channel) -> we must NOT replay the
-        #      previous run; wait for the swap;
-        #  (b) a late subscriber after completion -> replay is desired.
-        # Distinguish by watching for the channel object to change; if no
-        # new run appears within the grace window, fall through to replay.
-        ch = BROKER.channel(task_id)
-        for _ in range(20):
-            cur = BROKER.channel(task_id)
-            if cur is not ch:
-                ch = cur
-            if not ch.closed and (ch.events or
-                                  svc().get_task(task_id)["status"] == "generating"):
-                break
-            time.sleep(0.1)
-        if not ch.events and svc().get_task(task_id)["status"] != "generating":
-            async def _eof():
-                yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
-            return StreamingResponse(_eof(), media_type="text/event-stream",
-                                     headers={"Cache-Control": "no-cache"})
+    @app.post("/ideas")
+    def create_idea(body: dict):
+        return svc().create_idea(body)
+
+    @app.patch("/ideas/{idea_id}")
+    def update_idea(idea_id: str, body: dict):
+        return svc().update_idea(idea_id, body)
+
+    @app.post("/ideas/import-legacy")
+    def import_legacy_ideas(body: dict):
+        return svc().import_legacy_ideas(body)
+
+    @app.get("/tasks/{task_id}/operations/{operation_id}")
+    def operation(task_id: str, operation_id: str):
+        return svc().operation_detail(task_id, operation_id)
+
+    @app.get("/tasks/{task_id}/progress")
+    def progress(task_id: str, operation_id: str | None = None,
+                 after_operation_id: str | None = None):
+        """Replay one operation, then follow it. Transport lifetime is not a timeout."""
+        svc().get_task(task_id)
+        ch = BROKER.get(task_id)
+        if operation_id:
+            saved = svc().operation_detail(task_id, operation_id)
+            if not ch or ch.operation_id != operation_id:
+                def persisted():
+                    for event in saved["events"]:
+                        yield sse_format({**event, "operation_id": operation_id})
+                    yield sse_format({"seq": -1, "kind": "eof", "operation_id": operation_id, "data": {"status": saved["status"]}})
+                return StreamingResponse(persisted(), media_type="text/event-stream")
+        else:
+            # Legacy/start-before-POST clients get a short rendezvous window.
+            for _ in range(20):
+                latest = BROKER.get(task_id)
+                if latest and (latest is not ch or (not latest.closed and latest.events)):
+                    ch = latest
+                    if not after_operation_id or ch.operation_id != after_operation_id:
+                        break
+                time.sleep(0.1)
+            if after_operation_id and ch and ch.operation_id == after_operation_id:
+                ch = None
 
         def gen():
-            cur, idx = ch, 0
-            deadline = time.monotonic() + 300  # cap on a stuck channel
+            if not ch:
+                yield sse_format({"seq": -1, "kind": "eof", "data": {}})
+                return
+            idx = 0
             while True:
-                latest = BROKER.channel(task_id)
-                if latest is not cur:          # new run reset the channel
-                    cur, idx = latest, 0
-                with cur.cond:
-                    cur.cond.wait_for(
-                        lambda: idx < len(cur.events) or cur.closed
-                        or BROKER.channel(task_id) is not cur,
-                        timeout=0.5)
-                    batch = cur.events[idx:]
-                    idx = len(cur.events)
-                    closed = cur.closed
-                for ev in batch:
-                    yield sse_format(ev)
-                if BROKER.channel(task_id) is not cur:
-                    continue                   # swapped mid-wait: follow the new run
-                if closed and idx >= len(cur.events):
-                    yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
+                with ch.cond:
+                    ch.cond.wait_for(lambda: idx < len(ch.events) or ch.closed, timeout=1)
+                    batch, closed = ch.events[idx:], ch.closed
+                    idx = len(ch.events)
+                for event in batch:
+                    yield sse_format(event)
+                if closed:
+                    yield sse_format({"seq": -1, "kind": "eof", "operation_id": ch.operation_id, "data": {}})
                     return
-                if time.monotonic() > deadline:
-                    return
-
-        headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                if not batch:
+                    yield ": heartbeat\n\n"
         return StreamingResponse(gen(), media_type="text/event-stream",
-                                 headers=headers)
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/tasks/{task_id}/review")
     def review(task_id: str):
         return svc().review(task_id)
+
+    @app.post("/tasks/{task_id}/check-evidence")
+    def check_evidence(task_id: str):
+        return svc().check_evidence(task_id)
+
+    @app.get("/tasks/{task_id}/evidence-check")
+    def evidence_check(task_id: str):
+        return svc().evidence_check(task_id)
+
+    @app.post("/claim-links/{link_id}/confirm")
+    def confirm_claim_link(link_id: str):
+        return svc().confirm_claim_link(link_id)
+
+    @app.post("/claim-links/{link_id}/dismiss")
+    def dismiss_claim_link(link_id: str):
+        return svc().dismiss_claim_link(link_id)
+
+    @app.post("/tasks/{task_id}/reader-path-review")
+    def review_reader_path(task_id: str):
+        return svc().review_reader_path(task_id)
+
+    @app.get("/tasks/{task_id}/reader-path-review")
+    def reader_path_review(task_id: str):
+        return svc().reader_path_review(task_id)
+
+    @app.get("/tasks/{task_id}/revision-worklist")
+    def revision_worklist(task_id: str):
+        return svc().revision_worklist(task_id)
+
+    @app.post("/revision-items/{item_id}/dismiss")
+    def dismiss_revision_item(item_id: str):
+        return svc().dismiss_revision_item(item_id)
+
+    @app.get("/tasks/{task_id}/preserved-spans")
+    def preserved_spans(task_id: str):
+        return svc().list_preserved_spans(task_id)
+
+    @app.post("/tasks/{task_id}/preserved-spans")
+    def create_preserved_span(task_id: str, body: dict):
+        return svc().create_preserved_span(task_id, body)
+
+    @app.delete("/preserved-spans/{span_id}")
+    def delete_preserved_span(span_id: str):
+        return svc().delete_preserved_span(span_id)
 
     @app.post("/tasks/{task_id}/patch")
     def propose_patch(task_id: str, body: dict):
@@ -181,8 +266,8 @@ def create_app(service: Service | None = None) -> FastAPI:
         return svc().writing_map(task_id)
 
     @app.post("/tasks/{task_id}/checkpoint")
-    def checkpoint(task_id: str):
-        return svc().checkpoint(task_id)
+    def checkpoint(task_id: str, body: dict | None = None):
+        return svc().checkpoint(task_id, (body or {}).get("expected_revision"))
 
     # ----------------------------------------------------------- patches ----
 
@@ -205,15 +290,36 @@ def create_app(service: Service | None = None) -> FastAPI:
         content = body.get("working_content")
         if not isinstance(content, str):
             raise ApiError("VALIDATION", "working_content must be text.")
-        return svc().autosave(draft_id, content)
+        return svc().autosave(draft_id, content, body.get("expected_revision"))
 
     @app.get("/versions/{version_id}")
     def get_version(version_id: str):
         return svc().get_version(version_id)
 
+    @app.get("/tasks/{task_id}/export")
+    def export_task(task_id: str, format: str = "md",
+                    expected_revision: str | None = None,
+                    include_title: str = "true"):
+        try:
+            revision = int(expected_revision) if expected_revision is not None else None
+        except ValueError:
+            revision = expected_revision
+        artifact = svc().export_task(
+            task_id, format, revision, _export_bool(include_title))
+        return Response(content=artifact.content, media_type=artifact.media_type,
+                        headers=artifact.headers)
+
+    @app.get("/versions/{version_id}/export")
+    def export_version(version_id: str, format: str = "md",
+                       include_title: str = "true"):
+        artifact = svc().export_version(
+            version_id, format, _export_bool(include_title))
+        return Response(content=artifact.content, media_type=artifact.media_type,
+                        headers=artifact.headers)
+
     @app.post("/versions/{version_id}/restore")
-    def restore_version(version_id: str):
-        return svc().restore_version(version_id)
+    def restore_version(version_id: str, body: dict | None = None):
+        return svc().restore_version(version_id, (body or {}).get("expected_revision"))
 
     # ------------------------------------------------------------- misc ----
 
@@ -236,6 +342,22 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.post("/settings/test")
     def test_settings(body: dict):
         return svc().test_connection(body)
+
+    # ----------------------------------------------------------- backups ----
+
+    @app.get("/backups/export")
+    def export_backup():
+        artifact = svc().create_workspace_backup()
+        return Response(content=artifact.content, media_type=artifact.media_type,
+                        headers=artifact.headers)
+
+    @app.post("/backups/inspect")
+    async def inspect_backup(request: Request):
+        return svc().inspect_workspace_backup(await backup_body(request))
+
+    @app.post("/backups/restore")
+    async def restore_backup(request: Request):
+        return svc().restore_workspace_backup(await backup_body(request))
 
     @app.get("/")
     def index():

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 
 from app.benchmark import BenchmarkRunner, load_cases
@@ -23,8 +25,8 @@ def write_cases(tmp_path):
     return path
 
 
-def test_load_real_smoke_cases(repo_root):
-    cases = load_cases(repo_root / "benchmarks" / "smoke_cases.jsonl")
+def test_load_public_synthetic_smoke_cases(repo_root):
+    cases = load_cases(repo_root / "tests" / "fixtures" / "smoke_cases.jsonl")
     assert len(cases) == 10
     assert {c["task_type"] for c in cases} == {
         "narrative_commentary", "character_analysis", "fiction_scene",
@@ -41,7 +43,7 @@ def test_benchmark_b0_b1_b3_end_to_end(tmp_path, tmp_config):
         "critic": [critique_json(), critique_json()],
         "baseline": ["直接文本一", "直接文本二", "强提示文本一", "强提示文本二"],
     })
-    runner = BenchmarkRunner(tmp_config, client=client)
+    runner = BenchmarkRunner(tmp_config, baselines_dir=Path(__file__).parent / "fixtures" / "baselines", client=client)
     outcome = runner.run(cases_path, baselines=("B0", "B1", "B3"),
                          experiment_id="test_exp")
     exp_dir = tmp_path / "results" / "test_exp"
@@ -76,7 +78,7 @@ def test_benchmark_persists_failed_case(tmp_path, tmp_config):
         "critic": [critique_json()],
         "baseline": ["t1", "t2", "t3", "t4"],
     })
-    runner = BenchmarkRunner(tmp_config, client=client)
+    runner = BenchmarkRunner(tmp_config, baselines_dir=Path(__file__).parent / "fixtures" / "baselines", client=client)
     outcome = runner.run(cases_path, baselines=("B0", "B1", "B3"),
                          experiment_id="fail_exp")
     rows = [json.loads(l) for l in
@@ -88,7 +90,7 @@ def test_benchmark_persists_failed_case(tmp_path, tmp_config):
 
 def test_benchmark_rejects_unknown_baseline(tmp_path, tmp_config):
     cases_path = write_cases(tmp_path)
-    runner = BenchmarkRunner(tmp_config, client=MockClient({}))
+    runner = BenchmarkRunner(tmp_config, baselines_dir=Path(__file__).parent / "fixtures" / "baselines", client=MockClient({}))
     try:
         runner.run(cases_path, baselines=("B9",))
         assert False, "expected ValueError"
@@ -100,7 +102,7 @@ def test_benchmark_builds_client_when_none_given(tmp_path, tmp_config):
     """Regression: direct baselines must not crash with client=None."""
     cases_path = write_cases(tmp_path)
     tmp_config.provider = "mock"
-    runner = BenchmarkRunner(tmp_config)  # no client passed
+    runner = BenchmarkRunner(tmp_config, baselines_dir=Path(__file__).parent / "fixtures" / "baselines")  # no client passed
     assert runner.client is not None
     outcome = runner.run(cases_path, baselines=("B0",), experiment_id="no_client")
     rows = [json.loads(l) for l in

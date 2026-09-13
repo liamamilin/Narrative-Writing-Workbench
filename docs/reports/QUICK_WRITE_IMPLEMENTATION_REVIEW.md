@@ -877,3 +877,11 @@ discovery (topic_only; already persisted and now reused), N2 WIR plan
 - UI: the failure card's Retry sends `resume: true` with the current
   panel params, and explains that completed steps are not re-run.
 - 5 new tests (tests/test_resume.py). 270 tests. app.js v42.
+
+## 2026-09-13 稳定性开发补充
+
+本轮沿用 V0/V0.1 规格，具体变更统一见 [稳定性实现契约](../planning/STABILIZATION_API_AND_DATA.md) 与 [本轮报告](V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md)。Quick Write 的发现/换角度/同角度重写保持现有入口；增加 revision、版本 plan 来源、运行编号和输入指纹。恢复旧稿后只解释该版本的角度，失败续跑节点不冒充当前稿件来源。
+
+浏览器发现 `draft_revision` 先生成全文的原实现与 product/12 的 Diagnose → Patch 冲突，按更具体规范修正为直接导入原稿、检查、提案、接受。旧库仅在原始 Source 唯一可证明且不存在 Draft 时回填，未知来源不猜测。
+
+完整浏览器进程重启和固定真实模型 12 例工程评估已经完成；原生输入法人工走查、真实输出人工质量评分及历史盲评仍在剩余清单中，不以自动 PASS 或 mock 通过替代人工验收。

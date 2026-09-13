@@ -21,7 +21,20 @@ For Quick Write (topic-only) work, the **V0.1 extension** at
 `docs/narrative-writing-product-v0.1-quick-write-spec/` extends — not
 replaces — the V0 spec. Read the V0 spec first, then
 `QUICK_WRITE_IMPLEMENTATION_TASK.md` and `product/11..20`. Implemented:
-see `QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md`.
+see `docs/reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md`.
+
+For the local Idea Box, the **V0.7 extension** at
+`docs/narrative-writing-product-v0.7-idea-box-spec/` extends V0/V0.1. Read
+those base specs first, then `IDEA_BOX_IMPLEMENTATION_TASK.md` and
+`product/36..38`. Implemented: see
+`docs/reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md`.
+
+For export/backup work, read the **V0.2 extension** at
+`docs/narrative-writing-product-v0.2-export-backup-spec/`. For optional
+pre-writing angle confirmation, read V0 and V0.1 first, then the **V0.3
+extension** at `docs/narrative-writing-product-v0.3-angle-confirmation-spec/`.
+These extensions govern only their named product surfaces and do not reopen
+engine scope.
 
 Engine reference (internals only):
 
@@ -61,7 +74,7 @@ For engine work: produce a short implementation review (understanding,
 spec inconsistencies, file structure, milestones, risks), then implement in
 the order defined by `docs/10_IMPLEMENTATION_PLAN.md`.
 
-For product work: create `PRODUCT_IMPLEMENTATION_REVIEW.md` as required by
+For product work: create `docs/reports/PRODUCT_IMPLEMENTATION_REVIEW.md` as required by
 `PRODUCT_IMPLEMENTATION_TASK.md` before writing code.
 
 ## Non-Goals

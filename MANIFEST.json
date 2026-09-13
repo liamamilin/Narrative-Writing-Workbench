@@ -11,7 +11,7 @@
   },
   "files": [
     "AGENTS.md",
-    "IMPLEMENTATION_TASK.md",
+    "docs/reports/IMPLEMENTATION_TASK.md",
     "MANIFEST.json",
     "README.md",
     "benchmarks/README.md",
@@ -31,7 +31,7 @@
     "docs/10_IMPLEMENTATION_PLAN.md",
     "docs/11_ACCEPTANCE_CRITERIA.md",
     "docs/12_THEORY.md",
-    "docs/13_FUTURE_ROADMAP.md",
+    "docs/archive/2026-09-13/13_FUTURE_ROADMAP.md",
     "prompts/architect.md",
     "prompts/critic.md",
     "prompts/patcher.md",

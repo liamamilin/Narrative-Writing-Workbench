@@ -9,7 +9,7 @@ import json
 import time
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import RevisionClient as TestClient
 
 from workbench.api import create_app
 from workbench.db import Database
@@ -43,6 +43,11 @@ class BadDiscoveryEngine(MockWritingEngine):
 class FailingDiscoveryEngine(MockWritingEngine):
     def discover_meaning(self, **kw):
         raise DiscoveryFailed("no angle found")
+
+
+class TimeoutDiscoveryEngine(MockWritingEngine):
+    def discover_meaning(self, **kw):
+        raise TimeoutError("provider request timed out")
 
 
 def _svc(engine=None):
@@ -112,6 +117,26 @@ def test_discovery_engine_failure_retryable():
     r = c.post(f"/tasks/{tid}/generate")
     assert r.status_code == 500
     assert r.json()["error"]["retryable"] is True
+
+
+def test_discovery_timeout_is_actionable_and_persisted(monkeypatch):
+    from workbench import settings as settings_mod
+    monkeypatch.setattr(settings_mod, "load", lambda: {"timeout_seconds": 42})
+    svc = _svc(TimeoutDiscoveryEngine())
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+
+    r = c.post(f"/tasks/{tid}/generate")
+
+    assert r.status_code == 500
+    message = r.json()["error"]["message"]
+    assert "寻找角度超时" in message and "42 秒" in message
+    operation_id = svc.db.q1(
+        "SELECT id FROM writing_operations WHERE task_id=? ORDER BY rowid DESC",
+        (tid,))["id"]
+    operation = svc.operation_detail(tid, operation_id)
+    error_events = [e for e in operation["events"] if e["kind"] == "error"]
+    assert error_events[0]["data"]["message"] == message
 
 
 def test_structured_repair_path_with_meaning_validator():
@@ -271,7 +296,7 @@ def test_source_grounded_flow_unchanged():
     assert c.get(f"/tasks/{tid}/meaning").status_code == 404
 
 
-def test_draft_revision_flow_unchanged():
+def test_draft_revision_preserves_import_without_generation():
     c = _client()
     r = c.post("/tasks", json={"input_mode": "draft_revision", "type": "essay",
                                "instruction": "结尾太说教,收住。",
@@ -279,7 +304,11 @@ def test_draft_revision_flow_unchanged():
     assert r.status_code == 200
     tid = r.json()["id"]
     assert r.json()["input_mode"] == "draft_revision"
-    assert c.post(f"/tasks/{tid}/generate").status_code == 200
+    draft = c.get(f"/tasks/{tid}").json()["draft"]
+    assert draft["working_content"] == "第一稿全文在此。\n\n他终于明白了。"
+    assert c.post(f"/tasks/{tid}/generate").status_code == 409
+    assert c.post(f"/tasks/{tid}/review").status_code == 200
+    assert c.get(f"/tasks/{tid}/meaning").status_code == 404
 
 
 # ---------------------------------------------- 11. factuality warning ----
@@ -415,7 +444,7 @@ def test_progress_idle_task_returns_eof_immediately():
     c = _client()
     tid = qw_task(c)                     # never generated
     events = _sse_events(c.get(f"/tasks/{tid}/progress").text)
-    assert events == [("eof", {"seq": -1, "kind": "eof"})]
+    assert events == [("eof", {"seq": -1, "kind": "eof", "data": {}})]
 
 
 # ------------------------------------------------ token-level streaming ----
@@ -639,7 +668,7 @@ def test_ungrouped_generate_error_resets_status_to_failed():
 
 # ---- T1: stale-generating escape must run before param writes touch updated_at ----
 
-def test_stale_generating_allows_retry_despite_param_overrides():
+def test_age_alone_never_releases_generating_guard():
     svc = _svc()
     c = TestClient(create_app(svc))
     tid = qw_task(c)
@@ -650,7 +679,7 @@ def test_stale_generating_allows_retry_despite_param_overrides():
                 (old, tid))
     r = c.post(f"/tasks/{tid}/generate",
                json={"immersion": "high", "target_length": 700})
-    assert r.status_code == 200                          # retry allowed
+    assert r.status_code == 409                          # restart recovery is explicit
 
 
 # ---- T2: regenerate/rediscover must honor the concurrency guard ----
@@ -1005,7 +1034,7 @@ def test_generate_rejected_while_reviewing(monkeypatch):
     c = TestClient(create_app(svc))
     tid = qw_task(c)
     c.post(f"/tasks/{tid}/generate", json={})
-    svc._reviewing.add(tid)                       # simulate mid-review
+    svc.db.exec("INSERT INTO writing_operations(id,task_id,kind,process_id,status,started_at) VALUES('blocked-review',?,'review','test','running','now')", (tid,))
     r = c.post(f"/tasks/{tid}/generate", json={})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "REVIEWING"
@@ -1013,7 +1042,7 @@ def test_generate_rejected_while_reviewing(monkeypatch):
     assert r.status_code == 409                    # regenerate guarded too
     r = c.post(f"/tasks/{tid}/rediscover-angle", json={})
     assert r.status_code == 409                    # rediscover guarded too
-    svc._reviewing.discard(tid)
+    svc.db.exec("UPDATE writing_operations SET status='succeeded' WHERE id='blocked-review'")
     assert c.post(f"/tasks/{tid}/generate", json={}).status_code == 200
 
 
@@ -1037,16 +1066,16 @@ def test_concurrent_reviews_rejected_and_flag_released(monkeypatch):
     first = threading.Thread(target=lambda: c.post(f"/tasks/{tid}/review"))
     first.start()
     for _ in range(100):
-        if tid in svc._reviewing:
+        if svc._operation_view(tid)["status"] == "running":
             break
         time.sleep(0.02)
-    assert tid in svc._reviewing
+    assert svc._operation_view(tid)["status"] == "running"
     r = c.post(f"/tasks/{tid}/review")
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "REVIEWING"
     gate.set()
     first.join(6)
-    assert not svc._reviewing                      # released after completion
+    assert svc._operation_view(tid)["status"] == "succeeded"
 
 
 # ---------------------------------- 15. thinking chain (meaning pipeline v2) ----

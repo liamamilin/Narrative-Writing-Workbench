@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["overview", "steps", "issues"],
+  "properties": {
+    "overview": {"type": "string", "minLength": 1, "maxLength": 1200},
+    "steps": {
+      "type": "array", "minItems": 1, "maxItems": 80,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "paragraph", "paragraph_quote", "primary_function", "knowledge_gain", "question_raised", "question_answered"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 80},
+          "paragraph": {"type": "integer", "minimum": 1},
+          "paragraph_quote": {"type": "string", "minLength": 1, "maxLength": 10000},
+          "primary_function": {"type": "string", "minLength": 1, "maxLength": 600},
+          "knowledge_gain": {"type": "string", "minLength": 1, "maxLength": 800},
+          "question_raised": {"type": ["string", "null"], "maxLength": 600},
+          "question_answered": {"type": ["string", "null"], "maxLength": 600}
+        }
+      }
+    },
+    "issues": {
+      "type": "array", "maxItems": 12,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "type", "severity", "paragraph_start", "paragraph_end", "quote", "message", "effect", "goal"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 80},
+          "type": {"enum": ["repetition", "reasoning_gap", "unanswered_question", "unclear_transition"]},
+          "severity": {"enum": ["major", "moderate", "minor"]},
+          "paragraph_start": {"type": "integer", "minimum": 1},
+          "paragraph_end": {"type": "integer", "minimum": 1},
+          "quote": {"type": "string", "minLength": 1, "maxLength": 10000},
+          "message": {"type": "string", "minLength": 1, "maxLength": 800},
+          "effect": {"type": "string", "minLength": 1, "maxLength": 800},
+          "goal": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      }
+    }
+  }
+}

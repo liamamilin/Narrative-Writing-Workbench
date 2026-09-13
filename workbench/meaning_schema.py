@@ -148,3 +148,20 @@ def product_safe_summary(obj: dict) -> dict:
         "reader_end_state": obj.get("reader_end_state", ""),
         "refined_thesis": obj.get("refined_thesis", ""),
     }
+
+
+def product_safe_candidates(obj: dict) -> list[dict]:
+    """Candidate cards for V0.3. Keep internal comparison and reasoning
+    products out of the response while giving the user enough to decide."""
+    cards = []
+    for candidate in obj.get("candidate_angles", []):
+        cards.append({
+            "id": candidate.get("id", ""),
+            "label": candidate.get("label", ""),
+            "mechanism": candidate.get("mechanism", ""),
+            "core_question": candidate.get("core_question", ""),
+            "deep_meaning": candidate.get("deep_meaning", ""),
+            "boundary": candidate.get("boundary") or obj.get("boundary", ""),
+            "reader_end_state": candidate.get("reader_end_state", ""),
+        })
+    return cards

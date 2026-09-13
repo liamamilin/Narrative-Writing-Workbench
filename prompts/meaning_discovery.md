@@ -51,7 +51,9 @@ Rules for the chain:
   B. 失败会制造身份危机
   C. 失败重新定价已经支付的成本
 - Each candidate carries its own `mechanism`(具体力量,不是大词)、
-  `core_question`、`deep_meaning`、`reader_end_state`。
+  `core_question`、`deep_meaning`、`reader_end_state`、`crack`、
+  `strongest_counterexample`、`boundary`。这些字段必须针对该候选自身，
+  不能把最终胜出候选的边界复制给其余候选。
 - **Counterexample**: name the strongest real counterexample — the one a
   thoughtful opponent would actually raise. Weak straw men are a defect.
 - **Boundary**: state when the refined thesis holds and when it does not.

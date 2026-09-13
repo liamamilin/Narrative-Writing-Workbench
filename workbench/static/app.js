@@ -7,16 +7,63 @@ const esc = s => (s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 async function api(method, path, body) {
-  const r = await fetch(path, {
-    method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let r;
+  try {
+    r = await fetch(path, {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (_) {
+    // Browser-level fetch failure: the backend itself is unreachable
+    // (idle auto-shutdown, crash, wrong port) — NOT the LLM provider.
+    throw { code: "BACKEND_DOWN",
+      message: "连不上本机 Workbench 服务（它可能因空闲自动退出了）。请先在终端运行 python -m workbench.server，再刷新页面重试。",
+      retryable: true, backendDown: true };
+  }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const e = data.error || { code: "NETWORK", message: r.statusText, retryable: false };
     throw e;
   }
+  return data;
+}
+
+async function downloadExport(path) {
+  let r;
+  try { r = await fetch(path); }
+  catch (_) {
+    throw { code: "BACKEND_DOWN", message: "连不上本机 Workbench 服务。", retryable: true };
+  }
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw data.error || { code: "NETWORK", message: r.statusText, retryable: false };
+  }
+  const disposition = r.headers.get("Content-Disposition") || "";
+  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plain = disposition.match(/filename="([^"]+)"/i);
+  let filename = plain?.[1] || "稿件.md";
+  if (utf8) {
+    try { filename = decodeURIComponent(utf8[1]); } catch (_) { /* use safe fallback */ }
+  }
+  const url = URL.createObjectURL(await r.blob());
+  const link = document.createElement("a");
+  link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
+}
+
+async function uploadBackup(path, file) {
+  let r;
+  try {
+    r = await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/zip" }, body: file,
+    });
+  } catch (_) {
+    throw { code: "BACKEND_DOWN", message: "连不上本机 Workbench 服务。", retryable: true };
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw data.error || { code: "NETWORK", message: r.statusText, retryable: false };
   return data;
 }
 
@@ -31,6 +78,7 @@ function toast(msg, err = false) {
 
 function openDialog({ title, message, confirmLabel = "确定", cancelLabel = "取消", inputLabel = "" }) {
   return new Promise(resolve => {
+    const previousFocus = document.activeElement;
     const dialog = document.createElement("dialog");
     dialog.className = "product-dialog";
     dialog.innerHTML = `<form method="dialog">
@@ -47,6 +95,7 @@ function openDialog({ title, message, confirmLabel = "确定", cancelLabel = "�
     const finish = value => {
       dialog.close();
       dialog.remove();
+      if (previousFocus?.isConnected) previousFocus.focus();
       resolve(value);
     };
     dialog.addEventListener("cancel", e => { e.preventDefault(); finish(null); });
@@ -171,17 +220,12 @@ const QW_EXAMPLES = [
 ];
 let AUTOSTART = false;
 
-/* topic library + compose state persist client-side only; the server never
-   stores suggestions, so "AI proposes, user accepts" stays untouched. */
-const LIB_KEY = "qw_topic_lib_v1", COMPOSE_KEY = "qw_compose_v1", LIB_MAX = 200;
+/* Compose state stays local. The old topic library is read only for a
+   one-time, server-confirmed migration into the SQLite idea box. */
+const LIB_KEY = "qw_topic_lib_v1", COMPOSE_KEY = "qw_compose_v1";
 const loadLib = () => {
   try { return JSON.parse(localStorage.getItem(LIB_KEY) || "[]") || []; }
   catch { return []; }
-};
-const saveLib = lib => {
-  try {
-    localStorage.setItem(LIB_KEY, JSON.stringify(lib.slice(-LIB_MAX)));
-  } catch { /* private mode: degrade to session-only */ }
 };
 const loadCompose = () => {
   try { return JSON.parse(localStorage.getItem(COMPOSE_KEY) || "{}") || {}; }
@@ -200,6 +244,8 @@ function quickWrite() {
        <label for="qw-topic">你要谈的话题</label>
       <textarea id="qw-topic" rows="3"
                 placeholder="在这里写下话题，或点选右侧任意一条">${esc(saved.topic || "")}</textarea>
+      <p class="row qw-save-row"><button class="ghost small" id="qw-save-current"
+        data-tip="把当前话题明确收藏到本机选题箱">☆ 收藏当前话题</button></p>
       <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
         `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
        <label for="qw-mode">写作模式</label>
@@ -225,9 +271,11 @@ function quickWrite() {
       </div>
       <p class="row qw-cta">
         <button class="primary" id="qw-go" data-tip="先找意义，再写初稿；完成后进入工作台(⌘/Ctrl+Enter 同效)">开始写</button>
+        <button id="qw-preview" data-tip="只寻找候选角度，不写正文">先看角度</button>
         <button onclick="location.hash='#/'">取消</button>
       </p>
       <p class="muted small">系统先找到值得说的角度与读者旅程，再动笔；写完进入同一工作台审阅修改。</p>
+      <section id="qw-angle-stage" class="qw-angle-stage" hidden></section>
     </section>
     <section class="card qw-col qw-left">
       <h2 class="qw-title">找点灵感</h2>
@@ -244,15 +292,27 @@ function quickWrite() {
          <button id="qw-topic-suggest" data-tip="已有话题时围绕它生成一批不同切面；为空时按领域生成一批">生成一批话题</button>
         <span class="muted small" id="qw-tax-sel"></span></p>
       <div class="qw-lib-head">
-        <h3>已生成话题 <span class="muted small" id="qw-lib-stats"></span></h3>
+        <h3>本次生成 <span class="muted small" id="qw-lib-stats"></span></h3>
         <button class="ghost" id="qw-topic-clear" style="display:none"
-                data-tip="清空整个话题库与去重记录">清空</button>
+                data-tip="只清空本次生成的候选">清空本次</button>
       </div>
       <div id="qw-lib"></div>
       <div id="qw-skel" style="display:none">
         <div class="qw-card qw-skel"></div><div class="qw-card qw-skel"></div>
         <div class="qw-card qw-skel"></div>
       </div>
+      <div class="idea-head">
+        <h3>选题箱 <span class="muted small" id="idea-stats"></span></h3>
+      </div>
+      <p class="muted small" id="idea-migration" hidden></p>
+      <div class="idea-filters">
+        <input id="idea-search" aria-label="搜索选题箱" placeholder="搜索话题、备注或领域">
+        <select id="idea-status" aria-label="筛选选题状态">
+          <option value="all">全部状态</option><option value="to_write">待写</option>
+          <option value="written">已写</option><option value="archived">已归档</option>
+        </select>
+      </div>
+      <div id="idea-box"><div class="qw-empty">正在读取本机选题箱…</div></div>
     </section>
   </div>`;
   if (saved.mode) $("#qw-mode").value = saved.mode;
@@ -264,17 +324,23 @@ function quickWrite() {
   $("#qw-ex").onclick = e => {
     const b = e.target.closest(".chip"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;
-    saveComposeNow();
+    TX.selectedIdeaId = null; TX.selectedGeneratedIndex = null;
+    saveComposeNow(); invalidateAngles();
   };
 
-  /* topic suggestion v5: domain chips -> batch generate -> grouped library
-     (localStorage). Objects/tensions stay engine-internal resources. */
-  const TX = { tax: null, domain: "", lib: loadLib(), selected: saved.topic || "" };
+  /* Generated suggestions are session-only. Saved ideas are explicit product
+     records, fetched from SQLite and linked to a task only when writing starts. */
+  const TX = { tax: null, domain: "", generated: [], ideas: [],
+               selected: saved.topic || "", selectedIdeaId: null,
+               selectedGeneratedIndex: null };
+  const AF = { taskId: null, discoveryId: null, candidates: [], selected: null,
+               signature: null };
   const composeState = () => ({
     topic: $("#qw-topic").value, mode: $("#qw-mode").value,
     angle: $("#qw-angle").value, custom: $("#qw-custom").value,
     length: $("#qw-length").value, lang: $("#qw-lang").value });
   const saveComposeNow = () => saveCompose(composeState());
+  const composeSignature = () => JSON.stringify(composeState());
   const domainName = id => {
     const d = ((TX.tax || {}).domains || []).find(x => x.id === id);
     return d ? d.name : (id ? id : "不限领域");
@@ -296,15 +362,24 @@ function quickWrite() {
     TX.domain = b.dataset.v;
     renderDomains();
   };
+  const chooseTopic = (topic, ideaId = null, generatedIndex = null) => {
+    TX.selected = topic;
+    TX.selectedIdeaId = ideaId;
+    TX.selectedGeneratedIndex = generatedIndex;
+    $("#qw-topic").value = topic;
+    saveComposeNow(); invalidateAngles();
+    renderLib(); renderIdeas();
+    $("#qw-topic").focus();
+  };
   const renderLib = (freshTs = 0, freshDomain = "") => {
-    const lib = TX.lib;
+    const lib = TX.generated;
     $("#qw-topic-clear").style.display = lib.length ? "" : "none";
     const doms = [...new Set(lib.map(t => t.domainName))];
     $("#qw-lib-stats").textContent =
       lib.length ? `${lib.length} 条 · ${doms.length} 个领域` : "";
     if (!lib.length) {
-      $("#qw-lib").innerHTML = `<div class="qw-empty">还没有生成过话题。选个领域(或不限),
-        点「生成一批话题」——每批 8 条，覆盖领域不同侧面；点任意一条填入写作表单。</div>`;
+      $("#qw-lib").innerHTML = `<div class="qw-empty">本次还没有生成候选。生成后可先挑选，
+        确定想写时再收藏到选题箱。</div>`;
       return;
     }
     const prevOpen = new Set(
@@ -325,9 +400,10 @@ function quickWrite() {
           <button class="ghost qw-more" data-d="${esc(items[0].t.domain)}"
                   data-tip="该领域再来一批(避开全部已生成话题)">再来一批</button></summary>
         <div class="qw-cards">${items.map(({t, i}) => `
-           <div class="qw-card${t.text === TX.selected ? " sel" : ""}${t.ts >= freshTs ? " fresh" : ""}" data-i="${i}" role="button" tabindex="0" aria-label="选择话题：${esc(t.text)}">
+           <div class="qw-card${t.text === TX.selected && TX.selectedGeneratedIndex === i ? " sel" : ""}${t.ts >= freshTs ? " fresh" : ""}" data-i="${i}" role="button" tabindex="0" aria-label="选择话题：${esc(t.text)}">
             <b>${esc(t.text)}</b>
             <span class="sub">${esc(t.hook)}
+              <button class="qw-save" data-i="${i}" title="收藏到选题箱">☆ 收藏</button>
               <button class="qw-del" data-i="${i}"
                        title="移除这条（${new Date(t.ts).toLocaleTimeString()}）">移除</button></span>
           </div>`).join("")}</div>
@@ -335,10 +411,16 @@ function quickWrite() {
     }).join("");
   };
   $("#qw-lib").onclick = e => {
+    const save = e.target.closest(".qw-save");
+    if (save) {
+      e.stopPropagation(); saveGenerated(+save.dataset.i, save); return;
+    }
     const del = e.target.closest(".qw-del");
     if (del) {
-      TX.lib.splice(+del.dataset.i, 1);
-      saveLib(TX.lib);
+      const index = +del.dataset.i;
+      TX.generated.splice(index, 1);
+      if (TX.selectedGeneratedIndex === index) TX.selectedGeneratedIndex = null;
+      else if (TX.selectedGeneratedIndex > index) TX.selectedGeneratedIndex -= 1;
       renderLib();
       return;
     }
@@ -351,11 +433,13 @@ function quickWrite() {
       return;
     }
     const card = e.target.closest(".qw-card"); if (!card) return;
-    TX.selected = TX.lib[+card.dataset.i].text;
-    $("#qw-topic").value = TX.selected;
-    saveComposeNow();
-    renderLib();
-    $("#qw-topic").focus();
+    const index = +card.dataset.i;
+    chooseTopic(TX.generated[index].text, null, index);
+  };
+  $("#qw-lib").onkeydown = e => {
+    const card = e.target.closest(".qw-card");
+    if (!card || e.target !== card || !["Enter", " "].includes(e.key)) return;
+    e.preventDefault(); card.click();
   };
   const seedNow = () => ($("#qw-topic").value || "").trim();
   const refreshSuggestBtn = () => {
@@ -375,12 +459,11 @@ function quickWrite() {
         { domain: TX.domain || null, count: 8,
           hint: ($("#qw-tax-hint").value || "").trim() || null,
           seed: seed || null,
-          avoid: TX.lib.map(t => t.text) });
+          avoid: [...TX.generated.map(t => t.text), ...TX.ideas.map(t => t.topic)] });
       const now = Date.now(), dname = domainName(TX.domain);
-      TX.lib = [...TX.lib, ...r.topics.map(t => ({
+      TX.generated = [...TX.generated, ...r.topics.map(t => ({
         domain: TX.domain, domainName: dname,
         text: t.text, hook: t.hook, ts: now }))];
-      saveLib(TX.lib);
       renderLib(now - 1, dname);
       const el = $("#qw-lib .qw-card.fresh");
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -396,35 +479,183 @@ function quickWrite() {
   };
   $("#qw-topic-suggest").onclick = suggestTopics;
   $("#qw-topic-clear").onclick = () => {
-    TX.lib = []; saveLib(TX.lib); TX.selected = ""; renderLib();
+    TX.generated = []; TX.selectedGeneratedIndex = null; renderLib();
+  };
+  const ideaStatusLabel = status => ({
+    to_write: "待写", written: "已写", archived: "已归档",
+  }[status] || status);
+  const renderIdeas = () => {
+    if (!$("#idea-box") || !$("#idea-stats")) return;
+    const counts = TX.ideaCounts || { to_write: 0, written: 0, archived: 0 };
+    $("#idea-stats").textContent =
+      `${counts.to_write} 待写 · ${counts.written} 已写 · ${counts.archived} 归档`;
+    if (!TX.ideas.length) {
+      $("#idea-box").innerHTML = `<div class="qw-empty">当前筛选下没有选题。
+        从本次生成中收藏，或收藏左侧正在编辑的话题。</div>`;
+      return;
+    }
+    $("#idea-box").innerHTML = TX.ideas.map(idea => `
+      <article class="idea-card${idea.id === TX.selectedIdeaId ? " sel" : ""}"
+        data-idea-id="${esc(idea.id)}">
+        <div class="idea-topic"><b>${esc(idea.topic)}</b>
+          <span class="idea-status ${esc(idea.status)}">${esc(ideaStatusLabel(idea.status))}</span></div>
+        ${idea.hook ? `<p class="muted small">${esc(idea.hook)}</p>` : ""}
+        ${idea.domain_name ? `<p class="idea-domain">${esc(idea.domain_name)}</p>` : ""}
+        <textarea class="idea-note" rows="2" maxlength="2000"
+          aria-label="${esc(idea.topic)}的备注" placeholder="补充备注…">${esc(idea.note)}</textarea>
+        <div class="idea-actions">
+          ${idea.task_id
+            ? `<button class="small" data-open-idea="${esc(idea.task_id)}">打开文章</button>`
+            : `<button class="small" data-use-idea="${esc(idea.id)}">用于写作</button>`}
+          <button class="ghost small" data-save-note="${esc(idea.id)}">保存备注</button>
+          <select class="idea-status-select" data-idea-status="${esc(idea.id)}" aria-label="修改选题状态">
+            ${(idea.task_id ? ["written", "archived"] : ["to_write", "archived"]).map(status =>
+              `<option value="${status}"${status === idea.status ? " selected" : ""}>${ideaStatusLabel(status)}</option>`).join("")}
+          </select>
+        </div>
+      </article>`).join("");
+  };
+  const refreshIdeas = async () => {
+    const request = (TX.ideaRequestSeq || 0) + 1;
+    TX.ideaRequestSeq = request;
+    const q = encodeURIComponent(($("#idea-search")?.value || "").trim());
+    const status = encodeURIComponent($("#idea-status")?.value || "all");
+    try {
+      const r = await api("GET", `/ideas?q=${q}&status=${status}&limit=200`);
+      if (request !== TX.ideaRequestSeq || !$("#idea-box")) return;
+      TX.ideas = r.ideas; TX.ideaCounts = r.counts; renderIdeas();
+    } catch (e) {
+      const box = $("#idea-box");
+      if (request === TX.ideaRequestSeq && box)
+        box.innerHTML = `<div class="qw-empty">${esc(e.message || "选题箱读取失败，请重试。")}</div>`;
+    }
+  };
+  const saveIdea = async (payload, button) => {
+    if (button) { button.disabled = true; button.textContent = "收藏中…"; }
+    try {
+      const r = await api("POST", "/ideas", payload);
+      await refreshIdeas();
+      toast(r.created ? "已收藏到本机选题箱。" : "选题箱里已有这条话题。");
+      return r.idea;
+    } catch (e) {
+      toast(e.message || "收藏失败，请重试。", true); return null;
+    } finally {
+      if (button?.isConnected) { button.disabled = false; button.textContent = "☆ 收藏"; }
+    }
+  };
+  const saveGenerated = async (index, button) => {
+    const item = TX.generated[index]; if (!item) return;
+    await saveIdea({ topic: item.text, hook: item.hook, domain: item.domain,
+      domain_name: item.domainName, origin: "generated" }, button);
+  };
+  $("#qw-save-current").onclick = async e => {
+    const topic = $("#qw-topic").value.trim();
+    if (!topic) { toast("先写下要收藏的话题。", true); return; }
+    const item = TX.selectedGeneratedIndex === null ? null : TX.generated[TX.selectedGeneratedIndex];
+    const idea = await saveIdea(item && item.text === topic
+      ? { topic, hook: item.hook, domain: item.domain, domain_name: item.domainName,
+          origin: "generated" }
+      : { topic, origin: "manual" }, e.currentTarget);
+    if (idea) { TX.selectedIdeaId = idea.id; TX.selected = idea.topic; renderIdeas(); }
+  };
+  $("#idea-search").oninput = () => {
+    clearTimeout(TX.searchTimer); TX.searchTimer = setTimeout(refreshIdeas, 180);
+  };
+  $("#idea-status").onchange = refreshIdeas;
+  $("#idea-box").onclick = async e => {
+    const open = e.target.closest("[data-open-idea]");
+    if (open) { location.hash = `#/tasks/${open.dataset.openIdea}`; return; }
+    const use = e.target.closest("[data-use-idea]");
+    if (use) {
+      const idea = TX.ideas.find(x => x.id === use.dataset.useIdea);
+      if (idea) chooseTopic(idea.topic, idea.id, null);
+      return;
+    }
+    const saveNote = e.target.closest("[data-save-note]");
+    if (saveNote) {
+      const card = saveNote.closest(".idea-card");
+      saveNote.disabled = true;
+      try {
+        await api("PATCH", `/ideas/${saveNote.dataset.saveNote}`,
+          { note: card.querySelector(".idea-note").value });
+        await refreshIdeas(); toast("备注已保存。");
+      } catch (err) { toast(err.message || "备注保存失败。", true); }
+      return;
+    }
+  };
+  $("#idea-box").onchange = async e => {
+    const select = e.target.closest("[data-idea-status]"); if (!select) return;
+    const prior = TX.ideas.find(x => x.id === select.dataset.ideaStatus)?.status;
+    select.disabled = true;
+    try {
+      await api("PATCH", `/ideas/${select.dataset.ideaStatus}`, { status: select.value });
+      await refreshIdeas();
+    } catch (err) {
+      select.value = prior || "to_write"; select.disabled = false;
+      toast(err.message || "状态更新失败。", true);
+    }
+  };
+  const migrateLegacy = async () => {
+    const legacy = loadLib();
+    if (!Array.isArray(legacy) || !legacy.length) return;
+    const info = $("#idea-migration"); if (!info) return;
+    info.hidden = false;
+    if (legacy.length > 200) {
+      info.textContent = "旧话题库超过 200 条，暂未迁移；原数据仍保留。"; return;
+    }
+    info.textContent = `正在迁移 ${legacy.length} 条旧话题…`;
+    try {
+      const r = await api("POST", "/ideas/import-legacy", { items: legacy });
+      if (r.imported + r.existing !== r.received) throw new Error("迁移确认不完整");
+      localStorage.removeItem(LIB_KEY);
+      if (info.isConnected)
+        info.textContent = `旧话题已迁移：新增 ${r.imported} 条，已有 ${r.existing} 条。`;
+      await refreshIdeas();
+    } catch (e) {
+      if (info.isConnected)
+        info.textContent = `旧话题迁移未完成，原数据仍保留。${e.message || "请稍后重试。"}`;
+    }
   };
   renderLib();                 // empty-state guidance (no taxonomy needed)
   refreshSuggestBtn();         // now safe: defined above
+  refreshIdeas().then(migrateLegacy);
   api("GET", "/taxonomy").then(t => {
     TX.tax = t; renderDomains();
   }).catch(() => {});
   $("#qw-angle").onchange = e => {
     $("#qw-custom").style.display = e.target.value === "custom" ? "" : "none";
-    saveComposeNow();
+    saveComposeNow(); invalidateAngles();
   };
-  $("#qw-topic").oninput = () => { saveComposeNow(); refreshSuggestBtn(); };
-  $("#qw-mode").onchange = saveComposeNow;
-  $("#qw-length").oninput = saveComposeNow;
-  $("#qw-lang").onchange = saveComposeNow;
+  const invalidateAngles = () => {
+    if (!AF.discoveryId || AF.signature === composeSignature()) return;
+    AF.taskId = AF.discoveryId = AF.selected = null; AF.candidates = [];
+    const stage = $("#qw-angle-stage");
+    stage.hidden = false;
+    stage.innerHTML = '<p class="muted small">写作设置已变化，请重新寻找候选角度。</p>';
+  };
+  $("#qw-topic").oninput = () => {
+    TX.selectedIdeaId = null; TX.selectedGeneratedIndex = null;
+    saveComposeNow(); refreshSuggestBtn(); invalidateAngles();
+  };
+  $("#qw-mode").onchange = () => { saveComposeNow(); invalidateAngles(); };
+  $("#qw-custom").oninput = () => { saveComposeNow(); invalidateAngles(); };
+  $("#qw-length").oninput = () => { saveComposeNow(); invalidateAngles(); };
+  $("#qw-lang").onchange = () => { saveComposeNow(); invalidateAngles(); };
   $("#qw-topic").addEventListener("keydown", e => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
       $("#qw-go").click();
     }
   });
-  $("#qw-go").onclick = async () => {
-    const btn = $("#qw-go");
+  const createQuickWriteTask = async (btn, busyText) => {
     const topic = $("#qw-topic").value.trim();
-    if (!topic) { toast("先写下你想谈的话题。", true); return; }
-    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> 写作中…';
+    if (!topic) { toast("先写下你想谈的话题。", true); return null; }
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spin"></span> ${busyText}`;
     try {
       const t = await api("POST", "/tasks", {
         input_mode: "topic_only", topic,
+        idea_id: TX.selectedIdeaId,
         title: topic.slice(0, 40),
         writing_mode: $("#qw-mode").value,
         angle_mode: $("#qw-angle").value,
@@ -437,18 +668,122 @@ function quickWrite() {
           "这个话题可能依赖具体事实",
           "你可以使用通用知识继续，文章不会假装引用来源；也可以先进入任务添加素材。",
           "使用通用知识继续", "先添加素材"))) {
-        btn.disabled = false; btn.textContent = "开始写";
         location.hash = `#/tasks/${t.id}`;   // don't orphan the created task
-        return;
+        return null;
       }
       saveComposeNow();
-      AUTOSTART = t.id;
-      location.hash = `#/tasks/${t.id}`;
+      return t;
     } catch (e) {
       toast(e.message || "无法开始写作。", true);
-      btn.disabled = false; btn.textContent = "开始写";
+      return null;
+    } finally {
+      btn.disabled = false;
     }
   };
+  $("#qw-go").onclick = async () => {
+    const btn = $("#qw-go");
+    const t = await createQuickWriteTask(btn, "写作中…");
+    btn.textContent = "开始写";
+    if (!t) return;
+    AUTOSTART = { tid: t.id, body: {} };
+    location.hash = `#/tasks/${t.id}`;
+  };
+
+  const angleValue = (candidate, key) => esc(candidate[key] || "");
+  const renderAngles = () => {
+    const stage = $("#qw-angle-stage");
+    stage.hidden = false;
+    if (!AF.candidates.length) {
+      stage.innerHTML = '<p class="muted small">这次没有可用候选，请再试一次。</p>';
+      return;
+    }
+    const selected = AF.candidates.find(c => c.id === AF.selected) || AF.candidates[0];
+    AF.selected = selected.id;
+    stage.innerHTML = `
+      <div class="qw-angle-head"><div><b>先选一个值得写的角度</b>
+        <p class="muted small">选择后可直接修改完整角度，再确认写作。</p></div>
+        <button class="small" id="qw-more-angles">再找一批</button></div>
+      <div class="qw-angle-list" role="listbox" aria-label="候选角度">
+        ${AF.candidates.map(c => `<button type="button" role="option"
+          aria-selected="${c.id === selected.id}" class="qw-angle-card${c.id === selected.id ? " on" : ""}"
+          data-angle-id="${esc(c.id)}"><b>${esc(c.label)}</b>
+          <span><strong>机制</strong>${esc(c.mechanism)}</span>
+          <span><strong>核心问题</strong>${esc(c.core_question)}</span>
+          <span><strong>边界</strong>${esc(c.boundary)}</span>
+          <span><strong>读者带走</strong>${esc(c.reader_end_state)}</span></button>`).join("")}
+      </div>
+      <details class="qw-angle-edit"><summary>编辑已选角度（可选）</summary>
+        <label for="qa-label">主张</label><textarea id="qa-label" rows="2">${angleValue(selected, "label")}</textarea>
+        <label for="qa-question">核心问题</label><textarea id="qa-question" rows="2">${angleValue(selected, "core_question")}</textarea>
+        <label for="qa-meaning">深层含义</label><textarea id="qa-meaning" rows="2">${angleValue(selected, "deep_meaning")}</textarea>
+        <label for="qa-boundary">适用边界</label><textarea id="qa-boundary" rows="2">${angleValue(selected, "boundary")}</textarea>
+        <label for="qa-end">读者收获</label><textarea id="qa-end" rows="2">${angleValue(selected, "reader_end_state")}</textarea>
+      </details>
+      <p class="row qw-angle-actions"><button class="primary" id="qw-confirm-angle">确认并开始写</button>
+        <button id="qw-back-form">返回修改设置</button></p>`;
+    stage.querySelector(".qw-angle-list").onclick = e => {
+      const card = e.target.closest("[data-angle-id]");
+      if (!card || card.dataset.angleId === AF.selected) return;
+      AF.selected = card.dataset.angleId; renderAngles();
+    };
+    $("#qw-back-form").onclick = () => {
+      stage.hidden = true; $("#qw-topic").focus();
+    };
+    $("#qw-more-angles").onclick = () => findAngles(true);
+    $("#qw-confirm-angle").onclick = confirmAngle;
+  };
+
+  const findAngles = async (reuseTask = false) => {
+    const btn = reuseTask ? $("#qw-more-angles") : $("#qw-preview");
+    const original = reuseTask ? "再找一批" : "先看角度";
+    let taskId = AF.taskId;
+    if (!reuseTask || !taskId || AF.signature !== composeSignature()) {
+      const t = await createQuickWriteTask(btn, "正在找角度…");
+      if (!t) { btn.textContent = original; return; }
+      taskId = t.id; AF.taskId = taskId; AF.signature = composeSignature();
+    }
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> 正在找角度…';
+    try {
+      const found = await api("POST", `/tasks/${taskId}/angle-options`, {});
+      AF.discoveryId = found.discovery_id;
+      AF.candidates = found.candidates;
+      AF.selected = found.candidates[0]?.id || null;
+      renderAngles();
+      $("#qw-angle-stage").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      toast(e.message || "寻找角度失败，请重试。", true);
+    } finally {
+      const current = reuseTask ? $("#qw-more-angles") : $("#qw-preview");
+      if (current) { current.disabled = false; current.textContent = original; }
+    }
+  };
+
+  const confirmAngle = async () => {
+    const btn = $("#qw-confirm-angle");
+    const values = {
+      label: $("#qa-label").value.trim(),
+      core_question: $("#qa-question").value.trim(),
+      deep_meaning: $("#qa-meaning").value.trim(),
+      boundary: $("#qa-boundary").value.trim(),
+      reader_end_state: $("#qa-end").value.trim(),
+    };
+    if (Object.values(values).some(v => !v)) {
+      toast("请补全角度的主张、问题、含义、边界和读者收获。", true); return;
+    }
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> 正在确认…';
+    try {
+      const confirmed = await api("POST", `/tasks/${AF.taskId}/confirm-angle`, {
+        discovery_id: AF.discoveryId, candidate_id: AF.selected, edits: values,
+      });
+      AUTOSTART = { tid: AF.taskId,
+                    body: { confirmed_meaning_id: confirmed.confirmed_meaning_id } };
+      location.hash = `#/tasks/${AF.taskId}`;
+    } catch (e) {
+      toast(e.message || "角度确认失败，请重试。", true);
+      btn.disabled = false; btn.textContent = "确认并开始写";
+    }
+  };
+  $("#qw-preview").onclick = () => findAngles(false);
 }
 
 function reviseDraft() {
@@ -647,6 +982,7 @@ async function project(pid) {
 /* ------------------------------------------------------------- settings */
 async function settings() {
   const [s, pr] = await Promise.all([api("GET", "/settings"), api("GET", "/settings/providers")]);
+  if (location.hash !== "#/settings") return;
   const known = pr.providers.find(p => p.base_url && p.base_url === s.base_url);
   $("#app").innerHTML = `
   <div class="form" style="max-width:640px">
@@ -669,9 +1005,10 @@ async function settings() {
     <label for="s-model">模型</label>
     <div class="row">
       <input id="s-model" class="grow" list="s-model-list" value="${esc(s.model)}" placeholder="选择或输入模型名" data-tip="下拉选常见模型;也可手填">
-      <datalist id="s-model-list">${(known && known.models.length ? known.models : ["mimo-v2.5"]).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
-      <button id="s-fetch" data-tip="从该 Base URL 拉取可用模型列表(GET /models)">拉取模型</button>
+      <datalist id="s-model-list">${(known ? known.models : []).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
+      <button id="s-fetch" data-tip="向该地址请求模型清单(GET /models)，只列出已可用的模型，不会下载">刷新模型列表</button>
     </div>
+    <p class="muted small" id="s-model-hint" style="margin:4px 0 0"></p>
     <div class="trio" style="margin-top:10px">
       <div><span class="muted small">超时(秒)</span>
         <input id="s-timeout" type="number" min="30" step="30" value="${s.timeout_seconds ?? ""}" placeholder="300" data-tip="单次 LLM 调用超时"></div>
@@ -683,38 +1020,68 @@ async function settings() {
       <button id="s-test" data-tip="用当前参数发一次最小请求，不保存">测试连接</button>
       <span id="s-result" class="small"></span>
     </p>
+    <section class="card" style="margin-top:28px">
+      <h2>本地数据</h2>
+      <p class="muted small">备份包含已保存的项目、素材、正文和版本，不包含 settings.json、API 密钥、环境变量或日志。
+      恢复会创建新的独立工作区，不会改写当前数据。</p>
+      <p><button id="backup-download" data-tip="下载当前整个工作区的一致性快照">下载工作区备份</button></p>
+      <label for="backup-file">预检并恢复备份</label>
+      <input id="backup-file" type="file" accept=".zip,application/zip"
+        data-tip="先校验包格式、hash、数据库完整性和引用关系">
+      <p class="row">
+        <button id="backup-inspect" disabled>预检备份</button>
+        <button class="primary" id="backup-restore" disabled>恢复到新工作区</button>
+      </p>
+      <p id="backup-result" class="muted small" role="status"></p>
+    </section>
   </div>`;
 
   const PROVIDERS = pr.providers;
-  const showResult = html => { $("#s-result").innerHTML = html; };
-  let fetchSeq = 0;
+  const viewProvider = $("#s-provider");
+  const stillHere = () => $("#s-provider") === viewProvider;
+  const showResult = html => { if (stillHere()) $("#s-result").innerHTML = html; };
+  let fetchSeq = 0, modelEditSeq = 0;
+  $("#s-model").oninput = () => { modelEditSeq++; };
+  function hintModel(text) { if (stillHere()) $("#s-model-hint").textContent = text; }
   async function fetchModels(quiet = false) {
-    const btn = $("#s-fetch");
-    const my = ++fetchSeq;
-    if (btn) { btn.disabled = true; btn.textContent = "拉取中…"; }
+    const btn = $("#s-fetch"), my = ++fetchSeq, edit = modelEditSeq;
+    const base = $("#s-base").value.trim(), key = $("#s-key").value.trim();
+    const current = () => stillHere() && my === fetchSeq &&
+      $("#s-base").value.trim() === base && $("#s-key").value.trim() === key;
+    btn.disabled = true; btn.textContent = "刷新中…";
     try {
-      const r = await api("POST", "/settings/models", {
-        base_url: $("#s-base").value.trim(), api_key: $("#s-key").value.trim() });
-      if (my !== fetchSeq) return;               // a newer fetch won
+      const r = await api("POST", "/settings/models", { base_url: base, api_key: key });
+      if (!current()) return;
       if (r.ok && r.models.length) {
         $("#s-model-list").innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join("");
-        if (!r.models.includes($("#s-model").value)) $("#s-model").value = r.models[0];
-        if (!quiet) showResult(`<span style="color:var(--accent)">已载入 ${r.models.length} 个模型</span>`);
-        else showResult(`<span class="muted">已自动载入 ${r.models.length} 个模型</span>`);
-      } else if (!quiet) {
-        showResult(`<span style="color:var(--warn)">✗ ${esc(r.error || "该端点没有返回模型列表")}</span>`);
+        if (!$("#s-model").value.trim() && edit === modelEditSeq) $("#s-model").value = r.models[0];
+        hintModel(r.models.includes($("#s-model").value.trim()) ? "" :
+          "清单未列出当前模型。手填名称会保留，可用「测试连接」确认。" );
+        showResult(`<span class="muted">已载入 ${r.models.length} 个模型建议</span>`);
+      } else {
+        $("#s-model-list").innerHTML = "";
+        hintModel("暂未获取模型清单，手填名称仍可保存。可用「测试连接」确认。" );
+        showResult(`<span class="muted">${esc(r.error || "该端点未返回模型清单")}</span>`);
       }
-    } catch (e) { if (!quiet && my === fetchSeq) showResult(`<span style="color:var(--warn)">✗ ${esc(e.message)}</span>`); }
-    finally { if (my === fetchSeq && btn) { btn.disabled = false; btn.textContent = "拉取模型"; } }
+    } catch (e) {
+      if (!current()) return;
+      hintModel(e.backendDown ? e.message : "模型清单请求失败，手填名称已保留。" );
+      if (!quiet) showResult(`<span style="color:var(--warn)">${esc(e.message)}</span>`);
+    } finally {
+      if (stillHere() && my === fetchSeq) { btn.disabled = false; btn.textContent = "刷新模型列表"; }
+    }
   }
   $("#s-provider").onchange = e => {
     const p = PROVIDERS.find(x => x.id === e.target.value);
     if (!p) return;
+    fetchSeq++;
+    $("#s-fetch").disabled = false; $("#s-fetch").textContent = "刷新模型列表";
     if (p.id !== "custom") $("#s-base").value = p.base_url;
+    hintModel("");
     const list = $("#s-model-list");
-    list.innerHTML = (p.models.length ? p.models : ["mimo-v2.5"])
+    list.innerHTML = p.models
       .map(m => `<option value="${esc(m)}">`).join("");
-    if (p.models.length && !p.models.includes($("#s-model").value))
+    if (p.models.length && !$("#s-model").value.trim())
       $("#s-model").value = p.models[0];
     if (!p.needs_key) $("#s-key").placeholder = "本地服务无需密钥(留空即可)";
     else $("#s-key").placeholder = "sk-…";
@@ -756,28 +1123,99 @@ async function settings() {
     } catch (e) { showResult(`<span style="color:var(--warn)">✗ ${esc(e.message)}</span>`); }
     finally { btn.disabled = false; btn.textContent = "测试连接"; }
   };
+
+  let backupFile = null, inspectedFile = null;
+  const backupResult = (message, error = false) => {
+    if (!stillHere()) return;
+    const out = $("#backup-result");
+    out.textContent = message;
+    out.style.color = error ? "var(--warn)" : "";
+  };
+  $("#backup-download").onclick = async () => {
+    const btn = $("#backup-download"); btn.disabled = true;
+    try {
+      const filename = await downloadExport("/backups/export");
+      toast(`已下载 ${filename}`);
+    } catch (e) { toast(e.message, true); }
+    finally { if (stillHere()) btn.disabled = false; }
+  };
+  $("#backup-file").onchange = e => {
+    backupFile = e.target.files[0] || null;
+    inspectedFile = null;
+    $("#backup-inspect").disabled = !backupFile;
+    $("#backup-restore").disabled = true;
+    backupResult(backupFile ? `已选择 ${backupFile.name}，请先预检。` : "");
+  };
+  $("#backup-inspect").onclick = async () => {
+    if (!backupFile) return;
+    const btn = $("#backup-inspect"); btn.disabled = true;
+    inspectedFile = null; $("#backup-restore").disabled = true;
+    backupResult("正在预检…");
+    try {
+      const r = await uploadBackup("/backups/inspect", backupFile);
+      if (!stillHere()) return;
+      inspectedFile = backupFile;
+      $("#backup-restore").disabled = false;
+      const c = r.table_counts;
+      backupResult(`预检通过 · schema v${r.schema_version} · ${c.projects} 个项目 · ${c.tasks} 个任务 · ${c.drafts} 份正文 · ${c.versions} 个版本`);
+    } catch (e) { backupResult(`预检失败：${e.message}`, true); }
+    finally { if (stillHere()) btn.disabled = !backupFile; }
+  };
+  $("#backup-restore").onclick = async () => {
+    if (!backupFile || inspectedFile !== backupFile) return;
+    if (!(await confirmDialog("恢复工作区",
+      "将在本机创建一个新的独立工作区。当前数据不会改变。",
+      "创建恢复副本", "取消"))) return;
+    const btn = $("#backup-restore"); btn.disabled = true;
+    backupResult("正在创建独立副本…");
+    try {
+      const r = await uploadBackup("/backups/restore", backupFile);
+      backupResult(`恢复完成。新工作区：${r.restored_directory}`);
+      toast("已创建独立恢复副本。");
+    } catch (e) { backupResult(`恢复失败：${e.message}`, true); }
+    finally { if (stillHere()) btn.disabled = inspectedFile !== backupFile; }
+  };
 }
 
 /* =============================================================== workspace */
 const WS = {
   tid: null, task: null, draft: null, versions: [], sel: new Set(),
-  panelTab: "goal", view: "draft", review: null, map: null,
-  proposals: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
+  selAnchor: null,
+  panelTab: "goal", view: "draft", review: null, evidence: null, map: null, reader: null,
+  proposals: [], preserved: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
 };
 
 async function workspace(tid) {
+  if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
-  WS.tid = tid; WS.sel.clear(); WS.proposals = []; WS.review = null; WS.map = null;
+  WS.tid = tid; WS.sel.clear(); WS.selAnchor = null;
+  WS.proposals = []; WS.preserved = []; WS.review = null; WS.evidence = null; WS.map = null; WS.reader = null;
   await reloadTask();
-  if (WS.task.status === "generating" && !GENERATING) {
+  if (location.hash !== `#/tasks/${tid}`) return;
+  if (WS.task.operation?.status === "running" && !GENERATING) {
     resumeInProgressGeneration();
     return;
   }
+  if (WS.task.input_mode === "draft_revision") WS.panelTab = "review";
   renderWorkspace();
+  if (WS.task.operation?.status === "interrupted") {
+    toast("服务重启导致上次运行中断，已保存正文保留。请手动重试。", true);
+    const endpoints = {
+      generate: ["generate", {}],
+      regenerate: ["regenerate", { preserve_angle: true }],
+      rediscover_angle: ["rediscover-angle", {}],
+    };
+    const retry = endpoints[WS.task.operation.kind];
+    if (retry) genFailureCard(
+      "服务已重启，本次运行中断。已保存正文保留，可从匹配的已完成步骤继续。",
+      retry[0], retry[1], "生成已完成。");
+  }
   if (AUTOSTART) {
-    if (AUTOSTART === tid) {
+    const start = typeof AUTOSTART === "string"
+      ? { tid: AUTOSTART, body: {} } : AUTOSTART;
+    if (start.tid === tid) {
       AUTOSTART = false;
-      if (!WS.draft && WS.task.input_mode === "topic_only") generateDraft();
+      if (!WS.draft && WS.task.input_mode === "topic_only") generateDraft(start.body);
     } else AUTOSTART = false;   // navigated elsewhere first: drop, don't misfire
   }
 }
@@ -785,11 +1223,15 @@ async function workspace(tid) {
 async function reloadTask() {
   WS.task = await api("GET", `/tasks/${WS.tid}`);
   WS.draft = WS.task.draft;
+  WS.review = WS.task.review;
+  WS.evidence = WS.task.evidence_check;
   WS.dirty = false;
   WS.editRevision = 0;
   WS.versions = WS.draft ? WS.task.draft.versions : [];
   WS.proposals = (WS.task.pending_patches || [])
     .filter(p => p.after);   // restorable after reload/refactor
+  const kept = await api("GET", `/tasks/${WS.tid}/preserved-spans`);
+  WS.preserved = kept.spans || [];
   WS.meaning = null;
   if (WS.task.input_mode === "topic_only") {
     try { WS.meaning = await api("GET", `/tasks/${WS.tid}/meaning`); }
@@ -802,7 +1244,7 @@ const contentParas = () => (WS.draft ? WS.draft.working_content : "").split("\n\
 function renderWorkspace() {
   const t = WS.task;
   $("#app").innerHTML = `
-  <div class="workspace">
+  <div class="workspace" data-task-id="${esc(t.id)}">
     <section id="pane-left">
        <h3>素材</h3><div id="sources"></div>
        <label class="small muted" for="add-src">追加素材</label>
@@ -817,8 +1259,13 @@ function renderWorkspace() {
         <span class="grow"></span>
          <div class="tabs" role="tablist" aria-label="稿件视图">
            <button role="tab" aria-selected="${WS.view === "draft"}" id="tab-draft" class="${WS.view === "draft" ? "on" : ""}" data-tip="正文：点段落即可编辑，选段可发起局部修改">正文</button>
-           <button role="tab" aria-selected="${WS.view === "map"}" id="tab-map" class="${WS.view === "map" ? "on" : ""}" data-tip="只读：查看读者理解如何推进，点击定位段落">写作地图</button>
+           <button role="tab" aria-selected="${WS.view === "map"}" id="tab-map" class="${WS.view === "map" ? "on" : ""}" data-tip="生成时的结构计划；段落映射为估算">原定路径</button>
+           <button role="tab" aria-selected="${WS.view === "reader"}" id="tab-reader" class="${WS.view === "reader" ? "on" : ""}" data-tip="只读：检查当前实际正文如何逐段推进">稿件检查</button>
          </div>
+         <select id="export-format" class="export-format" aria-label="当前稿导出格式" data-tip="Markdown 保留可编辑的纯文本格式；纯文本适合直接粘贴">
+           <option value="md">Markdown</option><option value="txt">纯文本</option>
+         </select>
+         <button class="small" id="export-current" ${WS.draft ? "" : "disabled"} data-tip="先保存当前编辑，再下载这一份正文">导出当前稿</button>
          <a class="small" href="#/tasks/${t.id}/versions" data-tip="对比差异、恢复旧稿">版本</a>
       </div>
       <div id="center-body"></div>
@@ -844,6 +1291,24 @@ function renderWorkspace() {
        WS.map = m; WS.view = "map"; renderWorkspace();
      } catch (e) { setEditorEditable(true); toast(e.message || "还没有可用的写作地图。", true); }
   };
+   $("#tab-reader").onclick = async () => {
+     try {
+       await flushAutosave({ checkpoint: false });
+       const result = await api("GET", `/tasks/${WS.tid}/reader-path-review`);
+       WS.reader = result; WS.view = "reader"; renderWorkspace();
+     } catch (e) { toast(e.message || "暂时无法读取稿件检查。", true); }
+   };
+  $("#export-current").onclick = async () => {
+    if (!WS.draft) return;
+    const button = $("#export-current"); button.disabled = true;
+    try {
+      await flushAutosave({ checkpoint: false });
+      const format = $("#export-format").value;
+      await downloadExport(`/tasks/${encodeURIComponent(WS.tid)}/export?format=${format}&expected_revision=${WS.draft.revision}&include_title=true`);
+      toast("当前稿已下载。");
+    } catch (e) { toast(e.message || "导出失败。", true); }
+    finally { if (button.isConnected) button.disabled = false; }
+  };
    $("#add-src-btn").onclick = async () => {
      const body = $("#add-src").value.trim(); if (!body) return;
      try {
@@ -866,7 +1331,7 @@ function renderWorkspace() {
 
 function renderSources() {
   $("#sources").innerHTML = WS.task.sources.map(s => `
-    <div class="srcitem"><b class="small">${esc(s.title)}</b>
+    <div class="srcitem" data-source-id="${esc(s.id)}"><b class="small">${esc(s.title)}</b>
     <span class="muted small"> · ${esc(s.role)}</span>
     <div class="body">${esc(s.content)}</div></div>`).join("")
      || '<p class="muted small">还没有素材。</p>';
@@ -882,13 +1347,15 @@ function renderCenter() {
     return;
   }
   if (WS.view === "map") { box.innerHTML = mapView(); wireMap(); return; }
+  if (WS.view === "reader") { box.innerHTML = readerPathView(); wireReaderPath(); return; }
   box.innerHTML = `
-    <div id="selbar">
+    <div id="selbar"${WS.sel.size ? ' class="show"' : ''}>
        <button data-i="revise" data-tip="对选中段落写自定义修改指令">修改</button>
        <button data-i="shorter" data-tip="压缩选中段落，保留要点">精简</button>
        <button data-i="less" data-tip="少说破，让画面自己说话">少些直白</button>
        <button data-i="natural" data-tip="去掉做作措辞，更像人话">更自然</button>
        <button data-i="immersive" data-tip="增强细节、动作与声音">更沉浸</button>
+       <button data-i="preserve" data-tip="保护所选完整段落，后续局部修改不得改变这段原文">保留原文</button>
     </div>
     <div id="revise-box" style="display:none" class="card">
        <b class="small">修改所选段落</b>
@@ -906,31 +1373,53 @@ function renderCenter() {
          <button id="revise-cancel" data-tip="放弃本次修改，正文不动">取消</button>
       </div>
     </div>
-    <div id="editor">${contentParas().map((p, i) =>
-      `<div class="para${WS.sel.has(i + 1) ? " sel" : ""}" contenteditable="true" data-p="${i + 1}">${esc(p)}</div>`).join("")}</div>
+    <div id="editor">${contentParas().map((p, i) => {
+      const kept = WS.preserved.some(s => s.status === "active" &&
+        s.paragraph_start <= i + 1 && s.paragraph_end >= i + 1);
+      return `<div class="para${WS.sel.has(i + 1) ? " sel" : ""}${kept ? " preserved" : ""}" contenteditable="true" data-p="${i + 1}">${esc(p)}</div>`;
+    }).join("")}</div>
     <div id="proposals">${WS.proposals.map(proposalCard).join("")}</div>`;
   wireEditor();
+  showRecovery();
 }
 
 /* editor */
 function wireEditor() {
   const ed = $("#editor");
+  let composition = null;
+  ed.addEventListener("compositionstart", () => {
+    clearTimeout(WS.saveTimer);
+    WS.composition = new Promise(resolve => { composition = resolve; });
+  });
+  ed.addEventListener("compositionend", () => {
+    if (composition) composition();
+    composition = null; WS.composition = null;
+    clearTimeout(WS.saveTimer);
+    WS.saveTimer = setTimeout(() => saveDraft().catch(() => {}), 1200);
+  });
   ed.addEventListener("input", () => {
     WS.dirty = true; WS.editRevision += 1; setSave("保存中…");
     clearTimeout(WS.saveTimer);
-    WS.saveTimer = setTimeout(() => saveDraft().catch(() => {}), 1200);
+    if (!WS.composition) WS.saveTimer = setTimeout(() => saveDraft().catch(() => {}), 1200);
   });
   ed.addEventListener("click", e => {
     const p = e.target.closest(".para"); if (!p) return;
     const i = parseInt(p.dataset.p);
-    if (e.shiftKey && WS.sel.size) {
-      const a = Math.min(...WS.sel), b = Math.max(i, ...WS.sel);
+    const browserSelection = window.getSelection();
+    const range = browserSelection?.rangeCount && !browserSelection.isCollapsed
+      ? browserSelection.getRangeAt(0) : null;
+    const selectedByText = range ? [...ed.querySelectorAll(".para")]
+      .filter(x => { try { return range.intersectsNode(x); } catch (_) { return false; } })
+      .map(x => parseInt(x.dataset.p)) : [];
+    if ((e.shiftKey || e.metaKey || e.ctrlKey) && WS.selAnchor !== null) {
+      const a = Math.min(WS.selAnchor, i), b = Math.max(WS.selAnchor, i);
+      WS.sel.clear();
       for (let k = a; k <= b; k++) WS.sel.add(k);
-    } else if (e.metaKey || e.ctrlKey) {
-      WS.sel.has(i) ? WS.sel.delete(i) : WS.sel.add(i);
+    } else if (selectedByText.length) {
+      WS.sel.clear(); selectedByText.forEach(k => WS.sel.add(k));
+      WS.selAnchor = selectedByText[0];
     } else {
-      const inside = window.getSelection().toString().length > 0;
-      if (!inside) { WS.sel.clear(); WS.sel.add(i); }
+      WS.sel.clear(); WS.sel.add(i); WS.selAnchor = i;
     }
     ed.querySelectorAll(".para").forEach(x =>
       x.classList.toggle("sel", WS.sel.has(parseInt(x.dataset.p))));
@@ -940,6 +1429,8 @@ function wireEditor() {
     b.onclick = () => {
       if (b.dataset.i === "revise") {
         $("#revise-box").style.display = "block"; $("#revise-instr").focus();
+      } else if (b.dataset.i === "preserve") {
+        preserveSelection();
       } else {
         proposePatch({ shorter: "Make this shorter.", less: "Make this less explicit.",
           natural: "Make this more natural.", immersive: "Make this more immersive." }[b.dataset.i]);
@@ -961,6 +1452,10 @@ function captureEditorContent() {
     .join("\n\n");
   if (content === WS.draft.working_content) return false;
   WS.draft.working_content = content;
+  if (WS.review) WS.review.stale = true;
+  if (WS.evidence) WS.evidence.stale = true;
+  if (WS.reader) WS.reader.stale = true;
+  WS.preserved.forEach(s => { if (s.status === "active") s.status = "stale"; });
   WS.dirty = true;
   WS.editRevision += 1;
   return true;
@@ -974,24 +1469,57 @@ function setEditorEditable(enabled) {
 }
 
 async function saveDraft() {
+  if (WS.composition) await WS.composition;
   if (!WS.draft) return false;
   clearTimeout(WS.saveTimer); WS.saveTimer = null;
-  if (WS.savePromise) await WS.savePromise;
+  while (WS.savePromise) await WS.savePromise;
   captureEditorContent();
   if (!WS.dirty) { setSave("已保存"); return true; }
   const draftId = WS.draft.id;
   const content = WS.draft.working_content || "";
   const revision = WS.editRevision;
   try {
-    WS.savePromise = api("PATCH", `/drafts/${draftId}`, { working_content: content });
-    await WS.savePromise;
+    WS.savePromise = api("PATCH", `/drafts/${draftId}`, { working_content: content, expected_revision: WS.draft.revision });
+    const saved = await WS.savePromise;
+    if (WS.draft && WS.draft.id === draftId) WS.draft.revision = saved.revision;
     if (WS.draft && WS.draft.id === draftId && WS.editRevision === revision) WS.dirty = false;
     setSave(WS.dirty ? "有待保存的修改" : "已保存");
     return true;
   } catch (e) {
+    if (["STALE_BASE", "REVISION_REQUIRED"].includes(e.code)) {
+      try { sessionStorage.setItem(`workbench-recovery:${draftId}`, WS.draft.working_content); } catch (_) {}
+      showRecovery(WS.draft.working_content);
+    }
     setSave("保存失败"); toast(e.message || "正文保存失败。", true); throw e;
   } finally { WS.savePromise = null; }
 }
+function showRecovery(content = null) {
+  if (!WS.draft || !$("#editor")) return;
+  if (content === null) {
+    try { content = sessionStorage.getItem(`workbench-recovery:${WS.draft.id}`); } catch (_) {}
+  }
+  if (content === null) return;
+  $("#save-conflict")?.remove();
+  const box = document.createElement("div");
+  box.id = "save-conflict"; box.className = "card";
+  box.innerHTML = `<b>检测到另一处修改，本地输入已保留</b><p>可复制下方文字，或下载本地副本后载入服务端正文。</p>
+    <textarea aria-label="未保存的本地正文" rows="5" readonly></textarea>
+    <button id="recover-reload">下载副本并载入服务端正文</button>`;
+  box.querySelector("textarea").value = content;
+  $("#editor").before(box);
+  $("#recover-reload").onclick = async () => {
+    const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = `稿件本地副本-${WS.draft.id}.txt`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const draftId = WS.draft.id;
+    try {
+      await reloadTask();
+      sessionStorage.removeItem(`workbench-recovery:${draftId}`);
+      renderWorkspace();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
 function setSave(s) { const el = $("#save-state"); if (el) el.textContent = s; }
 
 /* patches */
@@ -1000,7 +1528,20 @@ function selRange() {
   return { paragraph_start: a[0], paragraph_end: a[a.length - 1] };
 }
 
-async function proposePatch(instruction) {
+async function preserveSelection() {
+  if (!WS.sel.size) return;
+  try {
+    await flushAutosave({ checkpoint: false });
+    await api("POST", `/tasks/${WS.tid}/preserved-spans`, {
+      expected_revision: WS.draft.revision, selection: selRange(),
+    });
+    await reloadTask();
+    renderWorkspace();
+    toast("所选原文已保留，局部修改会避开它。");
+  } catch (e) { toast(e.message || "无法保留所选原文。", true); }
+}
+
+async function proposePatch(instruction, reviewId = null, revisionItemId = null, claimLinkId = null) {
   if (!instruction) { toast("请写下修改要求。", true); return; }
   try { await flushAutosave({ checkpoint: false }); }
   catch (_) { return; }
@@ -1013,6 +1554,9 @@ async function proposePatch(instruction) {
   try {
     const p = await api("POST", `/tasks/${WS.tid}/patch`, {
       base_version_id: WS.draft.current_version_id,
+      expected_revision: WS.draft.revision, review_id: reviewId,
+      revision_item_id: revisionItemId,
+      claim_link_id: claimLinkId,
       selection: selRange(), instruction, locks,
     });
     p.instruction = instruction;
@@ -1032,32 +1576,54 @@ function proposalCard(p) {
     <div class="row">
        <button class="primary act-accept" data-tip="只替换选中段落，并存为一个新版本">接受并应用</button>
        <button class="act-reject" data-tip="正文原样保留">拒绝</button>
-       <button class="act-retry" data-tip="同一范围再提一版">再试一版</button></div></div>`;
+       ${p.revision_item_id || p.claim_link_id ? "" : '<button class="act-retry" data-tip="同一范围再提一版">再试一版</button>'}</div></div>`;
 }
 
 document.addEventListener("click", async e => {
   const card = e.target.closest(".patch-card"); if (!card) return;
+  if (card.dataset.busy === "true") return;
   const id = card.dataset.id;
   const prog = WS.proposals.find(x => x.patch_id === id);
+  const actionTask = WS.tid;
+  card.dataset.busy = "true";
+  card.querySelectorAll("button").forEach(button => { button.disabled = true; });
   try {
     if (e.target.classList.contains("act-accept")) {
       await flushAutosave({ checkpoint: false });
       setEditorEditable(false);
       await api("POST", `/patches/${id}/accept`);
       WS.proposals = WS.proposals.filter(x => x !== prog);
-      await reloadTask(); renderWorkspace();
+      if (location.hash === `#/tasks/${actionTask}`) {
+        await reloadTask();
+        if (location.hash === `#/tasks/${actionTask}`) renderWorkspace();
+      }
        toast("修改已接受，并保存为新版本。");
     } else if (e.target.classList.contains("act-reject")) {
       await api("POST", `/patches/${id}/reject`);
-      card.remove();
       WS.proposals = WS.proposals.filter(x => x.patch_id !== id);
+      if (location.hash === `#/tasks/${actionTask}`) {
+        await reloadTask();
+        if (location.hash === `#/tasks/${actionTask}`) renderWorkspace();
+      }
     } else if (e.target.classList.contains("act-retry")) {
       await proposePatch(prog.instruction);
     }
   } catch (err) { setEditorEditable(true); toast(err.message, true); }
+  finally {
+    if (card.isConnected) {
+      delete card.dataset.busy;
+      card.querySelectorAll("button").forEach(button => { button.disabled = false; });
+    }
+  }
 });
 
 /* panel */
+function evidenceApplicable() {
+  return WS.task.input_mode === "source_grounded"
+    && ["narrative_analysis", "character_analysis", "essay"].includes(WS.task.type)
+    && WS.task.sources.some(source => source.content.trim());
+}
+
 function renderPanel() {
   const box = $("#panel"); const t = WS.task; const c = t.config;
   if (WS.panelTab === "goal") box.innerHTML = `
@@ -1097,9 +1663,20 @@ function renderPanel() {
       </p>` : ""}
      <p><button id="p-check" style="width:100%" ${WS.draft ? "" : "disabled"} data-tip="把现在的正文存为手动版本，随时可回">保存版本节点</button></p>`;
   if (WS.panelTab === "review") box.innerHTML = `
-     <p><button id="r-run" style="width:100%" ${WS.draft ? "" : "disabled"} data-tip="检查当前稿，问题卡片可定位或发起修改">检查当前稿</button></p>
+     <div class="review-actions"><button id="r-run" ${WS.draft ? "" : "disabled"} data-tip="检查表达与推进，问题卡片可定位或发起修改">检查写作问题</button>
+     ${evidenceApplicable() ? `<button id="e-run" ${WS.draft ? "" : "disabled"} data-tip="只依据此任务已添加的材料，核查关键陈述">检查材料依据</button>` : ""}</div>
+    ${WS.preserved.some(s => s.status === "active") ? `<div class="preserved-list">
+      <b class="small">保留原文</b>
+      ${WS.preserved.filter(s => s.status === "active").map(s => `<div class="kept-row small">
+        <span>¶${s.paragraph_start}${s.paragraph_end !== s.paragraph_start ? "–" + s.paragraph_end : ""} · ${esc(s.quote.slice(0, 36))}${s.quote.length > 36 ? "…" : ""}</span>
+        <button class="small" data-unkeep="${s.id}" data-tip="取消后，新的局部修改可以改动这段文字">取消保留</button>
+      </div>`).join("")}</div>` : ""}
     <div id="review-out">${WS.review ? reviewView(WS.review) :
-       '<p class="muted small">检查会指出可能没有起效的段落；修不修、怎么修，由你决定。</p>'}</div>`;
+       '<p class="muted small">写作检查会指出可能没有起效的段落；修不修、怎么修，由你决定。</p>'}</div>
+    ${evidenceApplicable() ? `<div class="evidence-section"><b class="small">材料依据</b>
+      <p class="muted small">只对照你已添加的素材；“确认”表示你看过关联，不表示外部事实认证。</p>
+      <div id="evidence-out">${WS.evidence ? evidenceView(WS.evidence) :
+        '<p class="muted small">尚未检查材料依据。</p>'}</div></div>` : ""}`;
   if (WS.panelTab === "locks") box.innerHTML = `
      <p class="muted small">保护项约束每次修改。无法遵守时，工作台会拒绝提案，而不是静默改写。</p>
      ${[["facts", "事实", "不改变素材中的事实。"],
@@ -1117,6 +1694,7 @@ function renderPanel() {
 
   if (WS.panelTab === "goal") {
     $("#p-gen").onclick = generateDraft;
+    if (t.input_mode === "draft_revision") $("#p-gen").hidden = true;
     const another = $("#p-another"), same = $("#p-same");
     if (another) another.onclick = () => retryGeneration("rediscover-angle", "Trying another angle…");
     if (same) same.onclick = () => retryGeneration("regenerate", "Rewriting with the same angle…", { preserve_angle: true });
@@ -1124,7 +1702,7 @@ function renderPanel() {
        if (!WS.draft) { toast("还没有可保存的正文。", true); return; }
        try {
          await flushAutosave({ checkpoint: false });
-         await api("POST", `/tasks/${WS.tid}/checkpoint`);
+         await checkpointDraft();
          await reloadTask(); renderWorkspace(); toast("版本节点已保存。");
        } catch (e) { toast(e.message || "版本节点保存失败。", true); }
      };
@@ -1132,13 +1710,17 @@ function renderPanel() {
       $("#" + id).onchange = () => saveGoalPanel().catch(() => {});
     $("#p-suggest").onclick = suggestIntent;
   }
-  if (WS.panelTab === "review") $("#r-run").onclick = runReview;
+  if (WS.panelTab === "review") {
+    $("#r-run").onclick = runReview;
+    if ($("#e-run")) $("#e-run").onclick = runEvidenceCheck;
+  }
   if (WS.panelTab === "locks") {
     box.querySelectorAll("[data-lock]").forEach(cb => cb.onchange = async () => {
       const locks = { ...WS.task.config.locks };
       locks[cb.dataset.lock] = cb.checked;
       await api("PATCH", `/tasks/${WS.tid}`, { config: { locks } });
       WS.task.config.locks = locks;
+      if (WS.review) WS.review.stale = true;
       toast("保护项已保存。");
     });
   }
@@ -1157,6 +1739,7 @@ async function saveGoalPanel() {
       await api("PATCH", `/tasks/${tid}`, { instruction, config });
       task.instruction = instruction;
       Object.assign(task.config, config);
+      if (WS.tid === tid && WS.review) WS.review.stale = true;
     } catch (e) {
       toast("写作目标尚未保存，请重试。" + (e.message || ""), true);
       throw e;
@@ -1226,6 +1809,8 @@ const STEP_LABELS = {
   structure: ["设计读者理解推进", ""],
   writing: ["撰写正文", ""],
   review: ["检查中", ""],
+  evidence_check: ["核查材料依据", ""],
+  reader_path_review: ["检查稿件路径", ""],
 };
 
 function genBanner(on, stg, stgZh) {
@@ -1268,18 +1853,19 @@ function renderBanner(st) {
   const n = $("#gb-proc-n");
   if (n) n.textContent = st.sums.length ? `(${st.sums.length})` : "";
   const su = $("#gb-sums");
-  if (su) su.innerHTML = st.sums.map(s => {
+  if (su) su.innerHTML = st.sums.length ? st.sums.map(s => {
     const lbl = STEP_LABELS[s.stage] || [s.stage, ""];
     return `<div class="sum-line"><b>${esc(lbl[1] || lbl[0])}</b> ${esc(s.text)}</div>`;
-  }).join("");
+  }).join("") : `<div class="sum-line muted">各阶段完成后会在这里留一条小结；现在还在跑第一步，不用担心。</div>`;
 }
 
 function stepsView(steps, angle, errMsg) {
   const rows = steps.map((s, i) => {
     const [en, zh] = STEP_LABELS[s] || [s, ""];
     const active = i === steps.length - 1 && !angle && !errMsg;
+    const completed = s === "queued" ? "已开始 ·" : "完成 ·";
     return `<div class="step${active ? " act" : " ok"}">
-      ${active ? '<span class="spin"></span>' : "完成 ·"} ${esc(zh || en)}
+      ${active ? '<span class="spin"></span>' : completed} ${esc(zh || en)}
       </div>`;
   }).join("");
   const a = angle ? `<div class="step angle">选定角度 · <b>${esc(angle)}</b></div>` : "";
@@ -1304,43 +1890,69 @@ function renderProgressState(st) {
       ti.innerHTML = `${esc(lbl[0])} <span class="muted small">${esc(lbl[1])}</span>`;
     } else ti.textContent = "正在准备…";
   }
+  const n = $("#gb-proc-n");
+  if (n) n.textContent = st.sums.length ? `(${st.sums.length})` : "";
+  const su = $("#gb-sums");
+  if (su) su.innerHTML = st.sums.length ? st.sums.map(s => {
+    const lbl = STEP_LABELS[s.stage] || [s.stage, ""];
+    return `<div class="sum-line"><b>${esc(lbl[1] || lbl[0])}</b> ${esc(s.text)}</div>`;
+  }).join("") : `<div class="sum-line muted">各阶段完成后会在这里留一条小结；现在还在跑第一步，不用担心。</div>`;
 }
 
 function genFailureCard(errMsg, endpoint, body, okMsg) {
   const host = $("#center-body") || $("#app");
   host?.insertAdjacentHTML?.("afterbegin",
     `<div class="card" style="border-color:var(--warn)">
-      <b style="color:var(--warn)">生成失败 — 你的现有正文没有被改动</b>
+      <b style="color:var(--warn)">本次生成未提交，现有正文已保留</b>
       <p class="small">${esc(errMsg || "The draft could not be generated correctly.")}</p>
-      <p class="small muted">重试将从已完成的步骤继续(已发现的角度与已定稿的结构不会重跑)。
+      <p class="small muted">重试会复用输入与模型配置仍匹配的已完成步骤；配置变化时重新计算。
       想全新重来,请用 Goal 面板的 Generate。</p>
       <button class="primary" id="gen-retry" data-tip="从上一个成功的节点继续,不重复已完成的步骤">重试(继续)Retry</button></div>`);
+  const taskId = WS.tid;
+  const failureCard = $("#gen-retry")?.closest(".card");
+  api("GET", `/tasks/${taskId}`).then(async t => {
+    if (!failureCard?.isConnected || !t.operation || t.operation.status !== "failed") return;
+    const op = await api("GET", `/tasks/${taskId}/operations/${t.operation.id}`);
+    if (!failureCard.isConnected || !op.unapplied_result) return;
+    const details = document.createElement("details");
+    details.innerHTML = '<summary>查看已保留、尚未应用的生成结果</summary><textarea rows="8" readonly aria-label="未应用的生成结果"></textarea>';
+    details.querySelector("textarea").value = op.unapplied_result.content;
+    failureCard.appendChild(details);
+  }).catch(() => {});
   const r = $("#gen-retry");
   if (r) r.onclick = () => runGeneration(
     endpoint || "generate", { ...collectPanelParams(), ...(body || {}), resume: true },
     okMsg || "初稿已生成。");
 }
 
-function openProgress(tid, onUpdate, onEnd) {
-  let es;
+function openProgress(tid, onUpdate, onEnd, operationId = null) {
+  let es, polling = false;
+  const previousId = operationId ? null : WS.task.operation?.id;
 const state = { steps: [], angle: "", error: "", live: "", shown: "",
-                  seq: -1, sums: [], raw: {} };
+                  seq: -1, sums: [], raw: {}, operationId };
   let ended = false;
   const finish = (errMsg) => {
     if (ended) return;
     ended = true;
     if (errMsg) state.error = errMsg;
-    clearInterval(iv);
+    clearInterval(iv); clearInterval(poll);
     es.close();
     if (onEnd) onEnd(errMsg || null);
   };
-  try { es = new EventSource(`/tasks/${tid}/progress`); }
+  const query = operationId ? `?operation_id=${encodeURIComponent(operationId)}`
+    : previousId ? `?after_operation_id=${encodeURIComponent(previousId)}` : "";
+  try { es = new EventSource(`/tasks/${tid}/progress${query}`); }
   catch (e) { return { close() {}, alive: () => false }; }
-  const push = () => onUpdate(state);
+  const push = () => { if (location.hash === `#/tasks/${tid}`) onUpdate(state); };
   // Reconnect safety: the server replays full history from seq 0 after any
   // EventSource reconnect; without seq dedupe the live text doubles.
   const handle = (kind, fn) => es.addEventListener(kind, ev => {
     let e; try { e = JSON.parse(ev.data); } catch (_) { return; }
+    if (e.operation_id) {
+      if (!state.operationId && e.operation_id === previousId) return;
+      if (state.operationId && e.operation_id !== state.operationId) return;
+      state.operationId = e.operation_id;
+    }
     if (typeof e.seq === "number" && e.seq <= state.seq) return;
     if (typeof e.seq === "number") state.seq = e.seq;
     fn(e.data || {});
@@ -1352,7 +1964,7 @@ const state = { steps: [], angle: "", error: "", live: "", shown: "",
     if (behind <= 0) return;
     state.shown = state.live.slice(
       0, state.shown.length + Math.max(2, Math.ceil(behind * 0.12)));
-    onUpdate(state);
+    push();
   }, 40);
   handle("stage", d => {
     if (!state.steps.includes(d.stage)) { state.steps.push(d.stage); push(); }
@@ -1380,10 +1992,29 @@ const state = { steps: [], angle: "", error: "", live: "", shown: "",
     state.error = d.message || "";
     if (state.error) { push(); finish(d.message || ""); }
   });
-  es.addEventListener("done", () => finish(null));
-  es.addEventListener("eof", () => finish(null));
+  async function checkStatus() {
+    if (ended || polling) return;
+    polling = true;
+    try {
+      let op;
+      if (state.operationId) op = await api("GET", `/tasks/${tid}/operations/${state.operationId}`);
+      else {
+        op = (await api("GET", `/tasks/${tid}`)).operation;
+        if (!op || op.id === previousId) return;
+        state.operationId = op.id;
+      }
+      if (op.status === "succeeded") finish(null);
+      else if (op.status === "failed" || op.status === "interrupted")
+        finish(op.status === "interrupted" ? "服务已重启，本次运行中断。已保存正文保留，可手动重试。" : (state.error || "本次运行失败，请重试。"));
+    } catch (_) { /* transient disconnect: EventSource and status polling retry */ }
+    finally { polling = false; }
+  }
+  const poll = setInterval(checkStatus, 2000);
+  es.addEventListener("done", checkStatus);
+  es.addEventListener("eof", checkStatus);
+  es.onerror = checkStatus;
   return {
-    close() { clearInterval(iv); es.close(); },
+    close() { ended = true; clearInterval(iv); clearInterval(poll); es.close(); },
     alive: () => state.steps.length > 0,
   };
 }
@@ -1401,12 +2032,13 @@ function collectPanelParams() {
   return p;
 }
 
-async function generateDraft() {
+async function generateDraft(extraBody = {}) {
   if (GENERATING) return;
   if (WS.draft && !(await confirmDialog(
       "重新生成一稿？", "当前稿会先保存到版本历史，生成失败也不会改动正文。", "继续生成")))
     return;
-  await runGeneration("generate", collectPanelParams(), "初稿已生成。");
+  await runGeneration("generate", { ...collectPanelParams(), ...extraBody },
+                      "初稿已生成。");
 }
 
 async function retryGeneration(endpoint, label, body) {
@@ -1415,6 +2047,12 @@ async function retryGeneration(endpoint, label, body) {
       "确认重新写作", "当前稿会先保存到版本历史，之后可以随时恢复。", "继续"))) return;
   await runGeneration(endpoint, { ...collectPanelParams(), ...(body || {}) },
                       label.replace("…", "") + " — done.");
+}
+
+async function checkpointDraft() {
+  const r = await api("POST", `/tasks/${WS.tid}/checkpoint`, { expected_revision: WS.draft.revision });
+  WS.draft.revision = r.revision;
+  WS.draft.current_version_id = r.version_id;
 }
 
 async function flushAutosave({ checkpoint = true } = {}) {
@@ -1428,13 +2066,14 @@ async function flushAutosave({ checkpoint = true } = {}) {
   // An edit can land while a PATCH is in flight. Keep saving until the
   // revision persisted by saveDraft is still the latest local revision.
   while (WS.dirty || WS.savePromise) await saveDraft();
-  if (checkpoint) await api("POST", `/tasks/${WS.tid}/checkpoint`);
+  if (checkpoint) await checkpointDraft();
 }
 
 async function runGeneration(endpoint, body, okMsg) {
   const myTid = WS.tid;
   try { await flushAutosave(); }
   catch (_) { return; }
+  body = { ...body, expected_revision: WS.draft ? WS.draft.revision : null };
   GENERATING = true;
   WS.panelTab = "goal";
   if (!WS.draft) renderWorkspace();
@@ -1445,7 +2084,7 @@ async function runGeneration(endpoint, body, okMsg) {
   btns.forEach(b => { b.disabled = true; });
   setEditorEditable(false);
   let i = 0, t0 = Date.now();
-const render = renderBanner;
+  const render = renderBanner;
   const prog = openProgress(myTid, render);
   const timer = setInterval(() => {
     if (prog.alive()) return;             // real events win; rotate only as fallback
@@ -1455,14 +2094,19 @@ const render = renderBanner;
   }, 9000);
   const tick = setInterval(() => {
     const time = $("#gb-time");
-    if (time) time.textContent = `已用时 ${Math.round((Date.now() - t0) / 1000)} 秒`;
+    if (!time) return;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    time.textContent = secs > 180
+      ? `已用时 ${secs} 秒（比平时慢，模型可能在排队或思考较长，可继续等或检查设置里的模型地址）`
+      : `已用时 ${secs} 秒`;
   }, 1000);
-  const stillHere = () => WS.tid === myTid;
+  const stillHere = () => WS.tid === myTid && location.hash === `#/tasks/${myTid}`;
   try {
     await api("POST", `/tasks/${myTid}/${endpoint}`, body);
     if (!stillHere()) { toast("生成已完成，打开任务即可查看。"); }
     else {
       await reloadTask();
+      if (!stillHere()) return;
       WS.view = "draft"; renderWorkspace();
       toast(okMsg);
     }
@@ -1494,8 +2138,10 @@ function resumeInProgressGeneration() {
   genBanner(true);
   const btns = [$("#p-gen"), $("#gen-now"), $("#p-another"), $("#p-same")].filter(Boolean);
   btns.forEach(b => { b.disabled = true; });
-  let i = 0, t0 = Date.now();
-  const stillHere = () => WS.tid === myTid;
+  let i = 0;
+  const startedAt = Date.parse(WS.task.operation?.started_at || "");
+  const t0 = Number.isFinite(startedAt) ? startedAt : Date.now();
+  const stillHere = () => WS.tid === myTid && location.hash === `#/tasks/${myTid}`;
   const prog = openProgress(myTid, renderProgressState, (errMsg) => {
     prog.close();
     clearInterval(timer); clearInterval(tick);
@@ -1503,26 +2149,35 @@ function resumeInProgressGeneration() {
     if (!stillHere()) { genBanner(false); toast(errMsg || "生成已完成。", !!errMsg); return; }
     genBanner(false);
     reloadTask().then(() => {
+      if (!stillHere()) return;
       WS.view = "draft";
       renderWorkspace();
       if (errMsg) {
-        genFailureCard(errMsg);
+        if (WS.task.operation?.kind === "review") {
+          WS.panelTab = "review"; renderPanel();
+        } else genFailureCard(errMsg);
         toast(errMsg || "生成失败。", true);
       } else {
         toast("生成完成。");
       }
     }).catch(e => toast(e.message || "Reload failed.", true));
-  });
+  }, WS.task.operation?.id);
   const timer = setInterval(() => {
     if (prog.alive()) return;             // real events win; rotate only as fallback
     i = Math.min(i + 1, STG.length - 1);
     const ti = $("#gb-title");
     if (ti) ti.innerHTML = `${STG[i]} <span class="muted small">${STG_ZH[i]}</span>`;
   }, 9000);
-  const tick = setInterval(() => {
+  const updateElapsed = () => {
     const time = $("#gb-time");
-    if (time) time.textContent = `已用时 ${Math.round((Date.now() - t0) / 1000)} 秒`;
-  }, 1000);
+    if (!time) return;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    time.textContent = secs > 180
+      ? `已用时 ${secs} 秒（模型仍在处理，将按设置中的单次超时停止）`
+      : `已用时 ${secs} 秒`;
+  };
+  updateElapsed();
+  const tick = setInterval(updateElapsed, 1000);
 }
 
 /* review */
@@ -1561,36 +2216,252 @@ async function runReview() {
 }
 
 function reviewView(r) {
-  return `<div class="row" style="flex-wrap:wrap">${Object.entries(r.summary).map(([k, v]) =>
-    `<span class="small">${({progression:"推进",meaning_density:"意义密度",immersion:"沉浸",restraint:"克制",coherence:"连贯"})[k] || k}</span> <span class="label ${v}">${({strong:"稳健",good:"良好",needs_attention:"需留意"})[v] || v}</span>`).join(" ")}</div>` +
+  const staleBanner = r.stale
+    ? `<p class="muted">正文或目标已改变；已记录本轮结果，继续处理前请重新检查。</p>` : "";
+  const labels = { progression:"推进", meaning_density:"意义密度", immersion:"沉浸", restraint:"克制", coherence:"连贯" };
+  const qualities = { strong:"稳健", good:"良好", needs_attention:"需留意" };
+  const decision = r.summary.decision === "PATCH_REQUIRED" ? "这篇还有需要修订的地方。" :
+    r.summary.decision === "PASS" ? "本次检查已通过。" : "";
+  const statuses = { open:"待处理", proposed:"提案中", resolved:"已完成",
+    dismissed:"已跳过", stale:"已失效" };
+  const severities = { fatal:"致命", major:"重要", moderate:"中等", minor:"轻微" };
+  const activeProposal = r.issues.some(i => i.status === "proposed");
+  return staleBanner + `<p class="small">${decision}</p><div class="row" style="flex-wrap:wrap">${Object.entries(labels).map(([k, label]) => {
+    const value = Object.hasOwn(qualities, r.summary[k]) ? r.summary[k] : "unknown";
+    return `<span class="small">${label}</span> <span class="label ${value}">${qualities[value] || "未完成"}</span>`;
+  }).join(" ")}</div>` +
     (r.issues.length ? r.issues.map((is, n) => `
-      <div class="issue"><p class="small">${esc(is.message)}</p>
+      <div class="issue revision-item ${esc(is.status || "open")}">
+      <div class="row"><span class="label">${esc(severities[is.severity] || "中等")}</span><span class="small muted">${esc(statuses[is.status] || "待处理")}</span></div>
+      <p class="small"><b>${esc(is.message)}</b></p>
+      ${is.effect ? `<p class="small muted">影响：${esc(is.effect)}</p>` : ""}
+      ${is.goal ? `<p class="small">修改目标：${esc(is.goal)}</p>` : ""}
+      ${is.quote ? `<blockquote class="issue-quote">${esc(is.quote)}</blockquote>` : ""}
       <p class="loc">¶${is.location.paragraph_start}${is.location.paragraph_end !== is.location.paragraph_start ? "–" + is.location.paragraph_end : ""}</p>
       <div class="row"><button class="small" data-show="${n}" data-tip="跳到并高亮对应段落">定位</button>
-      ${is.fixable ? `<button class="small" data-fix="${n}" data-tip="对该段落直接发起局部修改提案">修改</button>` : ""}</div></div>`).join("")
+      ${is.status === "open" ? `<button class="small" data-fix="${n}" ${activeProposal ? "disabled" : ""} data-tip="按修改目标生成局部提案">处理</button>
+      <button class="small" data-dismiss="${n}" data-tip="本轮不处理此项，正文不会改变">跳过</button>` : ""}</div></div>`).join("")
       : '<p class="muted small">没有发现需要特别留意的问题。</p>');
+}
+
+async function runEvidenceCheck() {
+  if (GENERATING) { toast("正在生成，请稍候。", true); return; }
+  if (!WS.draft) { toast("请先准备正文。", true); return; }
+  const tid = WS.tid;
+  try { await flushAutosave({ checkpoint: false }); }
+  catch (_) { return; }
+  const btn = $("#e-run");
+  if (btn) { btn.disabled = true; btn.textContent = "核查中…"; }
+  genBanner(true);
+  const prog = openProgress(tid, renderBanner);
+  try {
+    const result = await api("POST", `/tasks/${tid}/check-evidence`);
+    if (WS.tid === tid) WS.evidence = result;
+  } catch (e) {
+    if (WS.tid === tid) toast(e.message, true);
+  } finally {
+    prog.close();
+    if (WS.tid === tid) { genBanner(false); renderPanel(); }
+  }
+}
+
+function evidenceView(result) {
+  const relations = { supported:"材料支持", inference:"作者推断",
+    insufficient:"待补证据", conflict:"与材料冲突" };
+  const types = { fact:"事实陈述", author_inference:"作者推断", value_judgment:"价值判断" };
+  const statuses = { unreviewed:"待核查", confirmed:"已确认关联", dismissed:"本轮忽略" };
+  const stale = result.stale
+    ? '<p class="muted">正文或素材已改变；这些卡片已过期，请重新检查。</p>' : "";
+  if (!result.cards.length) return stale + '<p class="muted small">没有提取到可可靠定位的关键陈述。</p>';
+  return stale + result.cards.map(card => `
+    <div class="issue evidence-card ${esc(card.relation)}${result.stale ? " stale" : ""}">
+      <div class="row"><span class="label relation">${esc(relations[card.relation] || card.relation)}</span>
+        <span class="small muted">${esc(types[card.claim_type] || card.claim_type)} · ${esc(statuses[card.user_status] || card.user_status)}</span></div>
+      <blockquote class="issue-quote">${esc(card.draft_quote)}</blockquote>
+      <p class="small">${esc(card.explanation)}</p>
+      ${card.source_quote ? `<div class="source-evidence"><span class="small muted">素材 · ${esc(card.source_title || "未命名素材")}</span>
+        <blockquote class="issue-quote">${esc(card.source_quote)}</blockquote></div>` :
+        '<p class="small muted">没有可逐字定位的材料原句。</p>'}
+      <p class="small">处理目标：${esc(card.revision_goal)}</p>
+      <p class="loc">¶${card.location.paragraph_start}${card.location.paragraph_end !== card.location.paragraph_start ? "–" + card.location.paragraph_end : ""}</p>
+      <div class="row"><button class="small" data-claim-show="${card.id}">定位正文</button>
+        ${card.source_id ? `<button class="small" data-claim-source="${card.id}">查看素材</button>` : ""}
+        ${card.actionable ? `<button class="small" data-claim-confirm="${card.id}">确认关联</button>
+          <button class="small" data-claim-fix="${card.id}" ${card.patch_id ? "disabled" : ""}>处理</button>
+          <button class="small" data-claim-dismiss="${card.id}">忽略</button>` : ""}</div>
+    </div>`).join("");
 }
 
 document.addEventListener("click", async e => {
   const show = e.target.closest("[data-show]");
   const fix = e.target.closest("[data-fix]");
-  if (!show && !fix) return;
+  const dismiss = e.target.closest("[data-dismiss]");
+  if (!show && !fix && !dismiss) return;
   try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
-  const is = WS.review.issues[parseInt((show || fix).dataset.show ?? (show || fix).dataset.fix)];
+  if (!WS.review || WS.review.stale) { toast("正文或目标已改变，请重新检查。", true); return; }
+  const target = show || fix || dismiss;
+  const is = WS.review.issues[parseInt(target.dataset.show ?? target.dataset.fix ?? target.dataset.dismiss)];
+  if (dismiss) {
+    try {
+      await api("POST", `/revision-items/${is.revision_item_id}/dismiss`);
+      await reloadTask(); renderWorkspace();
+      toast("已跳过这一项，正文未改变。");
+    } catch (e) { toast(e.message, true); }
+    return;
+  }
   WS.view = "draft"; renderWorkspace();
   const a = is.location.paragraph_start, b = is.location.paragraph_end;
+  WS.sel.clear(); WS.selAnchor = a;
   for (let k = a; k <= b; k++) WS.sel.add(k);
   renderCenter();
   const el = $(`.para[data-p="${a}"]`);
   if (el) { el.classList.add("hl"); el.scrollIntoView({ behavior: "smooth", block: "center" });
     setTimeout(() => el.classList.remove("hl"), 2600); }
-  if (fix) proposePatch(is.message);
+  if (fix) proposePatch(is.goal, WS.review.id, is.revision_item_id);
 });
+
+document.addEventListener("click", async e => {
+  const target = e.target.closest("[data-claim-show],[data-claim-source],[data-claim-confirm],[data-claim-fix],[data-claim-dismiss]");
+  if (!target || !WS.evidence) return;
+  const id = target.dataset.claimShow || target.dataset.claimSource
+    || target.dataset.claimConfirm || target.dataset.claimFix || target.dataset.claimDismiss;
+  const card = WS.evidence.cards.find(item => item.id === id);
+  if (!card) return;
+  if (target.dataset.claimSource) {
+    const source = document.querySelector(`.srcitem[data-source-id="${CSS.escape(card.source_id)}"]`);
+    if (source) { source.classList.add("hl"); source.scrollIntoView({ behavior:"smooth", block:"center" });
+      setTimeout(() => source.classList.remove("hl"), 2600); }
+    return;
+  }
+  if (target.dataset.claimConfirm || target.dataset.claimDismiss) {
+    try {
+      await api("POST", `/claim-links/${id}/${target.dataset.claimConfirm ? "confirm" : "dismiss"}`);
+      await reloadTask(); renderWorkspace();
+      toast(target.dataset.claimConfirm ? "已记录：你确认了这条材料关联。" : "已在本轮忽略，正文未改变。");
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
+  try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
+  if (!WS.evidence || WS.evidence.stale) { toast("正文或素材已改变，请重新检查。", true); return; }
+  WS.view = "draft"; renderWorkspace();
+  const a = card.location.paragraph_start, b = card.location.paragraph_end;
+  WS.sel.clear(); WS.selAnchor = a;
+  for (let n = a; n <= b; n++) WS.sel.add(n);
+  renderCenter();
+  const para = $(`.para[data-p="${a}"]`);
+  if (para) { para.classList.add("hl"); para.scrollIntoView({ behavior:"smooth", block:"center" });
+    setTimeout(() => para.classList.remove("hl"), 2600); }
+  if (target.dataset.claimFix) proposePatch(card.revision_goal, null, null, card.id);
+});
+
+document.addEventListener("click", async e => {
+  const remove = e.target.closest("[data-unkeep]");
+  if (!remove) return;
+  try {
+    await api("DELETE", `/preserved-spans/${remove.dataset.unkeep}`);
+    await reloadTask(); renderWorkspace();
+    toast("已取消保留。");
+  } catch (err) { toast(err.message, true); }
+});
+
+async function runReaderPathReview() {
+  if (GENERATING) { toast("正在生成，请稍候。", true); return; }
+  const tid = WS.tid;
+  const btn = $("#reader-run");
+  if (btn) { btn.disabled = true; btn.textContent = "检查中…"; }
+  genBanner(true);
+  const prog = openProgress(tid, renderBanner);
+  try {
+    const result = await api("POST", `/tasks/${tid}/reader-path-review`);
+    if (WS.tid === tid) WS.reader = result;
+  } catch (e) {
+    if (WS.tid === tid) toast(e.message, true);
+  } finally {
+    prog.close();
+    if (WS.tid === tid) { genBanner(false); renderCenter(); }
+  }
+}
+
+function readerPathView() {
+  const result = WS.reader || {steps:[], issues:[], stale:false};
+  if (!result.id) return `<div class="reader-intro card">
+    <h3>检查当前稿的实际推进</h3>
+    <p class="muted">逐段查看作用、增加的认识和问题回答关系。结果是模型对可能阅读效果的诊断，不是真实读者实验。</p>
+    <button class="primary" id="reader-run">开始检查稿件</button></div>`;
+  const statuses = {open:"待处理", proposed:"提案中", resolved:"已完成", dismissed:"已跳过", stale:"已失效"};
+  const types = {repetition:"内容重复", reasoning_gap:"推理跳跃",
+    unanswered_question:"问题未回答", unclear_transition:"转折不清"};
+  return `<div class="reader-path">
+    <div class="reader-path-head"><div><b>当前稿件路径</b>
+      <p class="muted small">${esc(result.overview)} 这是模型诊断，不是真实读者实验。</p></div>
+      <button id="reader-run">${result.stale ? "重新检查" : "再次检查"}</button></div>
+    ${result.stale ? '<p class="card muted">正文已经改变；本轮稿件检查已过期，旧问题不能继续处理。</p>' : ""}
+    <div class="reader-path-grid"><section><h3>逐段推进</h3>${result.steps.map((step, index) => `
+      <article class="path-step" role="button" tabindex="0" data-reader-step="${step.id}">
+        <div class="row"><span class="path-number">${index + 1}</span><b>¶${step.location.paragraph_start} · ${esc(step.primary_function)}</b></div>
+        <blockquote class="issue-quote">${esc(step.quote)}</blockquote>
+        <p class="small"><span class="muted">增加的认识：</span>${esc(step.knowledge_gain)}</p>
+        ${step.question_raised ? `<p class="small"><span class="muted">提出：</span>${esc(step.question_raised)}</p>` : ""}
+        ${step.question_answered ? `<p class="small"><span class="muted">回答：</span>${esc(step.question_answered)}</p>` : ""}
+      </article>`).join("")}</section>
+      <aside><h3>路径问题</h3>${result.issues.length ? result.issues.map(issue => `
+        <article class="issue reader-issue ${esc(issue.status)}">
+          <div class="row"><span class="label">${esc(types[issue.type] || issue.type)}</span><span class="small muted">${esc(statuses[issue.status] || issue.status)}</span></div>
+          <p class="small"><b>${esc(issue.message)}</b></p><p class="small muted">可能影响：${esc(issue.effect)}</p>
+          <blockquote class="issue-quote">${esc(issue.quote)}</blockquote>
+          <p class="small">修改目标：${esc(issue.goal)}</p>
+          <div class="row"><button class="small" data-reader-show="${issue.revision_item_id}">定位</button>
+            ${issue.status === "open" && !result.stale ? `<button class="small" data-reader-fix="${issue.revision_item_id}">处理</button>
+              <button class="small" data-reader-dismiss="${issue.revision_item_id}">跳过</button>` : ""}</div>
+        </article>`).join("") : '<p class="muted small">没有发现可可靠定位的路径问题。</p>'}</aside>
+    </div></div>`;
+}
+
+function wireReaderPath() {
+  const run = $("#reader-run"); if (run) run.onclick = runReaderPathReview;
+  $("#center-body").querySelectorAll("[data-reader-step]").forEach(element => {
+    const activate = () => locateReaderTarget(WS.reader.steps.find(step => step.id === element.dataset.readerStep));
+    element.onclick = activate;
+    element.onkeydown = event => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); activate(); } };
+  });
+  $("#center-body").querySelectorAll("[data-reader-show],[data-reader-fix],[data-reader-dismiss]").forEach(button => {
+    button.onclick = async () => {
+      const id = button.dataset.readerShow || button.dataset.readerFix || button.dataset.readerDismiss;
+      const issue = WS.reader.issues.find(item => item.revision_item_id === id);
+      if (!issue) return;
+      if (button.dataset.readerDismiss) {
+        try {
+          await api("POST", `/revision-items/${id}/dismiss`);
+          WS.reader = await api("GET", `/tasks/${WS.tid}/reader-path-review`);
+          renderCenter(); toast("已跳过这一项，正文未改变。");
+        } catch (error) { toast(error.message, true); }
+        return;
+      }
+      await locateReaderTarget(issue);
+      if (button.dataset.readerFix)
+        proposePatch(issue.goal, WS.reader.id, issue.revision_item_id);
+    };
+  });
+}
+
+async function locateReaderTarget(item) {
+  if (!item) return;
+  if (WS.reader && WS.reader.stale) { toast("正文已改变，请重新检查。", true); return; }
+  WS.view = "draft"; renderWorkspace();
+  const a = item.location.paragraph_start, b = item.location.paragraph_end;
+  WS.sel.clear(); WS.selAnchor = a;
+  for (let number = a; number <= b; number++) WS.sel.add(number);
+  renderCenter();
+  const paragraph = $(`.para[data-p="${a}"]`);
+  if (paragraph) { paragraph.classList.add("hl");
+    paragraph.scrollIntoView({behavior:"smooth", block:"center"});
+    setTimeout(() => paragraph.classList.remove("hl"), 2600); }
+}
 
 /* writing map */
 function mapView() {
   const beats = (WS.map && WS.map.beats) || [];
-  return `<p class="muted small">查看读者的理解如何随正文一步步变化。写作地图只读。</p>` +
+  return `<p class="muted small">这是生成时的原定路径，段落对应关系为估算；手工修改后可能偏移。原定路径只读。</p>` +
     (beats.length ? beats.map((b, i) => `
       <div class="beat" role="button" tabindex="0" data-a="${b.paragraph_start}" data-b="${b.paragraph_end}">
         <div class="t">第 ${i + 1} 步 · ${esc(b.function)}</div>
@@ -1601,24 +2472,34 @@ function mapView() {
       : '<div class="card"><p class="muted">还没有写作地图，请先生成初稿。</p></div>');
 }
 function wireMap() {
-  $("#center-body").querySelectorAll(".beat").forEach(el => el.onclick = async () => {
-    const a = parseInt(el.dataset.a), b = parseInt(el.dataset.b);
-    if (!a) return;
-    try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
-    WS.view = "draft"; renderWorkspace();
-    for (let k = a; k <= b; k++) WS.sel.add(k);
-    renderCenter();
-    const p = $(`.para[data-p="${a}"]`);
-    if (p) { p.classList.add("hl"); p.scrollIntoView({ behavior: "smooth", block: "center" });
-      setTimeout(() => p.classList.remove("hl"), 2600); }
+  $("#center-body").querySelectorAll(".beat").forEach(el => {
+    el.onclick = async () => {
+      const a = parseInt(el.dataset.a), b = parseInt(el.dataset.b);
+      if (!a) return;
+      try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
+      WS.view = "draft"; renderWorkspace();
+      WS.sel.clear(); WS.selAnchor = a;
+      for (let k = a; k <= b; k++) WS.sel.add(k);
+      renderCenter();
+      const p = $(`.para[data-p="${a}"]`);
+      if (p) { p.classList.add("hl"); p.scrollIntoView({ behavior: "smooth", block: "center" });
+        setTimeout(() => p.classList.remove("hl"), 2600); }
+    };
+    el.onkeydown = e => {
+      if (!["Enter", " "].includes(e.key)) return;
+      e.preventDefault(); el.click();
+    };
   });
 }
 
 /* ------------------------------------------------------------- versions */
 async function versions(tid) {
+  if (location.hash !== `#/tasks/${tid}/versions`) return;
   const task = await api("GET", `/tasks/${tid}`);
+  if (location.hash !== `#/tasks/${tid}/versions`) return;
   if (!task.draft) { $("#app").innerHTML = '<p class="muted">还没有初稿。</p>'; return; }
   const vs = await api("GET", `/drafts/${task.draft.id}/versions`);
+  if (location.hash !== `#/tasks/${tid}/versions`) return;
   const rows = vs.versions.slice().reverse();            // newest first
   const cont = new Map();                                // id -> full content (lazy)
   const open = new Set();                                // expanded ids
@@ -1638,6 +2519,8 @@ async function versions(tid) {
   $("#app").innerHTML = `
     <h1>版本历史</h1>
     <p class="muted small">最多选择两个版本进行对比；恢复操作也会创建新版本，随时可以反悔。</p>
+    <p class="row"><label class="small" for="v-export-format">版本导出格式</label>
+      <select id="v-export-format" class="export-format"><option value="md">Markdown</option><option value="txt">纯文本</option></select></p>
     <div id="vlist">${rows.map(rowHtml).join("")}</div>
     <div id="vctrl"><p class="muted small">未选择:点任意版本行开始选择对比。</p></div>
     <div id="compare"></div>
@@ -1656,6 +2539,7 @@ async function versions(tid) {
       </div>
       <div class="vacts">
         ${isCur ? "" : `<button class="small va-cur" data-v="${v.id}" data-tip="对比此版本与当前草稿">与当前稿对比</button>`}
+        <button class="small va-export" data-v="${v.id}" data-tip="下载这个历史版本，不改变当前正文">导出</button>
         <button class="small va-restore" data-v="${v.id}" data-tip="恢复此版本为当前草稿；恢复本身也是新版本">恢复</button>
       </div>
     </div>`;
@@ -1738,13 +2622,22 @@ async function versions(tid) {
   });
 
   document.querySelectorAll(".va-cur").forEach(b => b.onclick = () => renderDiff(b.dataset.v, curId));
+  document.querySelectorAll(".va-export").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const format = $("#v-export-format").value;
+      await downloadExport(`/versions/${encodeURIComponent(b.dataset.v)}/export?format=${format}&include_title=true`);
+      toast("所选版本已下载。");
+    } catch (err) { toast(err.message || "导出失败。", true); }
+    finally { if (b.isConnected) b.disabled = false; }
+  });
   document.querySelectorAll(".va-restore").forEach(b => b.onclick = async () => {
     if (!(await confirmDialog(
         "恢复这个版本？", "恢复会生成一个新版本，当前状态仍保留在历史里，可以随时反悔。", "恢复版本"))) return;
     try {
-      await api("POST", `/versions/${b.dataset.v}/restore`);
+      await api("POST", `/versions/${b.dataset.v}/restore`, { expected_revision: task.draft.revision });
       toast("已恢复；原先的当前稿仍保留在版本历史中。");
-      versions(tid);
+      if (location.hash === `#/tasks/${tid}/versions`) versions(tid);
     } catch (err) { toast(err.message, true); }
   });
 }
@@ -1848,7 +2741,7 @@ function guide() {
     <div class="card">
       <p><b>左 · Sources</b> 你的素材与笔记,可随时追加。</p>
       <p><b>中 · Draft</b> 正文,占最大空间。直接点击任意段落即可编辑,自动保存(Saving…/Saved);
-      单击段落=选中,Shift 单击=扩选多段,⌘/Ctrl 单击=加选/取消。</p>
+      单击段落=选中；拖选文字会映射到所在段落；Shift/⌘/Ctrl 单击会扩展为连续段落范围。</p>
       <p><b>右 · Writing Panel</b> 四个标签:
       <b>Goal</b>(改意图、调阅读体验、生成)、<b>Review</b>(检查)、
       <b>Locks</b>(锁)、<b>Settings</b>(任务信息)。</p></div>
