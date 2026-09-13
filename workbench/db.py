@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "workbench" / "workbench.db"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects(
@@ -124,6 +124,15 @@ CREATE TABLE IF NOT EXISTS reader_path_steps(
   primary_function TEXT NOT NULL, knowledge_gain TEXT NOT NULL,
   question_raised TEXT, question_answered TEXT, created_at TEXT NOT NULL,
   UNIQUE(review_id, step_id), UNIQUE(review_id, paragraph_start));
+CREATE TABLE IF NOT EXISTS ideas(
+  id TEXT PRIMARY KEY, topic TEXT NOT NULL, normalized_topic TEXT NOT NULL UNIQUE,
+  hook TEXT NOT NULL DEFAULT '', domain TEXT NOT NULL DEFAULT '',
+  domain_name TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL CHECK(origin IN ('manual','generated','legacy')),
+  source_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'to_write'
+    CHECK(status IN ('to_write','written','archived')),
+  task_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS writing_operations(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
   process_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','interrupted')),
@@ -145,6 +154,8 @@ CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id);
 CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id);
 CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id);
 CREATE INDEX IF NOT EXISTS reader_path_steps_review ON reader_path_steps(review_id);
+CREATE INDEX IF NOT EXISTS ideas_status_updated ON ideas(status,updated_at);
+CREATE INDEX IF NOT EXISTS ideas_task ON ideas(task_id);
 CREATE TABLE IF NOT EXISTS generation_results(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, engine_plan_id TEXT,
   content TEXT NOT NULL, accepted_version_id TEXT, created_at TEXT NOT NULL);
@@ -188,7 +199,7 @@ class Database:
                 raise RuntimeError("Database schema is newer than this Workbench; use a compatible version.")
             if version < SCHEMA_VERSION and self.path != ":memory:" and self.conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
-                self.migration_backup = f"{self.path}.pre-v6-{new_id('backup')}.sqlite3"
+                self.migration_backup = f"{self.path}.pre-v7-{new_id('backup')}.sqlite3"
                 with sqlite3.connect(self.migration_backup) as backup:
                     self.conn.backup(backup)
             try:
@@ -268,6 +279,8 @@ class Database:
         self.conn.execute("CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS reader_path_steps_review ON reader_path_steps(review_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ideas_status_updated ON ideas(status,updated_at)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS ideas_task ON ideas(task_id)")
         self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     # -- tiny helpers ----------------------------------------------------

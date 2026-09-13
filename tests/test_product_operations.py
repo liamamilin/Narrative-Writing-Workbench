@@ -170,7 +170,7 @@ def test_migration_failure_rolls_back_and_consistent_backup_restores(tmp_path, m
     with sqlite3.connect(path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [("preserved",)]
-    backup = next(tmp_path.glob("*.pre-v6-*.sqlite3"))
+    backup = next(tmp_path.glob("*.pre-v7-*.sqlite3"))
     restored = tmp_path / "restored.db"
     with sqlite3.connect(backup) as source, sqlite3.connect(restored) as target:
         source.backup(target)

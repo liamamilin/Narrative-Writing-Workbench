@@ -143,6 +143,22 @@ def create_app(service: Service | None = None) -> FastAPI:
     def suggest_topics(body: dict | None = None):
         return svc().suggest_topics(body or {})
 
+    @app.get("/ideas")
+    def list_ideas(q: str = "", status: str = "all", limit: int = 100):
+        return svc().list_ideas(q, status, limit)
+
+    @app.post("/ideas")
+    def create_idea(body: dict):
+        return svc().create_idea(body)
+
+    @app.patch("/ideas/{idea_id}")
+    def update_idea(idea_id: str, body: dict):
+        return svc().update_idea(idea_id, body)
+
+    @app.post("/ideas/import-legacy")
+    def import_legacy_ideas(body: dict):
+        return svc().import_legacy_ideas(body)
+
     @app.get("/tasks/{task_id}/operations/{operation_id}")
     def operation(task_id: str, operation_id: str):
         return svc().operation_detail(task_id, operation_id)

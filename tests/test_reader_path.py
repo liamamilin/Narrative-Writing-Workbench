@@ -142,6 +142,9 @@ def test_v5_database_and_backup_contract_upgrade_to_v6(tmp_path):
     db = Database(path)
     db.conn.close()
     with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX ideas_task")
+        conn.execute("DROP INDEX ideas_status_updated")
+        conn.execute("DROP TABLE ideas")
         conn.execute("DROP INDEX reader_path_steps_review")
         conn.execute("DROP TABLE reader_path_steps")
         conn.execute("ALTER TABLE reviews DROP COLUMN analysis_type")

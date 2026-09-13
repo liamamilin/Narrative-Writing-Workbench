@@ -23,6 +23,12 @@ replaces — the V0 spec. Read the V0 spec first, then
 `QUICK_WRITE_IMPLEMENTATION_TASK.md` and `product/11..20`. Implemented:
 see `docs/reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md`.
 
+For the local Idea Box, the **V0.7 extension** at
+`docs/narrative-writing-product-v0.7-idea-box-spec/` extends V0/V0.1. Read
+those base specs first, then `IDEA_BOX_IMPLEMENTATION_TASK.md` and
+`product/36..38`. Implemented: see
+`docs/reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md`.
+
 For export/backup work, read the **V0.2 extension** at
 `docs/narrative-writing-product-v0.2-export-backup-spec/`. For optional
 pre-writing angle confirmation, read V0 and V0.1 first, then the **V0.3

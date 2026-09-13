@@ -26,10 +26,13 @@ Material → Intent → Generate → Read → Review → Patch → Accept
 | Product V0.4 Revision Worklist | ✅ 完成(W0–W6) | `docs/narrative-writing-product-v0.4-revision-worklist-spec/`, `docs/reports/PRODUCT_V0_4_REVISION_WORKLIST_IMPLEMENTATION_REPORT.md` |
 | Product V0.5 Evidence Cards | ✅ 完成(E0–E6) | `docs/narrative-writing-product-v0.5-evidence-cards-spec/`, `docs/reports/PRODUCT_V0_5_EVIDENCE_CARDS_IMPLEMENTATION_REPORT.md` |
 | Product V0.6 Reader Path | ✅ 工程完成(R0–R6；真实效果待评估) | `docs/narrative-writing-product-v0.6-reader-path-spec/`, `docs/reports/PRODUCT_V0_6_READER_PATH_IMPLEMENTATION_REPORT.md` |
+| Product V0.7 Local Idea Box | ✅ 完成(I0–I5) | `docs/narrative-writing-product-v0.7-idea-box-spec/`, `docs/reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md` |
 
 本轮稳定性修复与剩余验收见 [实施报告](docs/reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md)，持续进度见 [开发日志](docs/reports/DEVELOPMENT_PROGRESS.md)。
 
 产品真实调用：Quick Write 先发现意义并评审命题，再生成结构与正文；检查是单独动作。旧稿入口直接导入原文后检查和局部修订。操作、阶段、模型调用耗时与可取得的 usage 已可追溯；固定真实模型 12 例工程评估已经完成，人工质量评分仍待填写，详见 [真实模型评估报告](docs/reports/REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。
+
+Quick Write 的新候选只留在“本次生成”；明确收藏后进入本机 SQLite 选题箱，可搜索、写备注、归档、继续写或打开已关联文章。旧浏览器话题库会在服务端完整确认后幂等迁移。
 
 ## 目录结构
 

@@ -138,6 +138,7 @@ h3{font-size:1rem;font-weight:650}
   box-shadow:var(--shadow-paper);padding:var(--sp-6)}
 .qw-right label{display:block;margin:var(--sp-4) 0 var(--sp-1);font-weight:600;font-size:14px}
 .qw-right label:first-child{margin-top:0}
+.qw-save-row{margin:6px 0 0;justify-content:flex-end}
 .qw-left{padding:var(--sp-4)}
 .qw-title{font-size:1.6rem}
 .qw-sub{margin:0}
@@ -191,9 +192,12 @@ h3{font-size:1rem;font-weight:650}
 .qw-card:hover,.qw-card.sel{background:var(--sel)}
 .qw-card b{font-size:14px;font-weight:500;line-height:1.65}
 .qw-card .sub{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:8px}
-.qw-card .qw-del{margin-left:auto;flex:none;border:none;background:none;
+.qw-card .qw-save,.qw-card .qw-del{flex:none;border:none;background:none;
   color:var(--muted);font-size:12px;padding:2px 6px;min-height:0;visibility:hidden}
-.qw-card:hover .qw-del,.qw-card:focus-within .qw-del{visibility:visible}
+.qw-card .qw-save{margin-left:auto;color:var(--accent)}
+.qw-card:hover .qw-save,.qw-card:hover .qw-del,
+.qw-card:focus-within .qw-save,.qw-card:focus-within .qw-del{visibility:visible}
+.qw-card .qw-save:hover{color:var(--ink)}
 .qw-card .qw-del:hover{color:var(--cinnabar)}
 .qw-card.sel b::after{content:" · 已选";color:var(--accent);
   font-family:var(--sans);font-size:12px;font-weight:650}
@@ -204,6 +208,29 @@ h3{font-size:1rem;font-weight:650}
   min-height:52px;border-radius:var(--r-sm);cursor:default}
 @keyframes shimmer{to{background-position:-200% 0}}
 #qw-tax-domains .chip{padding:3px 11px;font-size:13px}
+.idea-head{display:flex;align-items:center;margin:var(--sp-6) 0 var(--sp-2);
+  padding-top:var(--sp-4);border-top:1px solid var(--line)}
+.idea-head h3{margin:0;color:var(--ink);font-size:15px;font-weight:650}
+#idea-migration{margin:4px 0 10px;padding:7px 9px;border-radius:var(--r-sm);
+  background:var(--sel)}
+.idea-filters{display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:7px;margin-bottom:9px}
+.idea-filters input,.idea-filters select{font-size:12.5px;padding:7px 8px;min-width:0}
+#idea-box{display:flex;flex-direction:column;gap:8px}
+.idea-card{border:1px solid var(--line);border-radius:var(--r);padding:10px;
+  background:rgba(255,253,248,.55)}
+.idea-card.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.idea-topic{display:flex;align-items:flex-start;gap:7px}
+.idea-topic b{flex:1;font-size:13.5px;line-height:1.55;font-weight:600}
+.idea-status{flex:none;border-radius:999px;padding:2px 7px;font-size:10.5px;
+  background:var(--line);color:var(--muted)}
+.idea-status.to_write{background:var(--sel);color:var(--accent)}
+.idea-status.written{background:#e7efe4;color:#486342}
+.idea-card p{margin:5px 0;line-height:1.5}
+.idea-domain{color:var(--muted);font-size:11px}
+.idea-note{margin-top:7px;padding:7px 8px;font-size:12px;resize:vertical}
+.idea-actions{display:flex;align-items:center;gap:5px;margin-top:7px}
+.idea-actions button{padding:4px 7px;min-height:0;font-size:11.5px}
+.idea-status-select{margin-left:auto;width:auto;padding:4px 6px;font-size:11.5px;min-height:0}
 
 /* ---------- workspace ----------
    侧栏受限宽，中央吃剩余空间；纸面是视觉重心。 */

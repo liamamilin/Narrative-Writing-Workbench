@@ -220,17 +220,12 @@ const QW_EXAMPLES = [
 ];
 let AUTOSTART = false;
 
-/* topic library + compose state persist client-side only; the server never
-   stores suggestions, so "AI proposes, user accepts" stays untouched. */
-const LIB_KEY = "qw_topic_lib_v1", COMPOSE_KEY = "qw_compose_v1", LIB_MAX = 200;
+/* Compose state stays local. The old topic library is read only for a
+   one-time, server-confirmed migration into the SQLite idea box. */
+const LIB_KEY = "qw_topic_lib_v1", COMPOSE_KEY = "qw_compose_v1";
 const loadLib = () => {
   try { return JSON.parse(localStorage.getItem(LIB_KEY) || "[]") || []; }
   catch { return []; }
-};
-const saveLib = lib => {
-  try {
-    localStorage.setItem(LIB_KEY, JSON.stringify(lib.slice(-LIB_MAX)));
-  } catch { /* private mode: degrade to session-only */ }
 };
 const loadCompose = () => {
   try { return JSON.parse(localStorage.getItem(COMPOSE_KEY) || "{}") || {}; }
@@ -249,6 +244,8 @@ function quickWrite() {
        <label for="qw-topic">你要谈的话题</label>
       <textarea id="qw-topic" rows="3"
                 placeholder="在这里写下话题，或点选右侧任意一条">${esc(saved.topic || "")}</textarea>
+      <p class="row qw-save-row"><button class="ghost small" id="qw-save-current"
+        data-tip="把当前话题明确收藏到本机选题箱">☆ 收藏当前话题</button></p>
       <div class="chips" id="qw-ex">${QW_EXAMPLES.map(x =>
         `<button class="chip" data-tip="点击填入示例话题" data-v="${esc(x)}">${esc(x.slice(0, 18))}${x.length > 18 ? "…" : ""}</button>`).join("")}</div>
        <label for="qw-mode">写作模式</label>
@@ -295,15 +292,27 @@ function quickWrite() {
          <button id="qw-topic-suggest" data-tip="已有话题时围绕它生成一批不同切面；为空时按领域生成一批">生成一批话题</button>
         <span class="muted small" id="qw-tax-sel"></span></p>
       <div class="qw-lib-head">
-        <h3>已生成话题 <span class="muted small" id="qw-lib-stats"></span></h3>
+        <h3>本次生成 <span class="muted small" id="qw-lib-stats"></span></h3>
         <button class="ghost" id="qw-topic-clear" style="display:none"
-                data-tip="清空整个话题库与去重记录">清空</button>
+                data-tip="只清空本次生成的候选">清空本次</button>
       </div>
       <div id="qw-lib"></div>
       <div id="qw-skel" style="display:none">
         <div class="qw-card qw-skel"></div><div class="qw-card qw-skel"></div>
         <div class="qw-card qw-skel"></div>
       </div>
+      <div class="idea-head">
+        <h3>选题箱 <span class="muted small" id="idea-stats"></span></h3>
+      </div>
+      <p class="muted small" id="idea-migration" hidden></p>
+      <div class="idea-filters">
+        <input id="idea-search" aria-label="搜索选题箱" placeholder="搜索话题、备注或领域">
+        <select id="idea-status" aria-label="筛选选题状态">
+          <option value="all">全部状态</option><option value="to_write">待写</option>
+          <option value="written">已写</option><option value="archived">已归档</option>
+        </select>
+      </div>
+      <div id="idea-box"><div class="qw-empty">正在读取本机选题箱…</div></div>
     </section>
   </div>`;
   if (saved.mode) $("#qw-mode").value = saved.mode;
@@ -315,12 +324,15 @@ function quickWrite() {
   $("#qw-ex").onclick = e => {
     const b = e.target.closest(".chip"); if (!b) return;
     $("#qw-topic").value = b.dataset.v;
+    TX.selectedIdeaId = null; TX.selectedGeneratedIndex = null;
     saveComposeNow(); invalidateAngles();
   };
 
-  /* topic suggestion v5: domain chips -> batch generate -> grouped library
-     (localStorage). Objects/tensions stay engine-internal resources. */
-  const TX = { tax: null, domain: "", lib: loadLib(), selected: saved.topic || "" };
+  /* Generated suggestions are session-only. Saved ideas are explicit product
+     records, fetched from SQLite and linked to a task only when writing starts. */
+  const TX = { tax: null, domain: "", generated: [], ideas: [],
+               selected: saved.topic || "", selectedIdeaId: null,
+               selectedGeneratedIndex: null };
   const AF = { taskId: null, discoveryId: null, candidates: [], selected: null,
                signature: null };
   const composeState = () => ({
@@ -350,15 +362,24 @@ function quickWrite() {
     TX.domain = b.dataset.v;
     renderDomains();
   };
+  const chooseTopic = (topic, ideaId = null, generatedIndex = null) => {
+    TX.selected = topic;
+    TX.selectedIdeaId = ideaId;
+    TX.selectedGeneratedIndex = generatedIndex;
+    $("#qw-topic").value = topic;
+    saveComposeNow(); invalidateAngles();
+    renderLib(); renderIdeas();
+    $("#qw-topic").focus();
+  };
   const renderLib = (freshTs = 0, freshDomain = "") => {
-    const lib = TX.lib;
+    const lib = TX.generated;
     $("#qw-topic-clear").style.display = lib.length ? "" : "none";
     const doms = [...new Set(lib.map(t => t.domainName))];
     $("#qw-lib-stats").textContent =
       lib.length ? `${lib.length} 条 · ${doms.length} 个领域` : "";
     if (!lib.length) {
-      $("#qw-lib").innerHTML = `<div class="qw-empty">还没有生成过话题。选个领域(或不限),
-        点「生成一批话题」——每批 8 条，覆盖领域不同侧面；点任意一条填入写作表单。</div>`;
+      $("#qw-lib").innerHTML = `<div class="qw-empty">本次还没有生成候选。生成后可先挑选，
+        确定想写时再收藏到选题箱。</div>`;
       return;
     }
     const prevOpen = new Set(
@@ -379,9 +400,10 @@ function quickWrite() {
           <button class="ghost qw-more" data-d="${esc(items[0].t.domain)}"
                   data-tip="该领域再来一批(避开全部已生成话题)">再来一批</button></summary>
         <div class="qw-cards">${items.map(({t, i}) => `
-           <div class="qw-card${t.text === TX.selected ? " sel" : ""}${t.ts >= freshTs ? " fresh" : ""}" data-i="${i}" role="button" tabindex="0" aria-label="选择话题：${esc(t.text)}">
+           <div class="qw-card${t.text === TX.selected && TX.selectedGeneratedIndex === i ? " sel" : ""}${t.ts >= freshTs ? " fresh" : ""}" data-i="${i}" role="button" tabindex="0" aria-label="选择话题：${esc(t.text)}">
             <b>${esc(t.text)}</b>
             <span class="sub">${esc(t.hook)}
+              <button class="qw-save" data-i="${i}" title="收藏到选题箱">☆ 收藏</button>
               <button class="qw-del" data-i="${i}"
                        title="移除这条（${new Date(t.ts).toLocaleTimeString()}）">移除</button></span>
           </div>`).join("")}</div>
@@ -389,10 +411,16 @@ function quickWrite() {
     }).join("");
   };
   $("#qw-lib").onclick = e => {
+    const save = e.target.closest(".qw-save");
+    if (save) {
+      e.stopPropagation(); saveGenerated(+save.dataset.i, save); return;
+    }
     const del = e.target.closest(".qw-del");
     if (del) {
-      TX.lib.splice(+del.dataset.i, 1);
-      saveLib(TX.lib);
+      const index = +del.dataset.i;
+      TX.generated.splice(index, 1);
+      if (TX.selectedGeneratedIndex === index) TX.selectedGeneratedIndex = null;
+      else if (TX.selectedGeneratedIndex > index) TX.selectedGeneratedIndex -= 1;
       renderLib();
       return;
     }
@@ -405,11 +433,8 @@ function quickWrite() {
       return;
     }
     const card = e.target.closest(".qw-card"); if (!card) return;
-    TX.selected = TX.lib[+card.dataset.i].text;
-    $("#qw-topic").value = TX.selected;
-    saveComposeNow(); invalidateAngles();
-    renderLib();
-    $("#qw-topic").focus();
+    const index = +card.dataset.i;
+    chooseTopic(TX.generated[index].text, null, index);
   };
   $("#qw-lib").onkeydown = e => {
     const card = e.target.closest(".qw-card");
@@ -434,12 +459,11 @@ function quickWrite() {
         { domain: TX.domain || null, count: 8,
           hint: ($("#qw-tax-hint").value || "").trim() || null,
           seed: seed || null,
-          avoid: TX.lib.map(t => t.text) });
+          avoid: [...TX.generated.map(t => t.text), ...TX.ideas.map(t => t.topic)] });
       const now = Date.now(), dname = domainName(TX.domain);
-      TX.lib = [...TX.lib, ...r.topics.map(t => ({
+      TX.generated = [...TX.generated, ...r.topics.map(t => ({
         domain: TX.domain, domainName: dname,
         text: t.text, hook: t.hook, ts: now }))];
-      saveLib(TX.lib);
       renderLib(now - 1, dname);
       const el = $("#qw-lib .qw-card.fresh");
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -455,10 +479,146 @@ function quickWrite() {
   };
   $("#qw-topic-suggest").onclick = suggestTopics;
   $("#qw-topic-clear").onclick = () => {
-    TX.lib = []; saveLib(TX.lib); TX.selected = ""; renderLib();
+    TX.generated = []; TX.selectedGeneratedIndex = null; renderLib();
+  };
+  const ideaStatusLabel = status => ({
+    to_write: "待写", written: "已写", archived: "已归档",
+  }[status] || status);
+  const renderIdeas = () => {
+    if (!$("#idea-box") || !$("#idea-stats")) return;
+    const counts = TX.ideaCounts || { to_write: 0, written: 0, archived: 0 };
+    $("#idea-stats").textContent =
+      `${counts.to_write} 待写 · ${counts.written} 已写 · ${counts.archived} 归档`;
+    if (!TX.ideas.length) {
+      $("#idea-box").innerHTML = `<div class="qw-empty">当前筛选下没有选题。
+        从本次生成中收藏，或收藏左侧正在编辑的话题。</div>`;
+      return;
+    }
+    $("#idea-box").innerHTML = TX.ideas.map(idea => `
+      <article class="idea-card${idea.id === TX.selectedIdeaId ? " sel" : ""}"
+        data-idea-id="${esc(idea.id)}">
+        <div class="idea-topic"><b>${esc(idea.topic)}</b>
+          <span class="idea-status ${esc(idea.status)}">${esc(ideaStatusLabel(idea.status))}</span></div>
+        ${idea.hook ? `<p class="muted small">${esc(idea.hook)}</p>` : ""}
+        ${idea.domain_name ? `<p class="idea-domain">${esc(idea.domain_name)}</p>` : ""}
+        <textarea class="idea-note" rows="2" maxlength="2000"
+          aria-label="${esc(idea.topic)}的备注" placeholder="补充备注…">${esc(idea.note)}</textarea>
+        <div class="idea-actions">
+          ${idea.task_id
+            ? `<button class="small" data-open-idea="${esc(idea.task_id)}">打开文章</button>`
+            : `<button class="small" data-use-idea="${esc(idea.id)}">用于写作</button>`}
+          <button class="ghost small" data-save-note="${esc(idea.id)}">保存备注</button>
+          <select class="idea-status-select" data-idea-status="${esc(idea.id)}" aria-label="修改选题状态">
+            ${(idea.task_id ? ["written", "archived"] : ["to_write", "archived"]).map(status =>
+              `<option value="${status}"${status === idea.status ? " selected" : ""}>${ideaStatusLabel(status)}</option>`).join("")}
+          </select>
+        </div>
+      </article>`).join("");
+  };
+  const refreshIdeas = async () => {
+    const request = (TX.ideaRequestSeq || 0) + 1;
+    TX.ideaRequestSeq = request;
+    const q = encodeURIComponent(($("#idea-search")?.value || "").trim());
+    const status = encodeURIComponent($("#idea-status")?.value || "all");
+    try {
+      const r = await api("GET", `/ideas?q=${q}&status=${status}&limit=200`);
+      if (request !== TX.ideaRequestSeq || !$("#idea-box")) return;
+      TX.ideas = r.ideas; TX.ideaCounts = r.counts; renderIdeas();
+    } catch (e) {
+      const box = $("#idea-box");
+      if (request === TX.ideaRequestSeq && box)
+        box.innerHTML = `<div class="qw-empty">${esc(e.message || "选题箱读取失败，请重试。")}</div>`;
+    }
+  };
+  const saveIdea = async (payload, button) => {
+    if (button) { button.disabled = true; button.textContent = "收藏中…"; }
+    try {
+      const r = await api("POST", "/ideas", payload);
+      await refreshIdeas();
+      toast(r.created ? "已收藏到本机选题箱。" : "选题箱里已有这条话题。");
+      return r.idea;
+    } catch (e) {
+      toast(e.message || "收藏失败，请重试。", true); return null;
+    } finally {
+      if (button?.isConnected) { button.disabled = false; button.textContent = "☆ 收藏"; }
+    }
+  };
+  const saveGenerated = async (index, button) => {
+    const item = TX.generated[index]; if (!item) return;
+    await saveIdea({ topic: item.text, hook: item.hook, domain: item.domain,
+      domain_name: item.domainName, origin: "generated" }, button);
+  };
+  $("#qw-save-current").onclick = async e => {
+    const topic = $("#qw-topic").value.trim();
+    if (!topic) { toast("先写下要收藏的话题。", true); return; }
+    const item = TX.selectedGeneratedIndex === null ? null : TX.generated[TX.selectedGeneratedIndex];
+    const idea = await saveIdea(item && item.text === topic
+      ? { topic, hook: item.hook, domain: item.domain, domain_name: item.domainName,
+          origin: "generated" }
+      : { topic, origin: "manual" }, e.currentTarget);
+    if (idea) { TX.selectedIdeaId = idea.id; TX.selected = idea.topic; renderIdeas(); }
+  };
+  $("#idea-search").oninput = () => {
+    clearTimeout(TX.searchTimer); TX.searchTimer = setTimeout(refreshIdeas, 180);
+  };
+  $("#idea-status").onchange = refreshIdeas;
+  $("#idea-box").onclick = async e => {
+    const open = e.target.closest("[data-open-idea]");
+    if (open) { location.hash = `#/tasks/${open.dataset.openIdea}`; return; }
+    const use = e.target.closest("[data-use-idea]");
+    if (use) {
+      const idea = TX.ideas.find(x => x.id === use.dataset.useIdea);
+      if (idea) chooseTopic(idea.topic, idea.id, null);
+      return;
+    }
+    const saveNote = e.target.closest("[data-save-note]");
+    if (saveNote) {
+      const card = saveNote.closest(".idea-card");
+      saveNote.disabled = true;
+      try {
+        await api("PATCH", `/ideas/${saveNote.dataset.saveNote}`,
+          { note: card.querySelector(".idea-note").value });
+        await refreshIdeas(); toast("备注已保存。");
+      } catch (err) { toast(err.message || "备注保存失败。", true); }
+      return;
+    }
+  };
+  $("#idea-box").onchange = async e => {
+    const select = e.target.closest("[data-idea-status]"); if (!select) return;
+    const prior = TX.ideas.find(x => x.id === select.dataset.ideaStatus)?.status;
+    select.disabled = true;
+    try {
+      await api("PATCH", `/ideas/${select.dataset.ideaStatus}`, { status: select.value });
+      await refreshIdeas();
+    } catch (err) {
+      select.value = prior || "to_write"; select.disabled = false;
+      toast(err.message || "状态更新失败。", true);
+    }
+  };
+  const migrateLegacy = async () => {
+    const legacy = loadLib();
+    if (!Array.isArray(legacy) || !legacy.length) return;
+    const info = $("#idea-migration"); if (!info) return;
+    info.hidden = false;
+    if (legacy.length > 200) {
+      info.textContent = "旧话题库超过 200 条，暂未迁移；原数据仍保留。"; return;
+    }
+    info.textContent = `正在迁移 ${legacy.length} 条旧话题…`;
+    try {
+      const r = await api("POST", "/ideas/import-legacy", { items: legacy });
+      if (r.imported + r.existing !== r.received) throw new Error("迁移确认不完整");
+      localStorage.removeItem(LIB_KEY);
+      if (info.isConnected)
+        info.textContent = `旧话题已迁移：新增 ${r.imported} 条，已有 ${r.existing} 条。`;
+      await refreshIdeas();
+    } catch (e) {
+      if (info.isConnected)
+        info.textContent = `旧话题迁移未完成，原数据仍保留。${e.message || "请稍后重试。"}`;
+    }
   };
   renderLib();                 // empty-state guidance (no taxonomy needed)
   refreshSuggestBtn();         // now safe: defined above
+  refreshIdeas().then(migrateLegacy);
   api("GET", "/taxonomy").then(t => {
     TX.tax = t; renderDomains();
   }).catch(() => {});
@@ -474,6 +634,7 @@ function quickWrite() {
     stage.innerHTML = '<p class="muted small">写作设置已变化，请重新寻找候选角度。</p>';
   };
   $("#qw-topic").oninput = () => {
+    TX.selectedIdeaId = null; TX.selectedGeneratedIndex = null;
     saveComposeNow(); refreshSuggestBtn(); invalidateAngles();
   };
   $("#qw-mode").onchange = () => { saveComposeNow(); invalidateAngles(); };
@@ -494,6 +655,7 @@ function quickWrite() {
     try {
       const t = await api("POST", "/tasks", {
         input_mode: "topic_only", topic,
+        idea_id: TX.selectedIdeaId,
         title: topic.slice(0, 40),
         writing_mode: $("#qw-mode").value,
         angle_mode: $("#qw-angle").value,

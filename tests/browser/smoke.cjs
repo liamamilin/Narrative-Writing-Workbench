@@ -473,6 +473,65 @@ async function main() {
       assert.equal(after.versions.length,before.versions.length+1);
       await page.screenshot({path:path.join(output,'reader-path.png'),fullPage:true});
     });
+    await check('B17 local idea box migration, collection and task link', async()=>{
+      const legacy=[
+        {text:'迁移后继续写',hook:'验证旧题库安全进入选题箱',domain:'culture',domainName:'文化',ts:1},
+        {text:'保存灵感之后发生什么',hook:'区分候选与明确收藏',domain:'work',domainName:'劳动与职场',ts:2},
+      ];
+      const before=(await api('GET','/ideas?limit=200')).ideas.length;
+      await page.evaluate(items=>localStorage.setItem('qw_topic_lib_v1',JSON.stringify(items)),legacy);
+      await go('/quickwrite');
+      await until(async()=>await page.locator('.idea-card').count()===before+2,
+        'legacy ideas imported');
+      assert.equal(await page.evaluate(()=>localStorage.getItem('qw_topic_lib_v1')),null,
+        'legacy key is removed only after confirmed import');
+      let ideas=(await api('GET','/ideas?limit=200')).ideas;
+      const migrated=ideas.find(x=>x.topic==='迁移后继续写');
+      assert.ok(migrated); assert.equal(migrated.origin,'legacy');
+
+      const countBeforeSuggestion=ideas.length;
+      await page.locator('#qw-topic').fill('');
+      await page.locator('#qw-topic-suggest').click();
+      const generated=page.locator('#qw-lib .qw-card'); await generated.first().waitFor();
+      assert.equal((await api('GET','/ideas?limit=200')).ideas.length,countBeforeSuggestion,
+        'uncollected suggestions must remain session-only');
+      const generatedTopic=await generated.first().locator('b').innerText();
+      await generated.first().hover();
+      await generated.first().locator('[data-i].qw-save').click();
+      await until(async()=>{
+        const rows=(await api('GET','/ideas?limit=200')).ideas;
+        return rows.some(x=>x.topic===generatedTopic);
+      },'generated idea collected');
+
+      await page.locator('#idea-search').fill('迁移后继续');
+      await until(async()=>await page.locator('.idea-card').count()===1,'idea search');
+      const card=page.locator('.idea-card').first();
+      await card.locator('.idea-note').fill('下一步从迁移与明确收藏的差异写起。');
+      await card.locator('[data-save-note]').click();
+      await until(async()=>{
+        const row=(await api('GET',`/ideas?q=${encodeURIComponent('迁移后继续')}`)).ideas[0];
+        return row?.note.includes('明确收藏');
+      },'idea note saved');
+      await page.evaluate(()=>localStorage.clear());
+      await page.reload();
+      await until(async()=>await page.locator('.idea-card').count()>=3,'idea box survives reload');
+      assert.ok((await api('GET','/ideas?limit=200')).ideas.some(x=>x.topic===generatedTopic));
+
+      await page.locator('#idea-search').fill('迁移后继续');
+      await until(async()=>await page.locator('.idea-card').count()===1,'migrated idea visible');
+      await page.locator('.idea-card [data-use-idea]').click();
+      assert.equal(await page.locator('#qw-topic').inputValue(),'迁移后继续写');
+      await page.locator('#qw-go').click(); await editor().waitFor();
+      const linkedTask=taskId();
+      const linked=(await api('GET',`/ideas?q=${encodeURIComponent('迁移后继续')}`)).ideas[0];
+      assert.equal(linked.status,'written'); assert.equal(linked.task_id,linkedTask);
+
+      await go('/quickwrite'); await page.locator('#idea-status').selectOption('written');
+      await until(async()=>await page.locator('.idea-card').count()===1,'written idea filter');
+      await page.locator('.idea-card [data-open-idea]').click();
+      await page.locator(`.workspace[data-task-id="${linkedTask}"]`).waitFor();
+      await page.screenshot({path:path.join(output,'idea-box-linked-task.png'),fullPage:true});
+    });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({environment,results,pageErrors},null,2));

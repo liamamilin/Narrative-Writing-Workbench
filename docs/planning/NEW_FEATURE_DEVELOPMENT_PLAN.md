@@ -1,6 +1,6 @@
 # 新功能分阶段开发计划
 
-日期：2026-09-13。状态：F01–F05 工程实现已完成，其中 F02–F05 的真实使用效果继续评估；F06–F09 仍为候选。当前执行顺序见 [下一阶段优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md)，产品理由见 [路线图](PRODUCT_EVOLUTION_ROADMAP.md)。所有实现以 [S00–S08 稳定性计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md) 为前置基础。
+日期：2026-09-13。状态：F01–F06 工程实现已完成，其中 F02–F05 的真实使用效果继续评估；F07–F09 仍为条件候选。当前执行顺序见 [下一阶段优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md)，产品理由见 [路线图](PRODUCT_EVOLUTION_ROADMAP.md)。所有实现以 [S00–S08 稳定性计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md) 为前置基础。
 
 ## 1. 实施约定
 
@@ -182,7 +182,7 @@ Quick Write 保留“直接写”，新增可选“先定角度”。系统发�
 
 ## 8. F06：本地选题箱
 
-优先级：按使用痛点选择。预计 2–4 人日。
+实施状态：Product V0.7 工程实现已完成；专项测试、全量 369 项与浏览器 B17 通过。规格和结果见 [V0.7](../narrative-writing-product-v0.7-idea-box-spec/README.md) 与 [实施报告](../reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md)。
 
 ### 最小设计
 

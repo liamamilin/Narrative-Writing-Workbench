@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -55,6 +56,13 @@ EVIDENCE_MAX_SOURCE_CHARS = 60_000
 READER_PATH_MAX_DRAFT_CHARS = 30_000
 READER_PATH_MAX_PARAGRAPHS = 80
 READER_PATH_MAX_PARAGRAPH_CHARS = 10_000
+IDEA_STATUSES = {"to_write", "written", "archived"}
+IDEA_ORIGINS = {"manual", "generated", "legacy"}
+IDEA_MAX_TOPIC_CHARS = 500
+IDEA_MAX_HOOK_CHARS = 500
+IDEA_MAX_NOTE_CHARS = 2_000
+IDEA_MAX_DOMAIN_CHARS = 120
+IDEA_IMPORT_MAX = 200
 # writing_mode -> engine task type (engine task types are closed; map onto them)
 _WRITING_MODE_TO_TYPE = {
     "deep_narrative": "essay",
@@ -79,6 +87,11 @@ _FACT_RE = [re.compile(p, re.IGNORECASE) for p in _FACT_PATTERNS]
 def detect_fact_heavy(topic: str) -> bool:
     t = (topic or "").strip()
     return any(rx.search(t) for rx in _FACT_RE)
+
+
+def normalize_idea_topic(topic: str) -> str:
+    """Narrow, explainable equality for Idea deduplication."""
+    return " ".join(unicodedata.normalize("NFKC", topic).split()).casefold()
 
 
 def _delta_stream(ch):
@@ -331,6 +344,150 @@ class Service:
                       json.dumps(metadata or {}, ensure_ascii=False), ts, ts))
         return self.db.q1("SELECT * FROM sources WHERE id=?", (sid,))
 
+    # --------------------------------------------------------------- ideas ----
+
+    @staticmethod
+    def _idea_text(value, field: str, maximum: int, *, required: bool = False) -> str:
+        if value is None:
+            value = ""
+        if not isinstance(value, str):
+            raise ApiError("VALIDATION", f"{field} must be text.")
+        value = value.strip()
+        if required and not value:
+            raise ApiError("VALIDATION", "请先写下要收藏的话题。")
+        if len(value) > maximum:
+            raise ApiError("VALIDATION", f"{field} is too long.")
+        return value
+
+    @staticmethod
+    def _idea_source_key(origin: str, normalized: str, domain: str,
+                         hook: str) -> str:
+        raw = json.dumps([origin, normalized, domain, hook], ensure_ascii=False,
+                         separators=(",", ":"))
+        return f"{origin}:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+    def _validated_idea(self, payload: dict, *, legacy: bool = False) -> dict:
+        if not isinstance(payload, dict):
+            raise ApiError("VALIDATION", "Idea must be an object.")
+        topic = self._idea_text(payload.get("topic", payload.get("text")),
+                                "topic", IDEA_MAX_TOPIC_CHARS, required=True)
+        hook = self._idea_text(payload.get("hook"), "hook", IDEA_MAX_HOOK_CHARS)
+        note = self._idea_text(payload.get("note"), "note", IDEA_MAX_NOTE_CHARS)
+        domain = self._idea_text(payload.get("domain"), "domain", IDEA_MAX_DOMAIN_CHARS)
+        domain_name = self._idea_text(payload.get("domain_name", payload.get("domainName")),
+                                     "domain_name", IDEA_MAX_DOMAIN_CHARS)
+        origin = "legacy" if legacy else str(payload.get("origin") or "manual")
+        if origin not in IDEA_ORIGINS or (not legacy and origin == "legacy"):
+            raise ApiError("VALIDATION", "origin must be manual or generated.")
+        normalized = normalize_idea_topic(topic)
+        if not normalized:
+            raise ApiError("VALIDATION", "请先写下要收藏的话题。")
+        return {"topic": topic, "normalized_topic": normalized, "hook": hook,
+                "domain": domain, "domain_name": domain_name, "note": note,
+                "origin": origin,
+                "source_key": self._idea_source_key(origin, normalized, domain, hook)}
+
+    def _idea_row(self, idea_id: str) -> dict:
+        row = self.db.q1("SELECT * FROM ideas WHERE id=?", (idea_id,))
+        if not row:
+            raise ApiError("NOT_FOUND", "选题不存在。", 404)
+        return row
+
+    def create_idea(self, payload: dict) -> dict:
+        data = self._validated_idea(payload)
+        with self.db.transaction() as tx:
+            existing = tx.q1("SELECT * FROM ideas WHERE normalized_topic=?",
+                             (data["normalized_topic"],))
+            if existing:
+                return {"idea": existing, "created": False}
+            idea_id, ts = new_id("idea"), now()
+            tx.exec(
+                "INSERT INTO ideas(id,topic,normalized_topic,hook,domain,domain_name,note,"
+                "origin,source_key,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,'to_write',?,?)",
+                (idea_id, data["topic"], data["normalized_topic"], data["hook"],
+                 data["domain"], data["domain_name"], data["note"], data["origin"],
+                 data["source_key"], ts, ts))
+            row = tx.q1("SELECT * FROM ideas WHERE id=?", (idea_id,))
+        return {"idea": row, "created": True}
+
+    def list_ideas(self, query: str = "", status: str = "all",
+                   limit: int = 100) -> dict:
+        if status not in IDEA_STATUSES | {"all"}:
+            raise ApiError("VALIDATION", "Unknown idea status.")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise ApiError("VALIDATION", "limit must be an integer in 1..200.")
+        query = self._idea_text(query, "q", 100)
+        where, args = [], []
+        if status != "all":
+            where.append("status=?"); args.append(status)
+        if query:
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            where.append("(topic LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' "
+                         "OR domain_name LIKE ? ESCAPE '\\')")
+            args.extend([f"%{escaped}%"] * 3)
+        sql = "SELECT * FROM ideas"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += (" ORDER BY CASE status WHEN 'to_write' THEN 0 WHEN 'written' THEN 1 ELSE 2 END,"
+                " updated_at DESC,rowid DESC LIMIT ?")
+        args.append(limit)
+        rows = self.db.q(sql, tuple(args))
+        counts = {row["status"]: row["count"] for row in self.db.q(
+            "SELECT status,count(*) AS count FROM ideas GROUP BY status")}
+        return {"ideas": rows, "counts": {key: counts.get(key, 0)
+                                            for key in ("to_write", "written", "archived")}}
+
+    def update_idea(self, idea_id: str, payload: dict) -> dict:
+        if not isinstance(payload, dict) or not payload or not set(payload) <= {"note", "status"}:
+            raise ApiError("VALIDATION", "Only note and status can be updated.")
+        sets, args, requested_status = [], [], None
+        if "note" in payload:
+            sets.append("note=?")
+            args.append(self._idea_text(payload["note"], "note", IDEA_MAX_NOTE_CHARS))
+        if "status" in payload:
+            status = payload["status"]
+            if status not in IDEA_STATUSES:
+                raise ApiError("VALIDATION", "Unknown idea status.")
+            requested_status = status
+            sets.append("status=?"); args.append(status)
+        args.extend([now(), idea_id])
+        with self.db.transaction() as tx:
+            current = tx.q1("SELECT * FROM ideas WHERE id=?", (idea_id,))
+            if not current:
+                raise ApiError("NOT_FOUND", "选题不存在。", 404)
+            if requested_status == "to_write" and current.get("task_id"):
+                raise ApiError("IDEA_HAS_TASK", "已关联文章的选题不能改回待写。", 409)
+            if requested_status == "written" and not current.get("task_id"):
+                raise ApiError("IDEA_HAS_NO_TASK", "选题关联文章后才会变为已写。", 409)
+            tx.exec(f"UPDATE ideas SET {','.join(sets)},updated_at=? WHERE id=?", tuple(args))
+            row = tx.q1("SELECT * FROM ideas WHERE id=?", (idea_id,))
+        return row
+
+    def import_legacy_ideas(self, payload: dict) -> dict:
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or len(items) > IDEA_IMPORT_MAX:
+            raise ApiError("VALIDATION", "Legacy items must be an array of at most 200 entries.")
+        validated = [self._validated_idea(item, legacy=True) for item in items]
+        imported = existing_count = 0
+        with self.db.transaction() as tx:
+            for data in validated:
+                if tx.q1("SELECT id FROM ideas WHERE normalized_topic=?",
+                         (data["normalized_topic"],)):
+                    existing_count += 1
+                    continue
+                idea_id, ts = new_id("idea"), now()
+                tx.exec(
+                    "INSERT INTO ideas(id,topic,normalized_topic,hook,domain,domain_name,note,"
+                    "origin,source_key,status,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,'to_write',?,?)",
+                    (idea_id, data["topic"], data["normalized_topic"], data["hook"],
+                     data["domain"], data["domain_name"], data["note"], "legacy",
+                     data["source_key"], ts, ts))
+                imported += 1
+        return {"received": len(validated), "imported": imported,
+                "existing": existing_count}
+
     # --------------------------------------------------------------- task ----
 
     def create_task(self, payload: dict) -> dict:
@@ -343,6 +500,7 @@ class Service:
         custom_angle = (payload.get("custom_angle") or "").strip()
         instruction = (payload.get("instruction") or "").strip()
         material = (payload.get("material") or "").strip()
+        idea_id = payload.get("idea_id")
 
         if input_mode == "topic_only":
             if not topic:
@@ -381,6 +539,17 @@ class Service:
             if not self.db.q1("SELECT id FROM sources WHERE id=?", (sid,)):
                 raise ApiError("NOT_FOUND", f"Source {sid} not found.", 404)
         with self.db.transaction() as tx:
+            idea = None
+            if idea_id:
+                idea = tx.q1("SELECT * FROM ideas WHERE id=?", (idea_id,))
+                if not idea:
+                    raise ApiError("NOT_FOUND", "选题不存在。", 404)
+                if input_mode != "topic_only":
+                    raise ApiError("VALIDATION", "选题只能关联快速写作任务。")
+                if idea.get("task_id"):
+                    raise ApiError("IDEA_ALREADY_LINKED", "这个选题已有文章，请直接打开。", 409)
+                if idea["normalized_topic"] != normalize_idea_topic(topic):
+                    raise ApiError("IDEA_TOPIC_MISMATCH", "当前话题与收藏的选题不一致。", 409)
             tid = new_id("task")
             ts = now()
             tx.exec(
@@ -413,6 +582,9 @@ class Service:
                 draft = tx.q1("SELECT * FROM drafts WHERE id=?", (did,))
                 self._version_write(tx, draft, material, "manual_checkpoint", instruction="导入原稿")
                 tx.exec("UPDATE tasks SET status='ready' WHERE id=?", (tid,))
+            if idea:
+                tx.exec("UPDATE ideas SET task_id=?,status='written',updated_at=? WHERE id=?",
+                        (tid, ts, idea_id))
         return self.get_task(tid)
 
     def get_task(self, tid: str) -> dict:
