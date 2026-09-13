@@ -29,6 +29,30 @@ async function api(method, path, body) {
   return data;
 }
 
+async function downloadExport(path) {
+  let r;
+  try { r = await fetch(path); }
+  catch (_) {
+    throw { code: "BACKEND_DOWN", message: "连不上本机 Workbench 服务。", retryable: true };
+  }
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw data.error || { code: "NETWORK", message: r.statusText, retryable: false };
+  }
+  const disposition = r.headers.get("Content-Disposition") || "";
+  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plain = disposition.match(/filename="([^"]+)"/i);
+  let filename = plain?.[1] || "稿件.md";
+  if (utf8) {
+    try { filename = decodeURIComponent(utf8[1]); } catch (_) { /* use safe fallback */ }
+  }
+  const url = URL.createObjectURL(await r.blob());
+  const link = document.createElement("a");
+  link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
+}
+
 let toastTimer;
 function toast(msg, err = false) {
   const t = $("#toast");
@@ -871,6 +895,10 @@ function renderWorkspace() {
            <button role="tab" aria-selected="${WS.view === "draft"}" id="tab-draft" class="${WS.view === "draft" ? "on" : ""}" data-tip="正文：点段落即可编辑，选段可发起局部修改">正文</button>
            <button role="tab" aria-selected="${WS.view === "map"}" id="tab-map" class="${WS.view === "map" ? "on" : ""}" data-tip="只读：查看读者理解如何推进，点击定位段落">写作地图</button>
          </div>
+         <select id="export-format" class="export-format" aria-label="当前稿导出格式" data-tip="Markdown 保留可编辑的纯文本格式；纯文本适合直接粘贴">
+           <option value="md">Markdown</option><option value="txt">纯文本</option>
+         </select>
+         <button class="small" id="export-current" ${WS.draft ? "" : "disabled"} data-tip="先保存当前编辑，再下载这一份正文">导出当前稿</button>
          <a class="small" href="#/tasks/${t.id}/versions" data-tip="对比差异、恢复旧稿">版本</a>
       </div>
       <div id="center-body"></div>
@@ -895,6 +923,17 @@ function renderWorkspace() {
        const m = await api("GET", `/tasks/${WS.tid}/writing-map`);
        WS.map = m; WS.view = "map"; renderWorkspace();
      } catch (e) { setEditorEditable(true); toast(e.message || "还没有可用的写作地图。", true); }
+  };
+  $("#export-current").onclick = async () => {
+    if (!WS.draft) return;
+    const button = $("#export-current"); button.disabled = true;
+    try {
+      await flushAutosave({ checkpoint: false });
+      const format = $("#export-format").value;
+      await downloadExport(`/tasks/${encodeURIComponent(WS.tid)}/export?format=${format}&expected_revision=${WS.draft.revision}&include_title=true`);
+      toast("当前稿已下载。");
+    } catch (e) { toast(e.message || "导出失败。", true); }
+    finally { if (button.isConnected) button.disabled = false; }
   };
    $("#add-src-btn").onclick = async () => {
      const body = $("#add-src").value.trim(); if (!body) return;
@@ -1830,6 +1869,8 @@ async function versions(tid) {
   $("#app").innerHTML = `
     <h1>版本历史</h1>
     <p class="muted small">最多选择两个版本进行对比；恢复操作也会创建新版本，随时可以反悔。</p>
+    <p class="row"><label class="small" for="v-export-format">版本导出格式</label>
+      <select id="v-export-format" class="export-format"><option value="md">Markdown</option><option value="txt">纯文本</option></select></p>
     <div id="vlist">${rows.map(rowHtml).join("")}</div>
     <div id="vctrl"><p class="muted small">未选择:点任意版本行开始选择对比。</p></div>
     <div id="compare"></div>
@@ -1848,6 +1889,7 @@ async function versions(tid) {
       </div>
       <div class="vacts">
         ${isCur ? "" : `<button class="small va-cur" data-v="${v.id}" data-tip="对比此版本与当前草稿">与当前稿对比</button>`}
+        <button class="small va-export" data-v="${v.id}" data-tip="下载这个历史版本，不改变当前正文">导出</button>
         <button class="small va-restore" data-v="${v.id}" data-tip="恢复此版本为当前草稿；恢复本身也是新版本">恢复</button>
       </div>
     </div>`;
@@ -1930,6 +1972,15 @@ async function versions(tid) {
   });
 
   document.querySelectorAll(".va-cur").forEach(b => b.onclick = () => renderDiff(b.dataset.v, curId));
+  document.querySelectorAll(".va-export").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const format = $("#v-export-format").value;
+      await downloadExport(`/versions/${encodeURIComponent(b.dataset.v)}/export?format=${format}&include_title=true`);
+      toast("所选版本已下载。");
+    } catch (err) { toast(err.message || "导出失败。", true); }
+    finally { if (b.isConnected) b.disabled = false; }
+  });
   document.querySelectorAll(".va-restore").forEach(b => b.onclick = async () => {
     if (!(await confirmDialog(
         "恢复这个版本？", "恢复会生成一个新版本，当前状态仍保留在历史里，可以随时反悔。", "恢复版本"))) return;

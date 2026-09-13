@@ -260,6 +260,33 @@ async function main() {
       assert.equal(await page.locator('#qw-topic').inputValue(),secondText);
       await page.screenshot({path:path.join(output,'quickwrite-1440.png'),fullPage:true});
     });
+    await check('B11 current and historical version export', async()=>{
+      await go(`/tasks/${source}`); await editor().waitFor();
+      const beforeExport=(await api('GET', `/tasks/${source}`)).draft;
+      const versionCount=beforeExport.versions.length;
+      const exportFirst='导出前刚完成的正文，保留 # Markdown 字符与🙂。';
+      const exportText=[exportFirst,...beforeExport.working_content.split('\n\n').slice(1)].join('\n\n');
+      await editor().fill(exportFirst);
+      await page.locator('#export-format').selectOption('txt');
+      const currentDownload=page.waitForEvent('download');
+      await page.locator('#export-current').click();
+      const current=await currentDownload;
+      assert.equal(fs.readFileSync(await current.path(),'utf8'),exportText);
+      const saved=(await api('GET', `/tasks/${source}`)).draft;
+      assert.equal(saved.working_content,exportText);
+      assert.equal(saved.versions.length,versionCount,'export must not create a version');
+
+      await go(`/tasks/${source}/versions`);
+      await page.locator('#v-export-format').selectOption('md');
+      const exportButton=page.locator('.va-export').first();
+      const versionId=await exportButton.getAttribute('data-v');
+      const expected=(await api('GET', `/versions/${versionId}`)).content;
+      const versionDownload=page.waitForEvent('download');
+      await exportButton.click();
+      const historical=await versionDownload;
+      assert.equal(fs.readFileSync(await historical.path(),'utf8'),expected);
+      assert.equal((await api('GET', `/tasks/${source}`)).draft.working_content,exportText);
+    });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({environment,results,pageErrors},null,2));

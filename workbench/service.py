@@ -24,6 +24,7 @@ from . import settings as settings_mod
 from .db import Database, new_id
 from .engine import (EngineError, LockConflict,
                      get_engine)
+from .exporting import build_export
 from .operations import CURRENT, tracked, recover_interrupted
 
 log = logging.getLogger("workbench.service")
@@ -1087,6 +1088,37 @@ class Service:
             raise ApiError("NOT_FOUND", "Version not found.", 404)
         row["origin"] = _ORIGINS.get(row["source_type"], row["source_type"])
         return row
+
+    def export_task(self, tid: str, format_: str, expected_revision=None,
+                    include_title=True):
+        if format_ not in ("md", "txt") or type(include_title) is not bool:
+            raise ApiError("VALIDATION", "Export format or options are invalid.")
+        # Validate and copy the exact content/revision pair inside one database
+        # critical section, so a concurrent autosave cannot slip between them.
+        with self.db.transaction() as tx:
+            task = tx.q1("SELECT id,title FROM tasks WHERE id=?", (tid,))
+            if not task:
+                raise ApiError("NOT_FOUND", "Task not found.", 404)
+            draft = tx.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+            if not draft:
+                raise ApiError("NO_DRAFT", "Generate a draft before export.", 409)
+            self._check_revision(draft, expected_revision)
+            return build_export(
+                content=draft["working_content"], title=task["title"],
+                identifier=tid, format_=format_, include_title=include_title)
+
+    def export_version(self, version_id: str, format_: str, include_title=True):
+        if format_ not in ("md", "txt") or type(include_title) is not bool:
+            raise ApiError("VALIDATION", "Export format or options are invalid.")
+        row = self.db.q1(
+            "SELECT v.content,t.title,t.id AS task_id FROM versions v "
+            "JOIN drafts d ON d.id=v.draft_id JOIN tasks t ON t.id=d.task_id "
+            "WHERE v.id=?", (version_id,))
+        if not row:
+            raise ApiError("NOT_FOUND", "Version not found.", 404)
+        return build_export(
+            content=row["content"], title=row["title"], identifier=version_id,
+            format_=format_, include_title=include_title)
 
     def restore_version(self, version_id: str, expected_revision=None) -> dict:
         with self.db.transaction() as tx:

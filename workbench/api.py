@@ -6,13 +6,21 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .progress import BROKER, sse_format
 from .service import ApiError, Service
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _export_bool(value: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ApiError("VALIDATION", "include_title must be true or false.")
 
 
 def create_app(service: Service | None = None) -> FastAPI:
@@ -201,6 +209,27 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.get("/versions/{version_id}")
     def get_version(version_id: str):
         return svc().get_version(version_id)
+
+    @app.get("/tasks/{task_id}/export")
+    def export_task(task_id: str, format: str = "md",
+                    expected_revision: str | None = None,
+                    include_title: str = "true"):
+        try:
+            revision = int(expected_revision) if expected_revision is not None else None
+        except ValueError:
+            revision = expected_revision
+        artifact = svc().export_task(
+            task_id, format, revision, _export_bool(include_title))
+        return Response(content=artifact.content, media_type=artifact.media_type,
+                        headers=artifact.headers)
+
+    @app.get("/versions/{version_id}/export")
+    def export_version(version_id: str, format: str = "md",
+                       include_title: str = "true"):
+        artifact = svc().export_version(
+            version_id, format, _export_bool(include_title))
+        return Response(content=artifact.content, media_type=artifact.media_type,
+                        headers=artifact.headers)
 
     @app.post("/versions/{version_id}/restore")
     def restore_version(version_id: str, body: dict | None = None):

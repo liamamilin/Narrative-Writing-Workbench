@@ -14,6 +14,6 @@ Linux CI 使用 `npx playwright install --with-deps chromium` 安装浏览器系
 
 可指定 `PYTHON_BIN` 与 `BROWSER_EXECUTABLE` 使用现有 Python/Chrome。脚本创建空白浏览器上下文，不复用个人资料；以随机端口启动 scripts/mock_server.py，等待 ready，结束关闭浏览器与子进程并清理临时数据库。截图和结果在 `.scratch/browser-report/`。
 
-自动化覆盖 B01–B08 的核心交互；B09 还验证 5,200 字中文剪贴板粘贴、合成 composition 事件、反向 Shift 连续选择、跨段文字选择与提案范围；B10 验证 Writing Map Enter、话题卡 Enter/Space、Escape 对话框焦点恢复和桌面截图。B07 会在生成中强制结束 mock 服务，使用同一临时数据库和端口重启，再验证旧操作标为 interrupted、页面提示中断以及用户手动重试成功。自动化 composition 不等于真实中文输入法测试；B09 的原生输入法和 B10 的完整人工键盘走查见 [人工验收表](MANUAL_ACCEPTANCE.md)。
+自动化覆盖 B01–B08 的核心交互；B09 还验证 5,200 字中文剪贴板粘贴、合成 composition 事件、反向 Shift 连续选择、跨段文字选择与提案范围；B10 验证 Writing Map Enter、话题卡 Enter/Space、Escape 对话框焦点恢复和桌面截图；B11 验证未等待 autosave 的当前编辑与指定历史版本下载，并确认导出不创建版本或改变当前稿。B07 会在生成中强制结束 mock 服务，使用同一临时数据库和端口重启，再验证旧操作标为 interrupted、页面提示中断以及用户手动重试成功。自动化 composition 不等于真实中文输入法测试；B09–B11 的人工走查见 [人工验收表](MANUAL_ACCEPTANCE.md)。
 
 同目录 package-lock.json 锁定 Playwright 依赖。测试不会读取用户数据库或真实 settings，不会调用模型服务。
