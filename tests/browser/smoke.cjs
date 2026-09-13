@@ -236,11 +236,15 @@ async function main() {
       assert.deepEqual(await page.locator('#editor .para.sel').evaluateAll(
         els=>els.map(x=>Number(x.dataset.p))),[2,3]);
       const importedBefore=(await api('GET', `/tasks/${imported}`)).draft.working_content;
-      const priorPatchCount=await page.locator('.patch-card').count();
+      const priorPatchIds=new Set(await page.locator('.patch-card').evaluateAll(
+        cards=>cards.map(card=>card.dataset.id)));
       await page.locator('#selbar [data-i=shorter]').click();
-      await until(async()=>await page.locator('.patch-card').count()===priorPatchCount+1,'cross-paragraph proposal');
-      const card=page.locator('.patch-card').last();
-      const patchId=await card.getAttribute('data-id');
+      await until(async()=>await page.locator('.patch-card').count()===priorPatchIds.size+1,'cross-paragraph proposal');
+      const currentPatchIds=await page.locator('.patch-card').evaluateAll(
+        cards=>cards.map(card=>card.dataset.id));
+      const patchId=currentPatchIds.find(id=>!priorPatchIds.has(id));
+      assert.ok(patchId,'new proposal id must be distinguishable from older pending proposals');
+      const card=page.locator(`.patch-card[data-id="${patchId}"]`);
       const pending=(await api('GET', `/tasks/${imported}`)).pending_patches
         .find(p=>p.patch_id===patchId);
       assert.deepEqual({start:pending.selection.paragraph_start,end:pending.selection.paragraph_end},{start:2,end:3});
