@@ -74,6 +74,10 @@ cp workbench/settings.example.json workbench/settings.json
 > 密钥只存本地 `workbench/settings.json`(已在 `.gitignore` 中,永不入库);
 > 服务启动时把它注入进程环境,API 只回传掩码。`scripts/launch_workbench.sh stop` 停止。
 
+真实模型必须先通过完整生成链路，连接测试或短话题生成不能代表长结构化 JSON 兼容。2026-09-13 的同 API、同任务对照中，OpenCode Go 的 `deepseek-v4-flash` 在 258.76 秒内完成意义发现、命题评审、结构和正文；`mimo-v2.5` 两次打满 6,000 输出 token 后仍返回截断 JSON，在意义发现阶段失败。因此当前交互主链路优先使用 `deepseek-v4-flash` 或其他已完成容量试跑的模型；`mimo-v2.5` 暂不作为长结构生成推荐。详情见[真实模型评估报告](docs/reports/REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。
+
+Workbench 的超时是每次模型调用的边界，产品适配器不做 SDK 隐式重试；结构校验失败仍可能触发一次显式 JSON 修复调用。运行页会分别记录阶段、调用耗时、usage 和最终失败原因。
+
 体验路径:Quick Write 可直接“开始写”，也可“先看角度”→ 选择/编辑完整角度 → 确认并生成。素材写作路径:Start Writing → 粘贴素材 + 意图 → Create & Write → Generate
 Draft → 点选段落 → Revise/Shorter… → Generate Patch → Before/After →
 Accept(生成版本)→ Versions → Restore。工作台可把最新保存稿导出为 Markdown/纯文本，版本页也可下载任意历史版本。
