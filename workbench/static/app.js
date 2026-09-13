@@ -1081,7 +1081,7 @@ const contentParas = () => (WS.draft ? WS.draft.working_content : "").split("\n\
 function renderWorkspace() {
   const t = WS.task;
   $("#app").innerHTML = `
-  <div class="workspace">
+  <div class="workspace" data-task-id="${esc(t.id)}">
     <section id="pane-left">
        <h3>素材</h3><div id="sources"></div>
        <label class="small muted" for="add-src">追加素材</label>

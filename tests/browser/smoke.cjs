@@ -49,7 +49,13 @@ async function main() {
       assert.ok(r.ok(), `${route}: ${r.status()} ${await r.text()}`);
       return r.json();
     };
-    const go = async route => { await page.goto(base + '/#' + route); };
+    const go = async route => {
+      await page.goto(base + '/#' + route);
+      const workspace = route.match(/^\/tasks\/([^/?]+)$/);
+      if (workspace && workspace[1] !== 'new') {
+        await page.locator(`.workspace[data-task-id="${workspace[1]}"]`).waitFor();
+      }
+    };
     const taskId = () => page.url().match(/#\/tasks\/([^/]+)/)[1];
     const editor = () => page.locator('#editor .para').first();
     async function confirm() { await page.locator('dialog[open] button[value=confirm]').click(); }
