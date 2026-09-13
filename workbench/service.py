@@ -94,6 +94,49 @@ def normalize_idea_topic(topic: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", topic).split()).casefold()
 
 
+def _is_timeout_error(exc: BaseException) -> bool:
+    """Recognize provider timeout wrappers without coupling to one SDK."""
+    seen = set()
+    current = exc
+    timeout_names = {"APITimeoutError", "ReadTimeout", "ConnectTimeout",
+                     "PoolTimeout", "TimeoutException"}
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, TimeoutError) or type(current).__name__ in timeout_names:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _operation_timeout_seconds(role: str | None = None) -> float | None:
+    """Read the immutable operation snapshot before falling back to settings."""
+    operation = CURRENT.get()
+    roles = ((operation.snapshot if operation else {}).get("roles") or {})
+    candidates = [role] if role else []
+    candidates += ["architect", "writer", "critic", "patcher"]
+    for name in candidates:
+        value = (roles.get(name) or {}).get("timeout_seconds")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return float(value)
+    value = settings_mod.load().get("timeout_seconds")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return None
+
+
+def _provider_failure_message(action: str, exc: BaseException,
+                              role: str | None = None) -> str:
+    if _is_timeout_error(exc):
+        timeout = _operation_timeout_seconds(role)
+        window = f"{timeout:g} 秒" if timeout is not None else "设定时间"
+        return (f"{action}超时：模型在{window}内没有返回。"
+                "请确认本地模型已经加载完成，或在设置中选择更快的模型、"
+                "调整超时时间后重试。")
+    detail = str(exc).strip() or type(exc).__name__
+    return (f"{action}失败：{detail}\n"
+            "请检查设置中的模型名称、Base URL 和 API Key 是否匹配。")
+
+
 def _delta_stream(ch):
     """Batch engine text deltas into SSE 'delta' events.
 
@@ -885,14 +928,11 @@ class Service:
                                     {"error": f"{type(exc).__name__}: {exc}"})
             self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?",
                          (now(), tid))
+            message = _provider_failure_message("寻找角度", exc, "architect")
             if emit:
-                emit("error", {"message": "Discovery failed."})
-            detail = str(exc) or type(exc).__name__
+                emit("error", {"message": message})
             raise ApiError("DISCOVERY_FAILED",
-                           f"寻找角度失败: {detail}\n"
-                           "可能原因: 模型名称错误、API 地址不可达、或 API Key 无效。\n"
-                           "请在 Settings 中检查 Model 名称是否正确，"
-                           "以及 Base URL 和 API Key 是否匹配。",
+                           message,
                            500, retryable=True) from exc
         finally:
             if stage_cb:
@@ -1237,13 +1277,10 @@ class Service:
             log.exception("ungrouped generation error for %s", tid)
             self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?",
                          (now(), tid))
-            emit("error", {"message": "Generation failed."})
-            detail = str(exc) or type(exc).__name__
+            message = _provider_failure_message("生成", exc)
+            emit("error", {"message": message})
             raise ApiError("GENERATION_FAILED",
-                           f"生成失败: {detail}\n"
-                           "可能原因: 模型名称错误、API 地址不可达、或 API Key 无效。\n"
-                           "请在 Settings 中检查 Model 名称是否正确，"
-                           "以及 Base URL 和 API Key 是否匹配。",
+                           message,
                            500, retryable=True) from exc
         finally:
             if struct_cb:
@@ -1317,9 +1354,10 @@ class Service:
                 raise ApiError("REVIEW_FAILED", str(exc), 500, retryable=True) from exc
             except Exception as exc:
                 log.exception("ungrouped review error for %s", tid)
-                ch.emit("error", {"message": "Review failed."})
+                message = _provider_failure_message("检查", exc, "critic")
+                ch.emit("error", {"message": message})
                 raise ApiError("REVIEW_FAILED",
-                               f"检查失败:{type(exc).__name__} — 请重试。",
+                               message,
                                500, retryable=True) from exc
             rid, ts = new_id("rev"), now()
             digest = content_hash(draft["working_content"])

@@ -45,6 +45,11 @@ class FailingDiscoveryEngine(MockWritingEngine):
         raise DiscoveryFailed("no angle found")
 
 
+class TimeoutDiscoveryEngine(MockWritingEngine):
+    def discover_meaning(self, **kw):
+        raise TimeoutError("provider request timed out")
+
+
 def _svc(engine=None):
     return Service(Database(":memory:"), engine=engine or MockWritingEngine())
 
@@ -112,6 +117,26 @@ def test_discovery_engine_failure_retryable():
     r = c.post(f"/tasks/{tid}/generate")
     assert r.status_code == 500
     assert r.json()["error"]["retryable"] is True
+
+
+def test_discovery_timeout_is_actionable_and_persisted(monkeypatch):
+    from workbench import settings as settings_mod
+    monkeypatch.setattr(settings_mod, "load", lambda: {"timeout_seconds": 42})
+    svc = _svc(TimeoutDiscoveryEngine())
+    c = TestClient(create_app(svc))
+    tid = qw_task(c)
+
+    r = c.post(f"/tasks/{tid}/generate")
+
+    assert r.status_code == 500
+    message = r.json()["error"]["message"]
+    assert "寻找角度超时" in message and "42 秒" in message
+    operation_id = svc.db.q1(
+        "SELECT id FROM writing_operations WHERE task_id=? ORDER BY rowid DESC",
+        (tid,))["id"]
+    operation = svc.operation_detail(tid, operation_id)
+    error_events = [e for e in operation["events"] if e["kind"] == "error"]
+    assert error_events[0]["data"]["message"] == message
 
 
 def test_structured_repair_path_with_meaning_validator():

@@ -71,6 +71,21 @@ def test_engine_mode_applies_to_new_service():
     assert get_engine().name == "mock"
 
 
+def test_real_workbench_engine_disables_implicit_provider_retries(monkeypatch):
+    """The UI's per-call timeout must not be multiplied by SDK retries."""
+    import openai
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    from workbench.engine.real import RealWritingEngine
+    RealWritingEngine()
+    assert captured["max_retries"] == 0
+
+
 def test_test_connection_without_key_or_model(monkeypatch):
     # no config.live.yaml fallback: model must come from settings/payload only
     monkeypatch.setattr(settings_mod, "_model_from_config_yaml", lambda: None)

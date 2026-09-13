@@ -84,7 +84,15 @@ def _extract_json(text: str) -> dict:
 class RealWritingEngine:
     name = "real"
 
-    def __init__(self, config_path: str | None = None, *, max_retries: int = 3):
+    def __init__(self, config_path: str | None = None, *, max_retries: int = 0):
+        """Build the product adapter with a bounded provider call.
+
+        Workbench operations already expose an explicit user-controlled retry.
+        Provider SDK retries multiply the configured per-call timeout and make
+        a stalled local model look like an indefinitely stuck task, so the
+        product adapter disables them by default. Engine/evaluation callers
+        may still opt into a different value explicitly.
+        """
         if config_path is None:
             config_path = os.environ.get("WORKBENCH_CONFIG")
         if config_path is None:

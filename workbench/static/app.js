@@ -1863,8 +1863,9 @@ function stepsView(steps, angle, errMsg) {
   const rows = steps.map((s, i) => {
     const [en, zh] = STEP_LABELS[s] || [s, ""];
     const active = i === steps.length - 1 && !angle && !errMsg;
+    const completed = s === "queued" ? "已开始 ·" : "完成 ·";
     return `<div class="step${active ? " act" : " ok"}">
-      ${active ? '<span class="spin"></span>' : "完成 ·"} ${esc(zh || en)}
+      ${active ? '<span class="spin"></span>' : completed} ${esc(zh || en)}
       </div>`;
   }).join("");
   const a = angle ? `<div class="step angle">选定角度 · <b>${esc(angle)}</b></div>` : "";
@@ -2083,7 +2084,7 @@ async function runGeneration(endpoint, body, okMsg) {
   btns.forEach(b => { b.disabled = true; });
   setEditorEditable(false);
   let i = 0, t0 = Date.now();
-const render = renderBanner;
+  const render = renderBanner;
   const prog = openProgress(myTid, render);
   const timer = setInterval(() => {
     if (prog.alive()) return;             // real events win; rotate only as fallback
@@ -2137,7 +2138,9 @@ function resumeInProgressGeneration() {
   genBanner(true);
   const btns = [$("#p-gen"), $("#gen-now"), $("#p-another"), $("#p-same")].filter(Boolean);
   btns.forEach(b => { b.disabled = true; });
-  let i = 0, t0 = Date.now();
+  let i = 0;
+  const startedAt = Date.parse(WS.task.operation?.started_at || "");
+  const t0 = Number.isFinite(startedAt) ? startedAt : Date.now();
   const stillHere = () => WS.tid === myTid && location.hash === `#/tasks/${myTid}`;
   const prog = openProgress(myTid, renderProgressState, (errMsg) => {
     prog.close();
@@ -2165,14 +2168,16 @@ function resumeInProgressGeneration() {
     const ti = $("#gb-title");
     if (ti) ti.innerHTML = `${STG[i]} <span class="muted small">${STG_ZH[i]}</span>`;
   }, 9000);
-  const tick = setInterval(() => {
+  const updateElapsed = () => {
     const time = $("#gb-time");
     if (!time) return;
     const secs = Math.round((Date.now() - t0) / 1000);
     time.textContent = secs > 180
-      ? `已用时 ${secs} 秒（比平时慢，模型可能在排队或思考较长，可继续等或检查设置里的模型地址）`
+      ? `已用时 ${secs} 秒（模型仍在处理，将按设置中的单次超时停止）`
       : `已用时 ${secs} 秒`;
-  }, 1000);
+  };
+  updateElapsed();
+  const tick = setInterval(updateElapsed, 1000);
 }
 
 /* review */
