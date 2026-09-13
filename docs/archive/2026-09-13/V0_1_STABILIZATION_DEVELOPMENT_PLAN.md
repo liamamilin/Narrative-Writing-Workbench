@@ -1,6 +1,6 @@
 # V0.1 稳定性与验收：详细开发计划
 
-日期：2026-09-13。状态：开发中；原始估算与初始表保留，实际进展见 [开发日志](../reports/DEVELOPMENT_PROGRESS.md)。事实基线见 [现状报告](../reports/PROJECT_STATUS_AND_NEXT_STEPS_2026_09_13.md)，后续功能见 [产品路线图](PRODUCT_EVOLUTION_ROADMAP.md)。
+日期：2026-09-13。状态：已完成并归档；原始估算与初始表保留，实际进展见 [开发日志](../../reports/DEVELOPMENT_PROGRESS.md)。事实基线见 [现状报告](PROJECT_STATUS_AND_NEXT_STEPS_2026_09_13.md)，后续功能见 [产品路线图](../../planning/PRODUCT_EVOLUTION_ROADMAP.md)。
 
 ## 1. 目标与完成定义
 

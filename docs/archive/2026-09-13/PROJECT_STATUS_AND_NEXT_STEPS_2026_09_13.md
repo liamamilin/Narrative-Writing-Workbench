@@ -1,6 +1,6 @@
 # 项目现状与下一步工作计划
 
-> 状态更新（2026-09-13 19:29）：本文是 HEAD `72304ad` 时的历史检查快照。文中复现的事务、版本关联、设置、干净测试、运行恢复和浏览器自动化缺口已在后续稳定性批次关闭；F01–F06 也已完成工程实现。当前基线为 371 项 pytest 与 B01–B17 浏览器回归通过。最新执行顺序见[下一阶段开发优先级](../planning/NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md)，实际完成记录见[开发日志](DEVELOPMENT_PROGRESS.md)。真实模型主链路现场对照已确认 `deepseek-v4-flash` 成功、`mimo-v2.5` 长结构输出截断，详情见[真实模型评估报告](REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。下文保留原判断，不能作为当前缺陷清单。
+> 状态更新（2026-09-13 19:29）：本文是 HEAD `72304ad` 时的历史检查快照。文中复现的事务、版本关联、设置、干净测试、运行恢复和浏览器自动化缺口已在后续稳定性批次关闭；F01–F06 也已完成工程实现。当前基线为 371 项 pytest 与 B01–B17 浏览器回归通过。最新执行顺序见[下一阶段开发优先级](../../planning/NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md)，实际完成记录见[开发日志](../../reports/DEVELOPMENT_PROGRESS.md)。真实模型主链路现场对照已确认 `deepseek-v4-flash` 成功、`mimo-v2.5` 长结构输出截断，详情见[真实模型评估报告](../../reports/REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。下文保留原判断，不能作为当前缺陷清单。
 
 日期：2026-09-13。检查基线：`main`，HEAD `72304ad`，并包含检查开始时已有的 `workbench/static/app.js` 未提交修改。
 
@@ -156,9 +156,9 @@ RAG、联网研究、风格模仿、复杂代理框架、协作、发布集成�
 
 本报告保留为检查时的事实基线。按后续要求，开发任务和新功能规划分别记录在：
 
-- [规划总入口](../planning/README.md)
-- [现有产品详细开发计划](../planning/V0_1_STABILIZATION_DEVELOPMENT_PLAN.md)：S00–S08、数据/API 建议、事务与迁移、浏览器验收、提交拆分。
-- [产品演进方向与功能路线图](../planning/PRODUCT_EVOLUTION_ROADMAP.md)：F01–F09、优先级、用户价值假设与启动条件。
-- [新功能开发计划](../planning/NEW_FEATURE_DEVELOPMENT_PLAN.md)：各功能的 MVP、任务、依赖、验收和分批交付。
+- [规划总入口](../../planning/README.md)
+- [现有产品详细开发计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md)：S00–S08、数据/API 建议、事务与迁移、浏览器验收、提交拆分。
+- [产品演进方向与功能路线图](../../planning/PRODUCT_EVOLUTION_ROADMAP.md)：F01–F09、优先级、用户价值假设与启动条件。
+- [新功能开发计划](../../planning/NEW_FEATURE_DEVELOPMENT_PLAN.md)：各功能的 MVP、任务、依赖、验收和分批交付。
 
 本次已完成文档编制，尚未实施上述修复或新功能。

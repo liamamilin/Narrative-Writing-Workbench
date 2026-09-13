@@ -1,6 +1,6 @@
 # 新功能分阶段开发计划
 
-日期：2026-09-13。状态：F01–F06 工程实现已完成，其中 F02–F05 的真实使用效果继续评估；F07–F09 仍为条件候选。当前执行顺序见 [下一阶段优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md)，产品理由见 [路线图](PRODUCT_EVOLUTION_ROADMAP.md)。所有实现以 [S00–S08 稳定性计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md) 为前置基础。
+日期：2026-09-13。状态：F01–F06 工程实现已完成，其中 F02–F05 的真实使用效果继续评估；F07–F09 仍为条件候选。当前执行顺序见 [下一阶段优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md)，产品理由见 [路线图](PRODUCT_EVOLUTION_ROADMAP.md)。前置的 [S00–S08 稳定性计划](../archive/2026-09-13/V0_1_STABILIZATION_DEVELOPMENT_PLAN.md) 已完成并归档。
 
 ## 1. 实施约定
 

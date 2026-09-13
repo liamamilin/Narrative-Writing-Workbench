@@ -1,6 +1,6 @@
 # 产品演进方向与新功能路线图
 
-日期：2026-09-13。状态：产品提案。执行拆分见 [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md)；前置工作见 [稳定性开发计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md)。
+日期：2026-09-13。状态：产品提案。执行拆分见 [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md)；已完成的前置工作见归档中的 [稳定性开发计划](../archive/2026-09-13/V0_1_STABILIZATION_DEVELOPMENT_PLAN.md)。
 
 本路线图基于现有代码、产品规格和本地审查提出产品假设，没有开展市场调研、竞品比较或用户访谈。优先级表示当前建议，不表示市场需求已经得到验证。
 
