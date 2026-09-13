@@ -88,6 +88,7 @@ class Operation:
             "architect": "structure",
             "writer": "writing",
             "critic": "review",
+            "evidence_check": "evidence_check",
             "patcher": "revision",
         }
         usage = call.get("usage")

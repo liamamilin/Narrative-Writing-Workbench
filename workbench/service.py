@@ -20,6 +20,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from . import meaning_schema
+from .evidence_schema import validate_evidence
 from . import settings as settings_mod
 from .backup import (BackupError, create_backup as build_workspace_backup,
                      inspect_backup as inspect_workspace_backup,
@@ -46,6 +47,10 @@ EXPERIENCE_LEVELS = {"low", "medium", "high"}
 INPUT_MODES = {"topic_only", "source_grounded", "draft_revision"}
 WRITING_MODES = {"deep_narrative", "clear_essay", "fiction", "free_writing"}
 ANGLE_MODES = {"auto", "custom"}
+EVIDENCE_TASK_TYPES = {"narrative_analysis", "character_analysis", "essay"}
+EVIDENCE_MAX_DRAFT_CHARS = 20_000
+EVIDENCE_MAX_SOURCES = 20
+EVIDENCE_MAX_SOURCE_CHARS = 60_000
 # writing_mode -> engine task type (engine task types are closed; map onto them)
 _WRITING_MODE_TO_TYPE = {
     "deep_narrative": "essay",
@@ -211,6 +216,20 @@ def paragraph_span(content: str, start: int, end: int) -> tuple[int, int]:
 
 def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def unique_quote_span(content: str, quote: str, start: int = 0,
+                      end: int | None = None) -> tuple[int, int] | None:
+    """Locate one exact quote inside a bounded range; ambiguity is unsafe."""
+    if not isinstance(quote, str) or not quote or not (0 <= start <= len(content)):
+        return None
+    end = len(content) if end is None else end
+    if not (start <= end <= len(content)):
+        return None
+    first = content.find(quote, start, end)
+    if first < 0 or content.find(quote, first + 1, end) >= 0:
+        return None
+    return first, first + len(quote)
 
 
 def paragraph_range_for_span(content: str, char_start: int,
@@ -421,7 +440,8 @@ class Service:
                 {"patch_id": p["id"], "instruction": p["instruction"],
                  "before": p["before_text"] or "", "after": p["after_text"] or "",
                  "selection": json.loads(p["selection_json"]),
-                 "revision_item_id": p.get("revision_item_id")}
+                 "revision_item_id": p.get("revision_item_id"),
+                 "claim_link_id": p.get("claim_link_id")}
                 for p in self.db.q(
                     "SELECT * FROM proposed_patches WHERE draft_id=? AND status='proposed' "
                     "ORDER BY created_at,rowid",
@@ -433,6 +453,13 @@ class Service:
                              (draft["id"],))
             if row:
                 task["review"] = self._review_payload(row, task, draft)
+        task["evidence_check"] = None
+        if draft:
+            check = self.db.q1(
+                "SELECT * FROM claim_checks WHERE task_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                (tid,))
+            if check:
+                task["evidence_check"] = self._evidence_payload(check, task, draft)
         # fact-heavy topic warning: only while still topic_only with no sources
         if task.get("input_mode") == "topic_only" and not task["sources"]:
             task["factuality_warning"] = detect_fact_heavy(task.get("topic", ""))
@@ -1258,6 +1285,223 @@ class Service:
                 "total_issue_count": review["total_issue_count"],
                 "remaining_issue_count": review["remaining_issue_count"]}
 
+    # ---------------------------------------------------------- evidence ----
+
+    @staticmethod
+    def _source_snapshot(task: dict) -> list[dict]:
+        return sorted(({
+            "id": source["id"], "role": source.get("role", "primary"),
+            "content_hash": content_hash(source.get("content", "")),
+        } for source in task.get("sources") or []), key=lambda item: item["id"])
+
+    @staticmethod
+    def _assert_evidence_available(task: dict, draft: dict | None) -> list[dict]:
+        if (task.get("input_mode") != "source_grounded"
+                or task.get("type") not in EVIDENCE_TASK_TYPES):
+            raise ApiError("EVIDENCE_NOT_APPLICABLE",
+                           "材料依据检查仅适用于有素材的分析与观点写作。", 409)
+        if not draft or not draft.get("working_content", "").strip():
+            raise ApiError("NO_DRAFT", "请先生成或导入正文。", 409)
+        sources = [source for source in task.get("sources") or []
+                   if source.get("content", "").strip()]
+        if not sources:
+            raise ApiError("NO_SOURCES", "请先添加用于核查的素材。", 409)
+        if len(draft["working_content"]) > EVIDENCE_MAX_DRAFT_CHARS:
+            raise ApiError("EVIDENCE_INPUT_TOO_LARGE",
+                           "正文超过 20,000 字符，请缩小检查范围。", 413)
+        if len(sources) > EVIDENCE_MAX_SOURCES:
+            raise ApiError("EVIDENCE_INPUT_TOO_LARGE",
+                           "关联素材超过 20 份，请缩小材料范围。", 413)
+        if sum(len(source["content"]) for source in sources) > EVIDENCE_MAX_SOURCE_CHARS:
+            raise ApiError("EVIDENCE_INPUT_TOO_LARGE",
+                           "关联素材超过 60,000 字符，请缩小材料范围。", 413)
+        return sources
+
+    def _evidence_is_stale(self, check: dict, task: dict, draft: dict) -> bool:
+        try:
+            snapshot = json.loads(check["sources_json"])
+        except (TypeError, json.JSONDecodeError):
+            return True
+        return (check["draft_id"] != draft["id"]
+                or check["draft_revision"] != draft["revision"]
+                or check["content_hash"] != content_hash(draft["working_content"])
+                or snapshot != self._source_snapshot(task))
+
+    def _evidence_payload(self, check: dict, task: dict, draft: dict) -> dict:
+        stale = self._evidence_is_stale(check, task, draft)
+        sources = {source["id"]: source for source in task.get("sources") or []}
+        cards = []
+        for link in self.db.q(
+                "SELECT * FROM claim_links WHERE check_id=? ORDER BY paragraph_start,rowid",
+                (check["id"],)):
+            source = sources.get(link.get("source_id"))
+            cards.append({
+                "id": link["id"], "claim_id": link["claim_id"],
+                "claim_type": link["claim_type"], "relation": link["relation"],
+                "explanation": link["explanation"],
+                "revision_goal": link["revision_goal"],
+                "draft_quote": link["draft_quote"],
+                "location": {"paragraph_start": link["paragraph_start"],
+                             "paragraph_end": link["paragraph_end"]},
+                "source_id": link.get("source_id"),
+                "source_title": source.get("title") if source else None,
+                "source_quote": link.get("source_quote"),
+                "source_location": ({"char_start": link["source_char_start"],
+                                     "char_end": link["source_char_end"]}
+                                    if link.get("source_char_start") is not None else None),
+                "user_status": link["user_status"],
+                "patch_id": link.get("patch_id"),
+                "actionable": not stale and link["user_status"] != "dismissed",
+            })
+        return {"id": check["id"], "revision": check["draft_revision"],
+                "stale": stale, "created_at": check["created_at"], "cards": cards}
+
+    @tracked("evidence_check")
+    def check_evidence(self, tid: str) -> dict:
+        task = self.get_task(tid)
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        sources = self._assert_evidence_available(task, draft)
+        snapshot = self._source_snapshot(task)
+        digest = content_hash(draft["working_content"])
+        CURRENT.get().bind_inputs({
+            "revision": draft["revision"], "content_hash": digest,
+            "sources": snapshot,
+        })
+        ch = CURRENT.get().channel
+        callback = _stage_stream(ch.emit, "evidence_check") if _debug_stream() else None
+        ch.emit("stage", {"stage": "evidence_check"})
+        try:
+            payload = CURRENT.get().engine.check_evidence(
+                content=draft["working_content"], sources=sources,
+                on_delta=callback)
+        except EngineError as exc:
+            raise ApiError("EVIDENCE_CHECK_FAILED", str(exc), 500, True) from exc
+        except Exception as exc:
+            log.exception("ungrouped evidence check error for %s", tid)
+            raise ApiError("EVIDENCE_CHECK_FAILED",
+                           f"材料依据检查失败:{type(exc).__name__} — 请重试。",
+                           500, True) from exc
+        finally:
+            if callback:
+                callback.flush()
+        errors = validate_evidence(payload)
+        if errors:
+            raise ApiError("EVIDENCE_CHECK_FAILED",
+                           "材料依据检查返回了无法验证的结构，请重试。", 500, True)
+
+        check_id, ts = new_id("echeck"), now()
+        source_by_id = {source["id"]: source for source in sources}
+        normalized = []
+        seen = set()
+        for raw in payload.get("claims") or []:
+            claim_id = raw["id"]
+            if claim_id in seen:
+                continue
+            seen.add(claim_id)
+            ps, pe = raw["paragraph_start"], raw["paragraph_end"]
+            try:
+                region_start, region_end = paragraph_span(
+                    draft["working_content"], ps, pe)
+            except ApiError:
+                continue
+            draft_anchor = unique_quote_span(
+                draft["working_content"], raw["draft_quote"],
+                region_start, region_end)
+            if not draft_anchor:
+                continue
+            relation = raw["relation"]
+            source = source_by_id.get(raw.get("source_id"))
+            source_anchor = None
+            if source and raw.get("source_quote"):
+                source_anchor = unique_quote_span(source["content"], raw["source_quote"])
+            explanation = raw["explanation"].strip()
+            if not source_anchor:
+                source = None
+                if relation in ("supported", "conflict"):
+                    relation = "insufficient"
+                    explanation += "（材料引文无法逐字定位，已按证据不足处理。）"
+            normalized.append({
+                "id": new_id("claim"), "claim_id": claim_id,
+                "claim_type": raw["claim_type"], "relation": relation,
+                "explanation": explanation,
+                "revision_goal": raw["revision_goal"].strip(),
+                "paragraph_start": ps, "paragraph_end": pe,
+                "draft_char_start": draft_anchor[0], "draft_char_end": draft_anchor[1],
+                "draft_quote": raw["draft_quote"], "source": source,
+                "source_anchor": source_anchor,
+                "source_quote": raw.get("source_quote") if source_anchor else None,
+            })
+
+        with self.db.transaction() as tx:
+            current = tx.q1("SELECT * FROM drafts WHERE id=?", (draft["id"],))
+            live_task = self.get_task(tid)
+            if (not current or current["revision"] != draft["revision"]
+                    or content_hash(current["working_content"]) != digest
+                    or self._source_snapshot(live_task) != snapshot):
+                raise ApiError("STALE_BASE",
+                               "正文或素材在检查期间发生了变化，请重新检查。", 409, True)
+            tx.exec("INSERT INTO claim_checks(id,task_id,draft_id,operation_id,draft_revision,"
+                    "content_hash,sources_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (check_id, tid, draft["id"], CURRENT.get().id, draft["revision"],
+                     digest, json.dumps(snapshot, ensure_ascii=False), ts))
+            for card in normalized:
+                source = card["source"]
+                anchor = card["source_anchor"]
+                tx.exec(
+                    "INSERT INTO claim_links(id,check_id,draft_id,claim_id,claim_type,relation,"
+                    "explanation,revision_goal,paragraph_start,paragraph_end,draft_char_start,"
+                    "draft_char_end,draft_quote,source_id,source_content_hash,source_char_start,"
+                    "source_char_end,source_quote,user_status,created_at,updated_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'unreviewed',?,?)",
+                    (card["id"], check_id, draft["id"], card["claim_id"],
+                     card["claim_type"], card["relation"], card["explanation"],
+                     card["revision_goal"], card["paragraph_start"], card["paragraph_end"],
+                     card["draft_char_start"], card["draft_char_end"], card["draft_quote"],
+                     source["id"] if source else None,
+                     content_hash(source["content"]) if source else None,
+                     anchor[0] if anchor else None, anchor[1] if anchor else None,
+                     card["source_quote"], ts, ts))
+        ch.emit("stage_summary", {"stage": "evidence_check",
+                                  "text": f"材料依据：{len(normalized)} 项关键陈述"})
+        ch.emit("done", {"evidence_check_id": check_id})
+        check = self.db.q1("SELECT * FROM claim_checks WHERE id=?", (check_id,))
+        return self._evidence_payload(check, self.get_task(tid), draft)
+
+    def evidence_check(self, tid: str) -> dict:
+        task = self.get_task(tid)
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        if not draft:
+            raise ApiError("NO_DRAFT", "请先生成或导入正文。", 409)
+        check = self.db.q1(
+            "SELECT * FROM claim_checks WHERE task_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            (tid,))
+        if not check:
+            return {"id": None, "revision": draft["revision"],
+                    "stale": False, "cards": []}
+        return self._evidence_payload(check, task, draft)
+
+    def _update_claim_status(self, link_id: str, status: str) -> dict:
+        with self.db.transaction() as tx:
+            link = tx.q1("SELECT * FROM claim_links WHERE id=?", (link_id,))
+            if not link:
+                raise ApiError("NOT_FOUND", "依据卡不存在。", 404)
+            check = tx.q1("SELECT * FROM claim_checks WHERE id=?", (link["check_id"],))
+            draft = tx.q1("SELECT * FROM drafts WHERE id=?", (link["draft_id"],))
+            task = self.get_task(check["task_id"])
+            if self._evidence_is_stale(check, task, draft):
+                raise ApiError("STALE_EVIDENCE_CHECK",
+                               "正文或素材已改变，请重新检查。", 409, True)
+            tx.exec("UPDATE claim_links SET user_status=?,updated_at=? WHERE id=?",
+                    (status, now(), link_id))
+        return {"claim_link_id": link_id, "user_status": status,
+                "relation": link["relation"]}
+
+    def confirm_claim_link(self, link_id: str) -> dict:
+        return self._update_claim_status(link_id, "confirmed")
+
+    def dismiss_claim_link(self, link_id: str) -> dict:
+        return self._update_claim_status(link_id, "dismissed")
+
     @staticmethod
     def _invalidate_revision_context(tx, draft_id: str, *, preserve: bool) -> None:
         ts = now()
@@ -1390,6 +1634,10 @@ class Service:
         self._check_revision(draft, payload.get("expected_revision"))
         revision_item = None
         revision_item_id = payload.get("revision_item_id")
+        claim_link = None
+        claim_link_id = payload.get("claim_link_id")
+        if revision_item_id and claim_link_id:
+            raise ApiError("VALIDATION", "一次修改只能关联一个检查项。")
         if revision_item_id:
             revision_item = self.db.q1(
                 "SELECT * FROM revision_items WHERE id=? AND draft_id=?",
@@ -1407,8 +1655,33 @@ class Service:
                     (revision_item["review_id"],)):
                 raise ApiError("PATCH_ALREADY_PROPOSED",
                                "Resolve the current proposal before starting another work item.", 409)
+        if claim_link_id:
+            claim_link = self.db.q1(
+                "SELECT * FROM claim_links WHERE id=? AND draft_id=?",
+                (claim_link_id, draft["id"]))
+            if not claim_link:
+                raise ApiError("NOT_FOUND", "依据卡不存在。", 404)
+            check = self.db.q1("SELECT * FROM claim_checks WHERE id=?",
+                               (claim_link["check_id"],))
+            if (not check or check["task_id"] != tid
+                    or self._evidence_is_stale(check, task, draft)):
+                raise ApiError("STALE_EVIDENCE_CHECK",
+                               "正文或素材已改变，请重新检查。", 409, True)
+            if claim_link["user_status"] == "dismissed":
+                raise ApiError("CLAIM_LINK_DISMISSED", "这一依据卡已被忽略。", 409)
+            if claim_link.get("patch_id"):
+                linked_patch = self.db.q1(
+                    "SELECT status FROM proposed_patches WHERE id=?",
+                    (claim_link["patch_id"],))
+                if linked_patch and linked_patch["status"] == "proposed":
+                    raise ApiError("PATCH_ALREADY_PROPOSED",
+                                   "请先处理这张依据卡的当前提案。", 409)
+            if (ps, pe) != (claim_link["paragraph_start"],
+                            claim_link["paragraph_end"]):
+                raise ApiError("INVALID_SELECTION", "请使用依据卡定位的正文段落。")
         instruction = (payload.get("instruction")
-                       or (revision_item or {}).get("goal") or "").strip()
+                       or (revision_item or {}).get("goal")
+                       or (claim_link or {}).get("revision_goal") or "").strip()
         if not instruction:
             raise ApiError("VALIDATION", "Tell me how to revise the passage.")
         if payload.get("review_id"):
@@ -1428,6 +1701,13 @@ class Service:
                 or revision_item["quote"] != before_text):
             raise ApiError("STALE_REVISION_ITEM",
                            "The anchored passage changed; run review again.", 409, True)
+        if claim_link and (
+                claim_link["draft_char_start"] < char_start
+                or claim_link["draft_char_end"] > char_end
+                or content[claim_link["draft_char_start"]:
+                           claim_link["draft_char_end"]] != claim_link["draft_quote"]):
+            raise ApiError("STALE_EVIDENCE_CHECK",
+                           "依据卡定位的正文已经改变，请重新检查。", 409, True)
         locks = payload.get("locks") or task["config"].get("locks") or {}
         CURRENT.get().bind_inputs({
             "content_hash": hashlib.sha256(content.encode()).hexdigest(),
@@ -1479,20 +1759,37 @@ class Service:
                          "AND status='proposed' LIMIT 1", (live["review_id"],)):
                     raise ApiError("PATCH_ALREADY_PROPOSED",
                                    "Resolve the current proposal before starting another work item.", 409)
+            if claim_link_id:
+                live_link = tx.q1("SELECT * FROM claim_links WHERE id=?", (claim_link_id,))
+                live_check = tx.q1("SELECT * FROM claim_checks WHERE id=?",
+                                   ((live_link or {}).get("check_id", ""),))
+                if (not live_link or not live_check
+                        or live_link["user_status"] == "dismissed"
+                        or live_link.get("patch_id")
+                        or live_check["draft_revision"] != draft["revision"]
+                        or live_check["content_hash"] != digest
+                        or json.loads(live_check["sources_json"])
+                           != self._source_snapshot(self.get_task(tid))):
+                    raise ApiError("STALE_EVIDENCE_CHECK",
+                                   "依据卡已经改变，请重新载入。", 409, True)
             tx.exec(
                 "INSERT INTO proposed_patches(id,draft_id,base_version_id,selection_json,instruction,"
                 "before_text,after_text,status,locks_json,error,created_at,base_revision,"
-                "task_locks_json,revision_item_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "task_locks_json,revision_item_id,claim_link_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (pid, draft["id"], draft["current_version_id"], selection_json,
                  instruction, before_text, after_text, "proposed",
                  json.dumps(locks, ensure_ascii=False), None, ts, draft["revision"],
                  json.dumps(task["config"].get("locks") or {}, ensure_ascii=False),
-                 revision_item_id))
+                 revision_item_id, claim_link_id))
             if revision_item_id:
                 tx.exec("UPDATE revision_items SET status='proposed',patch_id=?,updated_at=? "
                         "WHERE id=?", (pid, ts, revision_item_id))
+            if claim_link_id:
+                tx.exec("UPDATE claim_links SET patch_id=?,updated_at=? WHERE id=?",
+                        (pid, ts, claim_link_id))
         return {"patch_id": pid, "before": before_text, "after": after_text,
-                "status": "proposed", "revision_item_id": revision_item_id}
+                "status": "proposed", "revision_item_id": revision_item_id,
+                "claim_link_id": claim_link_id}
 
     @staticmethod
     def _check_revision(draft: dict, expected) -> None:
@@ -1546,10 +1843,25 @@ class Service:
                         or item["patch_id"] != patch_id):
                     raise ApiError("STALE_REVISION_ITEM",
                                    "This work item is no longer current.", 409, True)
+            claim_link = None
+            if patch.get("claim_link_id"):
+                claim_link = tx.q1("SELECT * FROM claim_links WHERE id=?",
+                                   (patch["claim_link_id"],))
+                check = tx.q1("SELECT * FROM claim_checks WHERE id=?",
+                              ((claim_link or {}).get("check_id", ""),))
+                if (not claim_link or claim_link.get("patch_id") != patch_id
+                        or not check):
+                    raise ApiError("STALE_EVIDENCE_CHECK",
+                                   "这张依据卡不再关联当前提案。", 409, True)
             draft = tx.q1("SELECT * FROM drafts WHERE id=?", (patch["draft_id"],))
             if draft["current_version_id"] != patch["base_version_id"]:
                 raise ApiError("STALE_BASE", "正文版本已改变，请重新提出修改。", 409, True)
             self._check_revision(draft, patch["base_revision"])
+            if claim_link:
+                task = self.get_task(check["task_id"])
+                if self._evidence_is_stale(check, task, draft):
+                    raise ApiError("STALE_EVIDENCE_CHECK",
+                                   "正文或素材已改变，请重新检查。", 409, True)
             config = tx.q1("SELECT locks_json FROM writing_configs WHERE task_id=?", (draft["task_id"],))
             if json.loads(patch["task_locks_json"] or "null") != json.loads(config["locks_json"] or "{}"):
                 raise ApiError("LOCK_CONFLICT", "保护项已改变，请按当前保护项重新提出修改。", 409, True)
@@ -1600,6 +1912,10 @@ class Service:
                 tx.exec("UPDATE revision_items SET status='open',patch_id=NULL,updated_at=? "
                         "WHERE id=? AND status='proposed' AND patch_id=?",
                         (now(), patch["revision_item_id"], patch_id))
+            if patch.get("claim_link_id"):
+                tx.exec("UPDATE claim_links SET patch_id=NULL,updated_at=? "
+                        "WHERE id=? AND patch_id=?",
+                        (now(), patch["claim_link_id"], patch_id))
         return {"patch_id": patch_id, "status": "rejected"}
 
     # ---------------------------------------------------------- versions ----

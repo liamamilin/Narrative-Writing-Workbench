@@ -1019,7 +1019,7 @@ async function settings() {
 const WS = {
   tid: null, task: null, draft: null, versions: [], sel: new Set(),
   selAnchor: null,
-  panelTab: "goal", view: "draft", review: null, map: null,
+  panelTab: "goal", view: "draft", review: null, evidence: null, map: null,
   proposals: [], preserved: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
 };
 
@@ -1027,7 +1027,7 @@ async function workspace(tid) {
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
   WS.tid = tid; WS.sel.clear(); WS.selAnchor = null;
-  WS.proposals = []; WS.preserved = []; WS.review = null; WS.map = null;
+  WS.proposals = []; WS.preserved = []; WS.review = null; WS.evidence = null; WS.map = null;
   await reloadTask();
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.task.operation?.status === "running" && !GENERATING) {
@@ -1062,6 +1062,7 @@ async function reloadTask() {
   WS.task = await api("GET", `/tasks/${WS.tid}`);
   WS.draft = WS.task.draft;
   WS.review = WS.task.review;
+  WS.evidence = WS.task.evidence_check;
   WS.dirty = false;
   WS.editRevision = 0;
   WS.versions = WS.draft ? WS.task.draft.versions : [];
@@ -1160,7 +1161,7 @@ function renderWorkspace() {
 
 function renderSources() {
   $("#sources").innerHTML = WS.task.sources.map(s => `
-    <div class="srcitem"><b class="small">${esc(s.title)}</b>
+    <div class="srcitem" data-source-id="${esc(s.id)}"><b class="small">${esc(s.title)}</b>
     <span class="muted small"> · ${esc(s.role)}</span>
     <div class="body">${esc(s.content)}</div></div>`).join("")
      || '<p class="muted small">还没有素材。</p>';
@@ -1281,6 +1282,7 @@ function captureEditorContent() {
   if (content === WS.draft.working_content) return false;
   WS.draft.working_content = content;
   if (WS.review) WS.review.stale = true;
+  if (WS.evidence) WS.evidence.stale = true;
   WS.preserved.forEach(s => { if (s.status === "active") s.status = "stale"; });
   WS.dirty = true;
   WS.editRevision += 1;
@@ -1367,7 +1369,7 @@ async function preserveSelection() {
   } catch (e) { toast(e.message || "无法保留所选原文。", true); }
 }
 
-async function proposePatch(instruction, reviewId = null, revisionItemId = null) {
+async function proposePatch(instruction, reviewId = null, revisionItemId = null, claimLinkId = null) {
   if (!instruction) { toast("请写下修改要求。", true); return; }
   try { await flushAutosave({ checkpoint: false }); }
   catch (_) { return; }
@@ -1382,6 +1384,7 @@ async function proposePatch(instruction, reviewId = null, revisionItemId = null)
       base_version_id: WS.draft.current_version_id,
       expected_revision: WS.draft.revision, review_id: reviewId,
       revision_item_id: revisionItemId,
+      claim_link_id: claimLinkId,
       selection: selRange(), instruction, locks,
     });
     p.instruction = instruction;
@@ -1401,7 +1404,7 @@ function proposalCard(p) {
     <div class="row">
        <button class="primary act-accept" data-tip="只替换选中段落，并存为一个新版本">接受并应用</button>
        <button class="act-reject" data-tip="正文原样保留">拒绝</button>
-       ${p.revision_item_id ? "" : '<button class="act-retry" data-tip="同一范围再提一版">再试一版</button>'}</div></div>`;
+       ${p.revision_item_id || p.claim_link_id ? "" : '<button class="act-retry" data-tip="同一范围再提一版">再试一版</button>'}</div></div>`;
 }
 
 document.addEventListener("click", async e => {
@@ -1443,6 +1446,12 @@ document.addEventListener("click", async e => {
 });
 
 /* panel */
+function evidenceApplicable() {
+  return WS.task.input_mode === "source_grounded"
+    && ["narrative_analysis", "character_analysis", "essay"].includes(WS.task.type)
+    && WS.task.sources.some(source => source.content.trim());
+}
+
 function renderPanel() {
   const box = $("#panel"); const t = WS.task; const c = t.config;
   if (WS.panelTab === "goal") box.innerHTML = `
@@ -1482,7 +1491,8 @@ function renderPanel() {
       </p>` : ""}
      <p><button id="p-check" style="width:100%" ${WS.draft ? "" : "disabled"} data-tip="把现在的正文存为手动版本，随时可回">保存版本节点</button></p>`;
   if (WS.panelTab === "review") box.innerHTML = `
-     <p><button id="r-run" style="width:100%" ${WS.draft ? "" : "disabled"} data-tip="检查当前稿，问题卡片可定位或发起修改">检查当前稿</button></p>
+     <div class="review-actions"><button id="r-run" ${WS.draft ? "" : "disabled"} data-tip="检查表达与推进，问题卡片可定位或发起修改">检查写作问题</button>
+     ${evidenceApplicable() ? `<button id="e-run" ${WS.draft ? "" : "disabled"} data-tip="只依据此任务已添加的材料，核查关键陈述">检查材料依据</button>` : ""}</div>
     ${WS.preserved.some(s => s.status === "active") ? `<div class="preserved-list">
       <b class="small">保留原文</b>
       ${WS.preserved.filter(s => s.status === "active").map(s => `<div class="kept-row small">
@@ -1490,7 +1500,11 @@ function renderPanel() {
         <button class="small" data-unkeep="${s.id}" data-tip="取消后，新的局部修改可以改动这段文字">取消保留</button>
       </div>`).join("")}</div>` : ""}
     <div id="review-out">${WS.review ? reviewView(WS.review) :
-       '<p class="muted small">检查会指出可能没有起效的段落；修不修、怎么修，由你决定。</p>'}</div>`;
+       '<p class="muted small">写作检查会指出可能没有起效的段落；修不修、怎么修，由你决定。</p>'}</div>
+    ${evidenceApplicable() ? `<div class="evidence-section"><b class="small">材料依据</b>
+      <p class="muted small">只对照你已添加的素材；“确认”表示你看过关联，不表示外部事实认证。</p>
+      <div id="evidence-out">${WS.evidence ? evidenceView(WS.evidence) :
+        '<p class="muted small">尚未检查材料依据。</p>'}</div></div>` : ""}`;
   if (WS.panelTab === "locks") box.innerHTML = `
      <p class="muted small">保护项约束每次修改。无法遵守时，工作台会拒绝提案，而不是静默改写。</p>
      ${[["facts", "事实", "不改变素材中的事实。"],
@@ -1524,7 +1538,10 @@ function renderPanel() {
       $("#" + id).onchange = () => saveGoalPanel().catch(() => {});
     $("#p-suggest").onclick = suggestIntent;
   }
-  if (WS.panelTab === "review") $("#r-run").onclick = runReview;
+  if (WS.panelTab === "review") {
+    $("#r-run").onclick = runReview;
+    if ($("#e-run")) $("#e-run").onclick = runEvidenceCheck;
+  }
   if (WS.panelTab === "locks") {
     box.querySelectorAll("[data-lock]").forEach(cb => cb.onchange = async () => {
       const locks = { ...WS.task.config.locks };
@@ -1620,6 +1637,7 @@ const STEP_LABELS = {
   structure: ["设计读者理解推进", ""],
   writing: ["撰写正文", ""],
   review: ["检查中", ""],
+  evidence_check: ["核查材料依据", ""],
 };
 
 function genBanner(on, stg, stgZh) {
@@ -2048,6 +2066,54 @@ function reviewView(r) {
       : '<p class="muted small">没有发现需要特别留意的问题。</p>');
 }
 
+async function runEvidenceCheck() {
+  if (GENERATING) { toast("正在生成，请稍候。", true); return; }
+  if (!WS.draft) { toast("请先准备正文。", true); return; }
+  const tid = WS.tid;
+  try { await flushAutosave({ checkpoint: false }); }
+  catch (_) { return; }
+  const btn = $("#e-run");
+  if (btn) { btn.disabled = true; btn.textContent = "核查中…"; }
+  genBanner(true);
+  const prog = openProgress(tid, renderBanner);
+  try {
+    const result = await api("POST", `/tasks/${tid}/check-evidence`);
+    if (WS.tid === tid) WS.evidence = result;
+  } catch (e) {
+    if (WS.tid === tid) toast(e.message, true);
+  } finally {
+    prog.close();
+    if (WS.tid === tid) { genBanner(false); renderPanel(); }
+  }
+}
+
+function evidenceView(result) {
+  const relations = { supported:"材料支持", inference:"作者推断",
+    insufficient:"待补证据", conflict:"与材料冲突" };
+  const types = { fact:"事实陈述", author_inference:"作者推断", value_judgment:"价值判断" };
+  const statuses = { unreviewed:"待核查", confirmed:"已确认关联", dismissed:"本轮忽略" };
+  const stale = result.stale
+    ? '<p class="muted">正文或素材已改变；这些卡片已过期，请重新检查。</p>' : "";
+  if (!result.cards.length) return stale + '<p class="muted small">没有提取到可可靠定位的关键陈述。</p>';
+  return stale + result.cards.map(card => `
+    <div class="issue evidence-card ${esc(card.relation)}${result.stale ? " stale" : ""}">
+      <div class="row"><span class="label relation">${esc(relations[card.relation] || card.relation)}</span>
+        <span class="small muted">${esc(types[card.claim_type] || card.claim_type)} · ${esc(statuses[card.user_status] || card.user_status)}</span></div>
+      <blockquote class="issue-quote">${esc(card.draft_quote)}</blockquote>
+      <p class="small">${esc(card.explanation)}</p>
+      ${card.source_quote ? `<div class="source-evidence"><span class="small muted">素材 · ${esc(card.source_title || "未命名素材")}</span>
+        <blockquote class="issue-quote">${esc(card.source_quote)}</blockquote></div>` :
+        '<p class="small muted">没有可逐字定位的材料原句。</p>'}
+      <p class="small">处理目标：${esc(card.revision_goal)}</p>
+      <p class="loc">¶${card.location.paragraph_start}${card.location.paragraph_end !== card.location.paragraph_start ? "–" + card.location.paragraph_end : ""}</p>
+      <div class="row"><button class="small" data-claim-show="${card.id}">定位正文</button>
+        ${card.source_id ? `<button class="small" data-claim-source="${card.id}">查看素材</button>` : ""}
+        ${card.actionable ? `<button class="small" data-claim-confirm="${card.id}">确认关联</button>
+          <button class="small" data-claim-fix="${card.id}" ${card.patch_id ? "disabled" : ""}>处理</button>
+          <button class="small" data-claim-dismiss="${card.id}">忽略</button>` : ""}</div>
+    </div>`).join("");
+}
+
 document.addEventListener("click", async e => {
   const show = e.target.closest("[data-show]");
   const fix = e.target.closest("[data-fix]");
@@ -2074,6 +2140,40 @@ document.addEventListener("click", async e => {
   if (el) { el.classList.add("hl"); el.scrollIntoView({ behavior: "smooth", block: "center" });
     setTimeout(() => el.classList.remove("hl"), 2600); }
   if (fix) proposePatch(is.goal, WS.review.id, is.revision_item_id);
+});
+
+document.addEventListener("click", async e => {
+  const target = e.target.closest("[data-claim-show],[data-claim-source],[data-claim-confirm],[data-claim-fix],[data-claim-dismiss]");
+  if (!target || !WS.evidence) return;
+  const id = target.dataset.claimShow || target.dataset.claimSource
+    || target.dataset.claimConfirm || target.dataset.claimFix || target.dataset.claimDismiss;
+  const card = WS.evidence.cards.find(item => item.id === id);
+  if (!card) return;
+  if (target.dataset.claimSource) {
+    const source = document.querySelector(`.srcitem[data-source-id="${CSS.escape(card.source_id)}"]`);
+    if (source) { source.classList.add("hl"); source.scrollIntoView({ behavior:"smooth", block:"center" });
+      setTimeout(() => source.classList.remove("hl"), 2600); }
+    return;
+  }
+  if (target.dataset.claimConfirm || target.dataset.claimDismiss) {
+    try {
+      await api("POST", `/claim-links/${id}/${target.dataset.claimConfirm ? "confirm" : "dismiss"}`);
+      await reloadTask(); renderWorkspace();
+      toast(target.dataset.claimConfirm ? "已记录：你确认了这条材料关联。" : "已在本轮忽略，正文未改变。");
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
+  try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
+  if (!WS.evidence || WS.evidence.stale) { toast("正文或素材已改变，请重新检查。", true); return; }
+  WS.view = "draft"; renderWorkspace();
+  const a = card.location.paragraph_start, b = card.location.paragraph_end;
+  WS.sel.clear(); WS.selAnchor = a;
+  for (let n = a; n <= b; n++) WS.sel.add(n);
+  renderCenter();
+  const para = $(`.para[data-p="${a}"]`);
+  if (para) { para.classList.add("hl"); para.scrollIntoView({ behavior:"smooth", block:"center" });
+    setTimeout(() => para.classList.remove("hl"), 2600); }
+  if (target.dataset.claimFix) proposePatch(card.revision_goal, null, null, card.id);
 });
 
 document.addEventListener("click", async e => {

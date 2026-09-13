@@ -262,16 +262,21 @@ def test_concurrent_linked_proposals_create_one_patch():
     assert len(db.q("SELECT * FROM proposed_patches")) == 1
 
 
-def test_v3_backup_is_accepted_and_upgrades_to_v4(tmp_path):
+def test_v3_backup_is_accepted_and_upgrades_to_current(tmp_path):
     path = tmp_path / "v3.sqlite3"
     db = Database(path)
     db.conn.close()
     with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX claim_checks_task")
+        conn.execute("DROP INDEX claim_links_check")
+        conn.execute("DROP TABLE claim_links")
+        conn.execute("DROP TABLE claim_checks")
         conn.execute("DROP INDEX revision_items_review")
         conn.execute("DROP INDEX preserved_spans_draft")
         conn.execute("DROP TABLE revision_items")
         conn.execute("DROP TABLE preserved_spans")
         conn.execute("ALTER TABLE proposed_patches DROP COLUMN revision_item_id")
+        conn.execute("ALTER TABLE proposed_patches DROP COLUMN claim_link_id")
         conn.execute("PRAGMA user_version=3")
     counts = backup._inspect_sqlite(path)
     snapshot = path.read_bytes()

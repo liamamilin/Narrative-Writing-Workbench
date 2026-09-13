@@ -1,0 +1,8 @@
+[
+  {"name":"direct_support","relation":"supported","draft":"2024 年访问量增长了 20%。","source":"2024 年访问量同比增长 20%。"},
+  {"name":"partial_support","relation":"inference","draft":"这证明所有用户都更满意。","source":"受访用户的完成率有所提高。"},
+  {"name":"contradiction","relation":"conflict","draft":"项目在六月上线。","source":"项目最终在七月上线。"},
+  {"name":"irrelevant","relation":"insufficient","draft":"成本下降了一半。","source":"团队在六月完成了界面改版。"},
+  {"name":"number_mismatch","relation":"insufficient","draft":"转化率提高 30%。","source":"转化率提高 13%。"},
+  {"name":"value_judgment","claim_type":"value_judgment","relation":"inference","draft":"这是团队最勇敢的决定。","source":"团队决定停止旧产品。"}
+]

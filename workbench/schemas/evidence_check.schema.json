@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claims"],
+  "properties": {
+    "claims": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "claim_type", "draft_quote", "paragraph_start", "paragraph_end", "relation", "explanation", "source_id", "source_quote", "revision_goal"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 80},
+          "claim_type": {"enum": ["fact", "author_inference", "value_judgment"]},
+          "draft_quote": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "paragraph_start": {"type": "integer", "minimum": 1},
+          "paragraph_end": {"type": "integer", "minimum": 1},
+          "relation": {"enum": ["supported", "inference", "insufficient", "conflict"]},
+          "explanation": {"type": "string", "minLength": 1, "maxLength": 1200},
+          "source_id": {"type": ["string", "null"], "maxLength": 120},
+          "source_quote": {"type": ["string", "null"], "maxLength": 3000},
+          "revision_goal": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      }
+    }
+  }
+}

@@ -25,8 +25,9 @@ from app.structured import structured_call
 from ..meaning_schema import (JUDGE_SCHEMA, MEANING_SCHEMA, judge_failed,
                               selected_angle, validate_judge, validate_meaning,
                               meaning_to_wir_block)
+from ..evidence_schema import SCHEMA as EVIDENCE_SCHEMA, validate_evidence
 from ..topic_schema import validate_topics
-from . import (DiscoveryFailed, GenerationFailed, GenerateResult,
+from . import (DiscoveryFailed, EvidenceCheckFailed, GenerationFailed, GenerateResult,
                LockConflict, map_beats_to_paragraphs, split_paragraphs)
 
 _TASK_TYPE_MAP = {
@@ -353,6 +354,33 @@ class RealWritingEngine:
             "issue_count": len(issues),
             "repair_used": bool(getattr(stage, "repair_used", False))})
         return {"summary": summary, "issues": issues}
+
+    def check_evidence(self, *, content, sources, on_delta=None) -> dict:
+        compact_sources = [{"id": item["id"], "title": item.get("title", ""),
+                            "content": item.get("content", "")}
+                           for item in sources]
+        user = (
+            f"## Current draft\n\n{content}\n\n"
+            "## User-supplied sources (JSON)\n\n"
+            f"```json\n{json.dumps(compact_sources, ensure_ascii=False)}\n```\n\n"
+            "## Required Output Schema (JSON Schema draft 2020-12)\n\n"
+            f"```json\n{json.dumps(EVIDENCE_SCHEMA, ensure_ascii=False)}\n```\n\n"
+            "Return JSON only."
+        )
+        try:
+            stage = structured_call(
+                self.client, role="evidence_check",
+                role_cfg=self.config.role("critic"),
+                system_prompt=_load_prompt(self.config.prompts_dir, "evidence_check"),
+                user_message=user, validator=validate_evidence,
+                on_delta=on_delta)
+        except StructuredOutputError as exc:
+            raise EvidenceCheckFailed(
+                "材料依据检查未能产生可靠结果，请重试。") from exc
+        _operation_record("evidence_check", data={
+            "claim_count": len(stage.data.get("claims") or []),
+            "repair_used": bool(getattr(stage, "repair_used", False))})
+        return stage.data
 
     # --------------------------------------------------------------- patch ----
 

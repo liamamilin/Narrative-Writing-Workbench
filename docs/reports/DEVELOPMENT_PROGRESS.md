@@ -165,3 +165,14 @@
 - 目标任务渲染同步修复提交 `debc4d0` 推送后，GitHub Actions push #33 与 PR #34 均完成并通过，Linux/Chromium 回归闭环。
 - 只含通过记录的提交 `c44e910` 触发 push #35 / PR #36，两个 job 都在启动前因 GitHub runner 连续 5 次无法获取而失败，未执行仓库代码或测试。
 - F03 专项 10 passed；全量 338 passed / 30.32 秒；纯源码副本 338 passed / 30.11 秒；Python/JavaScript 语法检查通过。真实模型诊断优先级、修订目标质量和真实修稿耗时尚需实际试用数据。
+
+### 2026-09-13 — F04 论点与素材依据卡
+
+- 新建 Product V0.5 增量规格和实施评审，限定为用户已提供材料的 source-grounded 分析/观点写作；不联网，不把模型判断或用户确认包装成事实认证。
+- 产品 adapter 新增有界 `check_evidence()`；Real 使用外置 prompt 和 JSON Schema，Mock 保持同形。正文、Source 数量、材料总量和卡片数量均有明确上限，超限返回可操作错误。
+- 数据库升至 schema v5，新增 `claim_checks`、`claim_links` 和 Patch 的 `claim_link_id`。严格备份预检支持 v3/v4/v5，并检查依据卡到 task/draft/source/operation/patch 的关系。
+- 服务端逐字核验正文和 Source 引文及唯一位置；错误 Source 或虚假材料引文不能显示“材料支持/冲突”，而是降为证据不足。正文无法精确定位的结果不创建可操作卡。
+- Source 集合与内容 hash、Draft revision/hash 组成检查快照；正文或素材变化后旧检查动态过期，确认、忽略、提案和接受均会重新校验。
+- 右侧检查页新增正文—依据卡—素材定位、独立用户确认/忽略和局部处理；提案复用 F03 的 Before/After、Accept/Reject 与 Version 安全。
+- F04/F03/备份/运行事务专项 42 passed；全量 349 passed / 31.34 秒，纯源码副本 349 passed / 33.15 秒；Chrome B01–B15 全部通过且无未处理页面异常。
+- 工程验收不能证明真实模型的支持关系判断质量。F04-7 的错误支持、遗漏和用户核查耗时仍待真实样本评估。

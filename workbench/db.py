@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "workbench" / "workbench.db"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects(
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS proposed_patches(
     CHECK(status IN ('proposed','accepted','rejected')),
   locks_json TEXT DEFAULT '{}', error TEXT, created_at TEXT NOT NULL,
   base_revision INTEGER, accepted_version_id TEXT, task_locks_json TEXT,
-  revision_item_id TEXT);
+  revision_item_id TEXT, claim_link_id TEXT);
 CREATE TABLE IF NOT EXISTS reviews(
   id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, version_id TEXT NOT NULL,
   summary_json TEXT NOT NULL, issues_json TEXT NOT NULL,
@@ -94,6 +94,26 @@ CREATE TABLE IF NOT EXISTS preserved_spans(
   char_end INTEGER NOT NULL, quote TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stale')),
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS claim_checks(
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  operation_id TEXT, draft_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, sources_json TEXT NOT NULL,
+  created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS claim_links(
+  id TEXT PRIMARY KEY, check_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  claim_id TEXT NOT NULL, claim_type TEXT NOT NULL
+    CHECK(claim_type IN ('fact','author_inference','value_judgment')),
+  relation TEXT NOT NULL
+    CHECK(relation IN ('supported','inference','insufficient','conflict')),
+  explanation TEXT NOT NULL DEFAULT '', revision_goal TEXT NOT NULL,
+  paragraph_start INTEGER NOT NULL, paragraph_end INTEGER NOT NULL,
+  draft_char_start INTEGER NOT NULL, draft_char_end INTEGER NOT NULL,
+  draft_quote TEXT NOT NULL, source_id TEXT, source_content_hash TEXT,
+  source_char_start INTEGER, source_char_end INTEGER, source_quote TEXT,
+  user_status TEXT NOT NULL DEFAULT 'unreviewed'
+    CHECK(user_status IN ('unreviewed','confirmed','dismissed')),
+  patch_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(check_id, claim_id));
 CREATE TABLE IF NOT EXISTS writing_operations(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
   process_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','interrupted')),
@@ -112,6 +132,8 @@ CREATE TABLE IF NOT EXISTS operation_records(
 CREATE INDEX IF NOT EXISTS operation_records_operation ON operation_records(operation_id);
 CREATE INDEX IF NOT EXISTS revision_items_review ON revision_items(review_id);
 CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id);
+CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id);
+CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id);
 CREATE TABLE IF NOT EXISTS generation_results(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, engine_plan_id TEXT,
   content TEXT NOT NULL, accepted_version_id TEXT, created_at TEXT NOT NULL);
@@ -155,7 +177,7 @@ class Database:
                 raise RuntimeError("Database schema is newer than this Workbench; use a compatible version.")
             if version < SCHEMA_VERSION and self.path != ":memory:" and self.conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
-                self.migration_backup = f"{self.path}.pre-v4-{new_id('backup')}.sqlite3"
+                self.migration_backup = f"{self.path}.pre-v5-{new_id('backup')}.sqlite3"
                 with sqlite3.connect(self.migration_backup) as backup:
                     self.conn.backup(backup)
             try:
@@ -202,7 +224,8 @@ class Database:
             "proposed_patches": [("base_revision", "INTEGER"),
                                  ("accepted_version_id", "TEXT"),
                                  ("task_locks_json", "TEXT"),
-                                 ("revision_item_id", "TEXT")],
+                                 ("revision_item_id", "TEXT"),
+                                 ("claim_link_id", "TEXT")],
             "reviews": [("content_hash", "TEXT"), ("draft_revision", "INTEGER"),
                         ("config_json", "TEXT"), ("operation_id", "TEXT")],
         }
@@ -230,6 +253,8 @@ class Database:
         self.conn.execute("CREATE INDEX IF NOT EXISTS versions_plan ON versions(engine_plan_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS revision_items_review ON revision_items(review_id)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS claim_checks_task ON claim_checks(task_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS claim_links_check ON claim_links(check_id)")
         self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     # -- tiny helpers ----------------------------------------------------

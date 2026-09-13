@@ -13,13 +13,13 @@
 | [项目现状与检查结果](../reports/PROJECT_STATUS_AND_NEXT_STEPS_2026_09_13.md) | 已有什么能力，有哪些已复现问题，还有哪些证据缺口？ | 已完成本地检查 |
 | [现有产品详细开发计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md) | 先修什么，怎样实现、测试、迁移和验收？ | 开发中，核心修复已落地 |
 | [产品演进方向与功能路线图](PRODUCT_EVOLUTION_ROADMAP.md) | 产品应往哪里发展，哪些新功能值得先做？ | 提案 |
-| [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md) | 每项候选功能怎样拆成可交付工作？ | F01 已完成，F02 为下一候选 |
+| [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md) | 每项候选功能怎样拆成可交付工作？ | F01–F04 工程实现已完成，真实使用评估继续收集 |
 
-[本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.2 导出规格](../narrative-writing-product-v0.2-export-backup-spec/README.md) · [文本导出报告](../reports/PRODUCT_V0_2_EXPORT_IMPLEMENTATION_REPORT.md) · [备份恢复报告](../reports/PRODUCT_V0_2_BACKUP_RESTORE_IMPLEMENTATION_REPORT.md)
+[本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.5 依据卡规格](../narrative-writing-product-v0.5-evidence-cards-spec/README.md) · [F04 实施报告](../reports/PRODUCT_V0_5_EVIDENCE_CARDS_IMPLEMENTATION_REPORT.md)
 
 ## 当前建议
 
-F01 “本地导出与备份”、F02 “写前确认卡”和 F03 “修订工作单与保留片段”已完成。下一候选是 F04 “论点与素材依据”；F05 “读者路径检查”也已具备复用 F03 锚定与过期机制的技术前提。
+F01 “本地导出与备份”、F02 “写前确认卡”、F03 “修订工作单与保留片段”和 F04 “论点与素材依据卡”的工程实现已完成。下一候选是 F05 “读者路径检查”；它可复用 F03 的锚定/修订机制和 F04 的结构化检查/来源展示，但应先用离线样例验证是否比现有 Review 提供更多有效信息。
 
 | 阶段 | 任务编号 | 退出条件 |
 |---|---|---|

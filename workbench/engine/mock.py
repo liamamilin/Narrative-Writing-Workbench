@@ -399,6 +399,25 @@ class MockWritingEngine:
             "issues": issues,
         }
 
+    def check_evidence(self, *, content, sources, on_delta=None) -> dict:
+        if on_delta:
+            on_delta('{"claims": […]}  # mock evidence check')
+        paras = split_paragraphs(content)
+        if not paras:
+            return {"claims": []}
+        source = next((item for item in sources if item.get("content", "").strip()), None)
+        source_quote = (source["content"].split("\n\n")[0].strip()
+                        if source else None)
+        return {"claims": [{
+            "id": "claim_1", "claim_type": "author_inference",
+            "draft_quote": paras[0], "paragraph_start": 1, "paragraph_end": 1,
+            "relation": "inference",
+            "explanation": "The draft goes beyond the supplied passage; review the inference explicitly.",
+            "source_id": source["id"] if source else None,
+            "source_quote": source_quote,
+            "revision_goal": "Make this an explicit inference and retain the source's limits.",
+        }]}
+
     def patch(self, *, content, before_text, instruction, locks, config) -> str:
         if locks.get("facts") and "invent" in instruction.lower():
             raise LockConflict("This revision would alter source facts.")

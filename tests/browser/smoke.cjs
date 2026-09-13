@@ -397,6 +397,33 @@ async function main() {
       assert.match(after.working_content, new RegExp(exact));
       await page.screenshot({path:path.join(output,'revision-worklist.png'),fullPage:true});
     });
+    await check('B15 evidence cards, source lookup and safe patch', async()=>{
+      const created=await api('POST','/tasks',{
+        input_mode:'source_grounded',type:'essay',title:'材料依据测试',
+        instruction:'根据材料解释访问量变化。',
+        material:'报告显示，2024 年访问量同比增长 20%，统计范围仅含已登录用户。'
+      });
+      await api('POST',`/tasks/${created.id}/generate`,{});
+      await go(`/tasks/${created.id}`); await editor().waitFor();
+      await page.locator('[data-t=review]').click();
+      await page.locator('#e-run').click();
+      await page.locator('.evidence-card').waitFor();
+      assert.match(await page.locator('#evidence-out').innerText(),/作者推断/);
+      assert.match(await page.locator('#evidence-out').innerText(),/不表示外部事实认证|材料/);
+      await page.locator('[data-claim-source]').click();
+      await page.locator('.srcitem.hl').waitFor();
+      await page.locator('[data-claim-confirm]').click();
+      await until(async()=>/已确认关联/.test(await page.locator('#evidence-out').innerText()),'claim confirmation');
+      const before=(await api('GET',`/tasks/${created.id}`)).draft;
+      await page.locator('[data-claim-fix]').click();
+      await page.locator('.patch-card').waitFor();
+      assert.equal((await api('GET',`/tasks/${created.id}`)).draft.working_content,before.working_content);
+      await page.locator('.act-accept').click();
+      await until(async()=>/已过期/.test(await page.locator('#evidence-out').innerText()),'evidence stales after accepted patch');
+      const after=(await api('GET',`/tasks/${created.id}`)).draft;
+      assert.equal(after.versions.length,before.versions.length+1);
+      await page.screenshot({path:path.join(output,'evidence-cards.png'),fullPage:true});
+    });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({environment,results,pageErrors},null,2));

@@ -72,6 +72,8 @@ cp workbench/settings.example.json workbench/settings.json
 Draft → 点选段落 → Revise/Shorter… → Generate Patch → Before/After →
 Accept(生成版本)→ Versions → Restore。工作台可把最新保存稿导出为 Markdown/纯文本，版本页也可下载任意历史版本。
 检查面板会把问题整理为最多三项优先修订工作单；可定位、处理或跳过，也可先把已满意段落标为“保留原文”。
+
+有材料的观点与分析任务还可运行“检查材料依据”：关键陈述卡会并列展示正文原句、材料关系和可回查的 Source 原句。关系与用户确认状态分开保存；正文或素材变化后旧检查会过期，从卡片发起的修改仍须经过 Before/After 和人工接受。
 设置页的“本地数据”可下载全工作区备份，上传预检后恢复到独立目录；备份不包含模型设置或 API 密钥。
 
 硬规则:**AI proposes, user accepts** —— 补丁在 Accept 前绝不改动草稿;

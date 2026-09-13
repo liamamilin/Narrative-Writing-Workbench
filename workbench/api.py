@@ -197,6 +197,22 @@ def create_app(service: Service | None = None) -> FastAPI:
     def review(task_id: str):
         return svc().review(task_id)
 
+    @app.post("/tasks/{task_id}/check-evidence")
+    def check_evidence(task_id: str):
+        return svc().check_evidence(task_id)
+
+    @app.get("/tasks/{task_id}/evidence-check")
+    def evidence_check(task_id: str):
+        return svc().evidence_check(task_id)
+
+    @app.post("/claim-links/{link_id}/confirm")
+    def confirm_claim_link(link_id: str):
+        return svc().confirm_claim_link(link_id)
+
+    @app.post("/claim-links/{link_id}/dismiss")
+    def dismiss_claim_link(link_id: str):
+        return svc().dismiss_claim_link(link_id)
+
     @app.get("/tasks/{task_id}/revision-worklist")
     def revision_worklist(task_id: str):
         return svc().revision_worklist(task_id)

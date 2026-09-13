@@ -131,6 +131,8 @@ Quick Write 保留“直接写”，新增可选“先定角度”。系统发�
 
 优先级：第二批，面向 source_grounded 非虚构。预计 5–8 人日。
 
+实施状态：已于 2026-09-13 完成 F04-1～F04-6；F04-7 的真实模型误报、漏报与核查时间待收集。规格与工程验收见 `docs/narrative-writing-product-v0.5-evidence-cards-spec/` 和 `docs/reports/PRODUCT_V0_5_EVIDENCE_CARDS_IMPLEMENTATION_REPORT.md`。
+
 ### MVP 用户流程
 
 当前稿件 → 检查材料依据 → 关键陈述卡 → 查看材料原句 → 确认关系/标记待补 → 补材料或发起局部修订。
