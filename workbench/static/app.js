@@ -788,6 +788,7 @@ async function settings() {
 /* =============================================================== workspace */
 const WS = {
   tid: null, task: null, draft: null, versions: [], sel: new Set(),
+  selAnchor: null,
   panelTab: "goal", view: "draft", review: null, map: null,
   proposals: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
 };
@@ -795,7 +796,8 @@ const WS = {
 async function workspace(tid) {
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
-  WS.tid = tid; WS.sel.clear(); WS.proposals = []; WS.review = null; WS.map = null;
+  WS.tid = tid; WS.sel.clear(); WS.selAnchor = null;
+  WS.proposals = []; WS.review = null; WS.map = null;
   await reloadTask();
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.task.operation?.status === "running" && !GENERATING) {
@@ -926,7 +928,7 @@ function renderCenter() {
   }
   if (WS.view === "map") { box.innerHTML = mapView(); wireMap(); return; }
   box.innerHTML = `
-    <div id="selbar">
+    <div id="selbar"${WS.sel.size ? ' class="show"' : ''}>
        <button data-i="revise" data-tip="对选中段落写自定义修改指令">修改</button>
        <button data-i="shorter" data-tip="压缩选中段落，保留要点">精简</button>
        <button data-i="less" data-tip="少说破，让画面自己说话">少些直白</button>
@@ -978,14 +980,21 @@ function wireEditor() {
   ed.addEventListener("click", e => {
     const p = e.target.closest(".para"); if (!p) return;
     const i = parseInt(p.dataset.p);
-    if (e.shiftKey && WS.sel.size) {
-      const a = Math.min(...WS.sel), b = Math.max(i, ...WS.sel);
+    const browserSelection = window.getSelection();
+    const range = browserSelection?.rangeCount && !browserSelection.isCollapsed
+      ? browserSelection.getRangeAt(0) : null;
+    const selectedByText = range ? [...ed.querySelectorAll(".para")]
+      .filter(x => { try { return range.intersectsNode(x); } catch (_) { return false; } })
+      .map(x => parseInt(x.dataset.p)) : [];
+    if ((e.shiftKey || e.metaKey || e.ctrlKey) && WS.selAnchor !== null) {
+      const a = Math.min(WS.selAnchor, i), b = Math.max(WS.selAnchor, i);
+      WS.sel.clear();
       for (let k = a; k <= b; k++) WS.sel.add(k);
-    } else if (e.metaKey || e.ctrlKey) {
-      WS.sel.has(i) ? WS.sel.delete(i) : WS.sel.add(i);
+    } else if (selectedByText.length) {
+      WS.sel.clear(); selectedByText.forEach(k => WS.sel.add(k));
+      WS.selAnchor = selectedByText[0];
     } else {
-      const inside = window.getSelection().toString().length > 0;
-      if (!inside) { WS.sel.clear(); WS.sel.add(i); }
+      WS.sel.clear(); WS.sel.add(i); WS.selAnchor = i;
     }
     ed.querySelectorAll(".para").forEach(x =>
       x.classList.toggle("sel", WS.sel.has(parseInt(x.dataset.p))));
@@ -1744,6 +1753,7 @@ document.addEventListener("click", async e => {
   const is = WS.review.issues[parseInt((show || fix).dataset.show ?? (show || fix).dataset.fix)];
   WS.view = "draft"; renderWorkspace();
   const a = is.location.paragraph_start, b = is.location.paragraph_end;
+  WS.sel.clear(); WS.selAnchor = a;
   for (let k = a; k <= b; k++) WS.sel.add(k);
   renderCenter();
   const el = $(`.para[data-p="${a}"]`);
@@ -1771,6 +1781,7 @@ function wireMap() {
     if (!a) return;
     try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
     WS.view = "draft"; renderWorkspace();
+    WS.sel.clear(); WS.selAnchor = a;
     for (let k = a; k <= b; k++) WS.sel.add(k);
     renderCenter();
     const p = $(`.para[data-p="${a}"]`);
@@ -2016,7 +2027,7 @@ function guide() {
     <div class="card">
       <p><b>左 · Sources</b> 你的素材与笔记,可随时追加。</p>
       <p><b>中 · Draft</b> 正文,占最大空间。直接点击任意段落即可编辑,自动保存(Saving…/Saved);
-      单击段落=选中,Shift 单击=扩选多段,⌘/Ctrl 单击=加选/取消。</p>
+      单击段落=选中；拖选文字会映射到所在段落；Shift/⌘/Ctrl 单击会扩展为连续段落范围。</p>
       <p><b>右 · Writing Panel</b> 四个标签:
       <b>Goal</b>(改意图、调阅读体验、生成)、<b>Review</b>(检查)、
       <b>Locks</b>(锁)、<b>Settings</b>(任务信息)。</p></div>

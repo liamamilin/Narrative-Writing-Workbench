@@ -397,7 +397,8 @@ class Service:
                  "before": p["before_text"] or "", "after": p["after_text"] or "",
                  "selection": json.loads(p["selection_json"])}
                 for p in self.db.q(
-                    "SELECT * FROM proposed_patches WHERE draft_id=? AND status='proposed'",
+                    "SELECT * FROM proposed_patches WHERE draft_id=? AND status='proposed' "
+                    "ORDER BY created_at,rowid",
                     (draft["id"],))]
         task["operation"] = self._operation_view(tid)
         task["review"] = None

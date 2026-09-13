@@ -105,6 +105,7 @@ async function main() {
       assert.match(await page.locator('#review-out').innerText(), /本次检查已通过/);
       assert.doesNotMatch(await page.locator('#review-out').innerText(), /decision|wq|PASS/);
       await page.locator('[data-show]').first().click();
+      await page.locator('#selbar.show').waitFor();
       await page.locator('[data-fix]').first().click();
       await page.locator('.patch-card').waitFor();
       assert.equal((await api('GET', `/tasks/${imported}`)).draft.working_content,before);
@@ -127,6 +128,9 @@ async function main() {
       await go(`/tasks/${quick}`); await page.locator('#tab-map').click();
       await page.locator('.beat').first().waitFor();
       assert.match(await page.locator('#center-body').innerText(),/结构参考/);
+      await page.locator('.beat').first().click();
+      await page.locator('#selbar.show').waitFor();
+      assert.ok(await page.locator('#editor .para.sel').count());
     });
     await check('B06 two-tab conflict retains local input and reload path', async()=>{
       await go(`/tasks/${source}`); await editor().waitFor();
@@ -187,16 +191,57 @@ async function main() {
       assert.equal(await page.evaluate(()=>window.injected),undefined);
       await page.unroute('**/settings/models');
     });
-    await check('B09 synthetic composition events defer autosave', async()=>{
+    await check('B09 long paste, composition and contiguous paragraph selection', async()=>{
       await go(`/tasks/${source}`); await editor().waitFor();
+      const longText=('钟声穿过院子，老人把信封压在杯子下面。'.repeat(300)).slice(0,5200);
+      const priorParagraphs=(await api('GET', `/tasks/${source}`)).draft.working_content.split('\n\n');
+      const expectedPaste=[longText,...priorParagraphs.slice(1)].join('\n\n');
+      await context.grantPermissions(['clipboard-read','clipboard-write'], {origin:base});
+      await page.evaluate(text=>navigator.clipboard.writeText(text),longText);
+      await editor().click(); await page.keyboard.press('ControlOrMeta+A');
+      await page.keyboard.press('ControlOrMeta+V');
+      await until(async()=> (await api('GET', `/tasks/${source}`)).draft.working_content.length>=5000,'long paste autosave');
+      const pasted=(await api('GET', `/tasks/${source}`)).draft.working_content;
+      assert.equal(pasted,expectedPaste,
+        `long paste mismatch: expected ${expectedPaste.length}, got ${pasted.length}; head=${JSON.stringify(pasted.slice(0,30))}; tail=${JSON.stringify(pasted.slice(-30))}`);
+      await page.reload(); assert.equal(await editor().innerText(),longText);
       const before=(await api('GET', `/tasks/${source}`)).draft.working_content;
       await editor().dispatchEvent('compositionstart');
       await editor().fill('输入法组合中的中文段落。'); await delay(1400);
       assert.equal((await api('GET', `/tasks/${source}`)).draft.working_content,before);
       await editor().dispatchEvent('compositionend');
       await until(async()=> (await api('GET', `/tasks/${source}`)).draft.working_content.startsWith('输入法组合'), 'composition committed');
+
+      await go(`/tasks/${imported}`); await editor().waitFor();
+      await page.locator('.para[data-p="3"]').click();
+      await page.locator('.para[data-p="1"]').click({modifiers:['Shift']});
+      assert.deepEqual(await page.locator('#editor .para.sel').evaluateAll(
+        els=>els.map(x=>Number(x.dataset.p))),[1,2,3]);
+      await page.evaluate(()=>window.getSelection().removeAllRanges());
+      await page.evaluate(()=>{
+        const paras=[...document.querySelectorAll('#editor .para')];
+        const range=document.createRange();
+        range.setStart(paras[1].firstChild,1);
+        range.setEnd(paras[2].firstChild,Math.min(3,paras[2].firstChild.length));
+        const selection=window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        paras[2].dispatchEvent(new MouseEvent('click',{bubbles:true}));
+      });
+      assert.deepEqual(await page.locator('#editor .para.sel').evaluateAll(
+        els=>els.map(x=>Number(x.dataset.p))),[2,3]);
+      const importedBefore=(await api('GET', `/tasks/${imported}`)).draft.working_content;
+      const priorPatchCount=await page.locator('.patch-card').count();
+      await page.locator('#selbar [data-i=shorter]').click();
+      await until(async()=>await page.locator('.patch-card').count()===priorPatchCount+1,'cross-paragraph proposal');
+      const card=page.locator('.patch-card').last();
+      const patchId=await card.getAttribute('data-id');
+      const pending=(await api('GET', `/tasks/${imported}`)).pending_patches
+        .find(p=>p.patch_id===patchId);
+      assert.deepEqual({start:pending.selection.paragraph_start,end:pending.selection.paragraph_end},{start:2,end:3});
+      assert.equal((await api('GET', `/tasks/${imported}`)).draft.working_content,importedBefore);
+      await card.locator('.act-reject').click();
     });
     await check('B10 desktop layout and keyboard dialog', async()=>{
+      await go(`/tasks/${source}`); await editor().waitFor();
       await page.setViewportSize({width:1280,height:800});
       await page.screenshot({path:path.join(output,'workspace-1280.png'),fullPage:true});
       await page.locator('#p-gen').click(); await page.locator('dialog[open]').waitFor();
