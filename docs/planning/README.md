@@ -14,12 +14,13 @@
 | [现有产品详细开发计划](V0_1_STABILIZATION_DEVELOPMENT_PLAN.md) | 先修什么，怎样实现、测试、迁移和验收？ | 开发中，核心修复已落地 |
 | [产品演进方向与功能路线图](PRODUCT_EVOLUTION_ROADMAP.md) | 产品应往哪里发展，哪些新功能值得先做？ | 提案 |
 | [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md) | 每项候选功能怎样拆成可交付工作？ | F01–F05 工程实现已完成，真实使用评估继续收集 |
+| [下一阶段开发优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md) | 当前未完成工作按重要性和必要性怎样排序？ | 当前执行顺序 |
 
 [本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.6 读者路径规格](../narrative-writing-product-v0.6-reader-path-spec/README.md) · [F05 实施报告](../reports/PRODUCT_V0_6_READER_PATH_IMPLEMENTATION_REPORT.md)
 
 ## 当前建议
 
-F01 “本地导出与备份”、F02 “写前确认卡”、F03 “修订工作单与保留片段”、F04 “论点与素材依据卡”和 F05 “读者路径检查”的工程实现已完成。F05 已通过固定样例的契约门槛，但相对现有 Review 的真实模型收益仍待使用评估。若继续新增功能，下一候选是低风险的 F06 “本地选题箱”：先把已有浏览器选题迁入本地数据库，提供收藏、状态、搜索和任务关联。
+F01–F05 的工程实现已完成。当前先补 B09–B16 真实浏览器人工验收，并发出 F02–F05 的真实模型匿名评审；等待人工回收期间推进低风险的 F06 “本地选题箱”。F07 需要重写/两稿比较的使用信号，F08/F09 只在各自前置验证通过后开展阶段 A。
 
 | 阶段 | 任务编号 | 退出条件 |
 |---|---|---|
