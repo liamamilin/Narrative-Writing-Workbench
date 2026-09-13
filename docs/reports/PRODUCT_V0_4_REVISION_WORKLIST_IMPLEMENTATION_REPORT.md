@@ -33,6 +33,7 @@ Patch 接受会在同一 SQLite 事务中完成：
 - 浏览器回归额外发现并修复双击 Accept 后的异步路由覆盖竞态。
 - 远程 push #27 / PR #28 在慢速 Linux runner 的 B09 失败；Accept 后刷新原先只在 `reloadTask()` 前校验路由，现改为重载前后双重校验，并用可控延迟固定该竞态。push #29–#31 / PR #30–#32 的新 ID 集合差又证明 B09 仍在操作旧任务编辑器：SPA 导航只等待 hash，旧与新页都有 `#editor`。回归现等待与 URL 任务 ID 一致的 `data-task-id` 工作区渲染后才交互。
 - 修复提交 `debc4d0` 的 GitHub Actions push #33 和 PR #34 均通过，Linux/Chromium 回归闭环。
+- 后续只更新通过记录的 `c44e910` 触发 push #35 / PR #36；两个 job 均在启动前因 GitHub runner 连续 5 次无法获取而失败，没有执行仓库代码或测试。
 
 ## 尚需真实使用验证
 
