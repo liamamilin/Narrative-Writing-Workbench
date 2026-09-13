@@ -38,7 +38,7 @@
 - 三种入口各 4 个合成案例：12/12 完成 mock 演练，共导出 24 个 operation 的事件、阶段/调用记录、耗时和 usage。旧稿案例检查提案不自动应用、接受只改指定段落。人工评分为空；mock adapter 不经过提供方，24 个 usage 均明确为未知。
 - 固定 `gpt-oss:120b-cloud`、单次 120 秒和零重试的真实评估：12/12 案例完成，24/24 operation 与 40/40 模型调用成功；累计 151.71 秒。32 次非流式调用报告 83,923 input / 30,085 output tokens，8 次流式正文调用 usage 未返回。质量结论等待人工评分，详见 [真实模型评估报告](REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。
 - 迁移在临时旧库验证幂等、原稿回填、失败回滚、一致性备份恢复与 integrity_check；没有迁移或读取用户的 workbench.db。
-- 官方 npm 安装已验证：package-lock.json 校验通过，3 个测试依赖安装成功。GitHub Actions 已运行；首轮 Linux 检查暴露 B02 完成回调覆盖 B03 新路由的前端竞态，现已增加重载前后的路由校验，本地 298 项测试和浏览器 B01–B10 均通过，远端复验随修复提交执行。
+- 官方 npm 安装已验证：package-lock.json 校验通过，3 个测试依赖安装成功。GitHub Actions 首轮 Linux 检查暴露 B02 完成回调覆盖 B03 新路由的前端竞态；增加重载前后路由校验后，本地 298 项测试、浏览器 B01–B10、远端 push 与 PR 工作流均通过。
 
 本地详细证据（忽略入库）：`.scratch/browser-report/results.json`、两张桌面截图、`.scratch/product-evaluation-observability-20260913-1245/results.json`、`evaluation.db`、`HUMAN_REVIEW.md`。这些证据是合成测试结果，不能用于宣称真实写作质量提高。
 
