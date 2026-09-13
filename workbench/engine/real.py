@@ -52,6 +52,15 @@ _TASK_DESCRIPTIONS = {
 _MATERIAL_CAP = 8000
 
 
+def _operation_record(name: str, status: str = "completed",
+                      data: dict | None = None) -> None:
+    """Persist product-safe diagnostics when called inside a Workbench run."""
+    from ..operations import CURRENT
+    operation = CURRENT.get()
+    if operation:
+        operation.record("stage_result", name, status, data)
+
+
 def _extract_json(text: str) -> dict:
     for candidate in (text, text.strip()):
         try:
@@ -71,7 +80,7 @@ def _extract_json(text: str) -> dict:
 class RealWritingEngine:
     name = "real"
 
-    def __init__(self, config_path: str | None = None):
+    def __init__(self, config_path: str | None = None, *, max_retries: int = 3):
         if config_path is None:
             config_path = os.environ.get("WORKBENCH_CONFIG")
         if config_path is None:
@@ -80,7 +89,7 @@ class RealWritingEngine:
             config_path = str(live) if live.exists() else None
         self.config = Config.load(config_path) if config_path else Config.default()
         self._apply_settings()
-        self.client = build_client(self.config)
+        self.client = build_client(self.config, max_retries=max_retries)
         self.schemas = SchemaSet(self.config.schemas_dir)
         from app.architect import ArchitectAgent
         from app.critic import CriticAgent
@@ -118,10 +127,15 @@ class RealWritingEngine:
         if emit:
             emit("stage", {"stage": "discovery"})
         base_avoid = list(avoid or [])
-        data = self._discover_once(
-            topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
-            custom_angle=custom_angle, avoid=base_avoid, feedback=None,
-            on_delta=on_delta)
+        try:
+            data = self._discover_once(
+                topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
+                custom_angle=custom_angle, avoid=base_avoid, feedback=None,
+                on_delta=on_delta)
+        except BaseException:
+            _operation_record("meaning_attempt", "failed", {"attempt": 1})
+            raise
+        _operation_record("meaning_attempt", data={"attempt": 1})
         verdict = self._judge_meaning(topic, data, on_delta=on_delta)
         if not judge_failed(verdict):
             return data
@@ -130,10 +144,15 @@ class RealWritingEngine:
         label = selected_angle(data).get("label", "")
         retry_avoid = [a for a in base_avoid + [label] if a]
         feedback = verdict
-        data = self._discover_once(
-            topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
-            custom_angle=custom_angle, avoid=retry_avoid, feedback=feedback,
-            on_delta=on_delta)
+        try:
+            data = self._discover_once(
+                topic=topic, writing_mode=writing_mode, angle_mode=angle_mode,
+                custom_angle=custom_angle, avoid=retry_avoid, feedback=feedback,
+                on_delta=on_delta)
+        except BaseException:
+            _operation_record("meaning_attempt", "failed", {"attempt": 2})
+            raise
+        _operation_record("meaning_attempt", data={"attempt": 2})
         verdict = self._judge_meaning(topic, data, on_delta=on_delta)
         if judge_failed(verdict):
             hint = (verdict.get("hint") or verdict.get("weakest") or "").strip()
@@ -211,10 +230,15 @@ class RealWritingEngine:
                 role_cfg=self.config.role("architect"),
                 system_prompt=_load_prompt(self.config.prompts_dir, "thesis_judge"),
                 user_message=user, validator=validate_judge, on_delta=on_delta)
-            return stage.data
+            verdict = stage.data
+            _operation_record(
+                "meaning_review",
+                "rejected" if judge_failed(verdict) else "accepted")
+            return verdict
         except Exception:
             log.warning("thesis judge unavailable; accepting discovery",
                         exc_info=True)
+            _operation_record("meaning_review", "unavailable")
             return None
 
     def generate(self, *, material, instruction, task_type, config,
@@ -242,6 +266,7 @@ class RealWritingEngine:
             # re-running the Architect (failure retry resumes at the last
             # successful node).
             wir = (plan or {}).get("wir") or {}
+            _operation_record("structure", "reused")
             if emit:
                 emit("stage_summary", {"stage": "structure",
                                        "text": "复用上次的结构:" + _outline_summary(wir)})
@@ -252,6 +277,7 @@ class RealWritingEngine:
             except StructuredOutputError as exc:
                 raise GenerationFailed("The draft could not be generated correctly.") from exc
             wir = arch.data
+            _operation_record("structure", data={"repair_used": arch.repair_used})
             if emit:
                 emit("stage_summary", {"stage": "structure",
                                        "text": _outline_summary(wir)})
@@ -266,12 +292,18 @@ class RealWritingEngine:
             self.writer, material=material, instruction=instruction,
             structure=wir, expected_language=expected, target_length=target,
             on_delta=on_delta)
+        _operation_record("language_check",
+                          "failed" if lw.functional_failure else "completed",
+                          {"attempts": lw.attempts, "repaired": lw.repaired,
+                           "final_language": lw.final_language})
         if lw.functional_failure or not (lw.text or "").strip():
             raise GenerationFailed("The draft could not be generated correctly.")
         gate = hard_gates(lw.text, {"material": material, "instruction": instruction,
                                     "target_length": target,
                                     "expected_language": expected,
                                     "allow_new_facts": allow_new_facts})
+        _operation_record("output_gate",
+                          "failed" if gate["functional_failure"] else "completed")
         if gate["functional_failure"]:
             log.warning("gate failure task=%s reasons=%s", task_type,
                         gate["failure_reasons"])
@@ -313,6 +345,10 @@ class RealWritingEngine:
                 "message": (issue.get("diagnosis") or {}).get("description", ""),
                 "fixable": True,
             })
+        _operation_record("review", data={
+            "decision": critique.get("decision", ""),
+            "issue_count": len(issues),
+            "repair_used": bool(getattr(stage, "repair_used", False))})
         return {"summary": summary, "issues": issues}
 
     # --------------------------------------------------------------- patch ----

@@ -1,0 +1,186 @@
+[
+  {
+    "id": "Q01",
+    "input": {
+      "input_mode": "topic_only",
+      "topic": "为什么修好的钟仍被放在抽屉里",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500
+      }
+    },
+    "criterion": "命题具体；等待与选择的关系有推进"
+  },
+  {
+    "id": "Q02",
+    "input": {
+      "input_mode": "topic_only",
+      "topic": "人为什么舍不得扔掉没有用的旧物",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500
+      }
+    },
+    "criterion": "避免将怀旧一概解释为软弱"
+  },
+  {
+    "id": "Q03",
+    "input": {
+      "input_mode": "topic_only",
+      "topic": "承认自己走错路为什么这么难",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500
+      }
+    },
+    "criterion": "区分代价、身份与面子，不重复口号"
+  },
+  {
+    "id": "Q04",
+    "input": {
+      "input_mode": "topic_only",
+      "topic": "沉默什么时候是保护，什么时候是逃避",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500
+      }
+    },
+    "criterion": "为同一行为保留不同情境，避免简单二分"
+  },
+  {
+    "id": "S01",
+    "input": {
+      "input_mode": "source_grounded",
+      "type": "essay",
+      "material": "小林修好了外婆的钟。外婆仍把它放在抽屉里。两人一起吃饭，谁也没问钟的事。",
+      "instruction": "用场景写出两人理解的距离",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500,
+        "locks": {
+          "facts": true
+        }
+      }
+    },
+    "criterion": "不添加死亡、疾病等关键事实；留白可读"
+  },
+  {
+    "id": "S02",
+    "input": {
+      "input_mode": "source_grounded",
+      "type": "essay",
+      "material": "社区图书馆把闭馆时间从六点改到八点。志愿者每周多值两次班。来访者没有增加，但晚到的工人终于借到了书。",
+      "instruction": "写一篇短评，讨论效率指标之外的价值",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500,
+        "locks": {
+          "facts": true
+        }
+      }
+    },
+    "criterion": "保留人数未增长，不杜撰统计数据"
+  },
+  {
+    "id": "S03",
+    "input": {
+      "input_mode": "source_grounded",
+      "type": "essay",
+      "material": "小许三次修改同一封道歉信，最后只发了两句话。对方第二天说想当面谈。",
+      "instruction": "呈现行动如何改变等待",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500,
+        "locks": {
+          "facts": true
+        }
+      }
+    },
+    "criterion": "不擅自写和解结果"
+  },
+  {
+    "id": "S04",
+    "input": {
+      "input_mode": "source_grounded",
+      "type": "essay",
+      "material": "雨停后，小周把门口的伞晾开。邻居带走了借来的伞，留下一袋橘子。",
+      "instruction": "用具体动作推进一段关系",
+      "config": {
+        "expected_language": "zh",
+        "target_length": 500,
+        "locks": {
+          "facts": true
+        }
+      }
+    },
+    "criterion": "不添加人物身世或宏大寓意"
+  },
+  {
+    "id": "D01",
+    "input": {
+      "input_mode": "draft_revision",
+      "type": "essay",
+      "material": "钟停了三天。她从没有催过修表的人。\n\n她把修好的钟放回抽屉。她终于明白人生最重要的是珍惜当下，而不是执着过去。",
+      "instruction": "删去结尾说教，保留动作",
+      "config": {
+        "expected_language": "zh",
+        "locks": {
+          "facts": true,
+          "core_meaning": true
+        }
+      }
+    },
+    "criterion": "只能修改指定段落；前文完整保留"
+  },
+  {
+    "id": "D02",
+    "input": {
+      "input_mode": "draft_revision",
+      "type": "essay",
+      "material": "他推开窗，又关上。楼下响起自行车铃声。\n\n他紧张、忐忑、害怕、惶恐，内心充满复杂的感情。",
+      "instruction": "压缩重复情绪词",
+      "config": {
+        "expected_language": "zh",
+        "locks": {
+          "facts": true,
+          "core_meaning": true
+        }
+      }
+    },
+    "criterion": "修订有增益且不新添关键事实"
+  },
+  {
+    "id": "D03",
+    "input": {
+      "input_mode": "draft_revision",
+      "type": "essay",
+      "material": "她准时到了站台。\n\n车离开以后，她仍握着那张没用过的票。",
+      "instruction": "更自然地表达第二段",
+      "config": {
+        "expected_language": "zh",
+        "locks": {
+          "facts": true,
+          "core_meaning": true
+        }
+      }
+    },
+    "criterion": "有价值原句可保留，不强行改写"
+  },
+  {
+    "id": "D04",
+    "input": {
+      "input_mode": "draft_revision",
+      "type": "essay",
+      "material": "他把钥匙放在桌上。她看了看，继续切菜。\n\n晚饭时，门口的灯一直亮着。",
+      "instruction": "给结尾增加一点余味，不直接解释",
+      "config": {
+        "expected_language": "zh",
+        "locks": {
+          "facts": true,
+          "core_meaning": true
+        }
+      }
+    },
+    "criterion": "不暗示未经提供的离婚、病危等事实"
+  }
+]

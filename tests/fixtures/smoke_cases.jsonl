@@ -1,0 +1,10 @@
+{"id": "SYN_01", "task_type": "narrative_commentary", "material": "合成案例 1：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_02", "task_type": "character_analysis", "material": "合成案例 2：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_03", "task_type": "fiction_scene", "material": "合成案例 3：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_04", "task_type": "concept_essay", "material": "合成案例 4：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_05", "task_type": "emotional_retelling", "material": "合成案例 5：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_06", "task_type": "narrative_commentary", "material": "合成案例 6：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_07", "task_type": "character_analysis", "material": "合成案例 7：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_08", "task_type": "fiction_scene", "material": "合成案例 8：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_09", "task_type": "concept_essay", "material": "合成案例 9：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}
+{"id": "SYN_10", "task_type": "emotional_retelling", "material": "合成案例 10：小镇的旧钟停了，修钟人留下了一张明早再来的纸条。", "instruction": "围绕等待写一段，不新增人物。", "target_length": 700, "expected_language": "zh"}

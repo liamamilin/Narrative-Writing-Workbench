@@ -7,6 +7,7 @@ W0/WGI isolation, beat budget schema, auto-tie determinism, gate separation.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from app.benchmark import BenchmarkRunner
 from app.gates import hard_gates, resolve_expected_language
@@ -238,7 +239,7 @@ def _v12_benchmark(tmp_path, tmp_config, **queue_overrides):
     path = tmp_path / "cases.jsonl"
     path.write_text(json.dumps(ZH_CASE, ensure_ascii=False) + "\n", encoding="utf-8")
     client = MockClient(_healthy_queue(**queue_overrides))
-    runner = BenchmarkRunner(tmp_config, client=client)
+    runner = BenchmarkRunner(tmp_config, baselines_dir=Path(__file__).parent / "fixtures" / "baselines", client=client)
     outcome = runner.run(path, baselines=V12_ROWS,
                          experiment_id="v12_test", pairs=V12_PAIRS)
     exp = tmp_path / "results" / "v12_test"

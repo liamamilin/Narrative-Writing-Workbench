@@ -7,11 +7,20 @@ const esc = s => (s ?? "").replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 async function api(method, path, body) {
-  const r = await fetch(path, {
-    method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let r;
+  try {
+    r = await fetch(path, {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (_) {
+    // Browser-level fetch failure: the backend itself is unreachable
+    // (idle auto-shutdown, crash, wrong port) — NOT the LLM provider.
+    throw { code: "BACKEND_DOWN",
+      message: "连不上本机 Workbench 服务（它可能因空闲自动退出了）。请先在终端运行 python -m workbench.server，再刷新页面重试。",
+      retryable: true, backendDown: true };
+  }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const e = data.error || { code: "NETWORK", message: r.statusText, retryable: false };
@@ -647,6 +656,7 @@ async function project(pid) {
 /* ------------------------------------------------------------- settings */
 async function settings() {
   const [s, pr] = await Promise.all([api("GET", "/settings"), api("GET", "/settings/providers")]);
+  if (location.hash !== "#/settings") return;
   const known = pr.providers.find(p => p.base_url && p.base_url === s.base_url);
   $("#app").innerHTML = `
   <div class="form" style="max-width:640px">
@@ -669,9 +679,10 @@ async function settings() {
     <label for="s-model">模型</label>
     <div class="row">
       <input id="s-model" class="grow" list="s-model-list" value="${esc(s.model)}" placeholder="选择或输入模型名" data-tip="下拉选常见模型;也可手填">
-      <datalist id="s-model-list">${(known && known.models.length ? known.models : ["mimo-v2.5"]).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
-      <button id="s-fetch" data-tip="从该 Base URL 拉取可用模型列表(GET /models)">拉取模型</button>
+      <datalist id="s-model-list">${(known ? known.models : []).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
+      <button id="s-fetch" data-tip="向该地址请求模型清单(GET /models)，只列出已可用的模型，不会下载">刷新模型列表</button>
     </div>
+    <p class="muted small" id="s-model-hint" style="margin:4px 0 0"></p>
     <div class="trio" style="margin-top:10px">
       <div><span class="muted small">超时(秒)</span>
         <input id="s-timeout" type="number" min="30" step="30" value="${s.timeout_seconds ?? ""}" placeholder="300" data-tip="单次 LLM 调用超时"></div>
@@ -686,35 +697,51 @@ async function settings() {
   </div>`;
 
   const PROVIDERS = pr.providers;
-  const showResult = html => { $("#s-result").innerHTML = html; };
-  let fetchSeq = 0;
+  const viewProvider = $("#s-provider");
+  const stillHere = () => $("#s-provider") === viewProvider;
+  const showResult = html => { if (stillHere()) $("#s-result").innerHTML = html; };
+  let fetchSeq = 0, modelEditSeq = 0;
+  $("#s-model").oninput = () => { modelEditSeq++; };
+  function hintModel(text) { if (stillHere()) $("#s-model-hint").textContent = text; }
   async function fetchModels(quiet = false) {
-    const btn = $("#s-fetch");
-    const my = ++fetchSeq;
-    if (btn) { btn.disabled = true; btn.textContent = "拉取中…"; }
+    const btn = $("#s-fetch"), my = ++fetchSeq, edit = modelEditSeq;
+    const base = $("#s-base").value.trim(), key = $("#s-key").value.trim();
+    const current = () => stillHere() && my === fetchSeq &&
+      $("#s-base").value.trim() === base && $("#s-key").value.trim() === key;
+    btn.disabled = true; btn.textContent = "刷新中…";
     try {
-      const r = await api("POST", "/settings/models", {
-        base_url: $("#s-base").value.trim(), api_key: $("#s-key").value.trim() });
-      if (my !== fetchSeq) return;               // a newer fetch won
+      const r = await api("POST", "/settings/models", { base_url: base, api_key: key });
+      if (!current()) return;
       if (r.ok && r.models.length) {
         $("#s-model-list").innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join("");
-        if (!r.models.includes($("#s-model").value)) $("#s-model").value = r.models[0];
-        if (!quiet) showResult(`<span style="color:var(--accent)">已载入 ${r.models.length} 个模型</span>`);
-        else showResult(`<span class="muted">已自动载入 ${r.models.length} 个模型</span>`);
-      } else if (!quiet) {
-        showResult(`<span style="color:var(--warn)">✗ ${esc(r.error || "该端点没有返回模型列表")}</span>`);
+        if (!$("#s-model").value.trim() && edit === modelEditSeq) $("#s-model").value = r.models[0];
+        hintModel(r.models.includes($("#s-model").value.trim()) ? "" :
+          "清单未列出当前模型。手填名称会保留，可用「测试连接」确认。" );
+        showResult(`<span class="muted">已载入 ${r.models.length} 个模型建议</span>`);
+      } else {
+        $("#s-model-list").innerHTML = "";
+        hintModel("暂未获取模型清单，手填名称仍可保存。可用「测试连接」确认。" );
+        showResult(`<span class="muted">${esc(r.error || "该端点未返回模型清单")}</span>`);
       }
-    } catch (e) { if (!quiet && my === fetchSeq) showResult(`<span style="color:var(--warn)">✗ ${esc(e.message)}</span>`); }
-    finally { if (my === fetchSeq && btn) { btn.disabled = false; btn.textContent = "拉取模型"; } }
+    } catch (e) {
+      if (!current()) return;
+      hintModel(e.backendDown ? e.message : "模型清单请求失败，手填名称已保留。" );
+      if (!quiet) showResult(`<span style="color:var(--warn)">${esc(e.message)}</span>`);
+    } finally {
+      if (stillHere() && my === fetchSeq) { btn.disabled = false; btn.textContent = "刷新模型列表"; }
+    }
   }
   $("#s-provider").onchange = e => {
     const p = PROVIDERS.find(x => x.id === e.target.value);
     if (!p) return;
+    fetchSeq++;
+    $("#s-fetch").disabled = false; $("#s-fetch").textContent = "刷新模型列表";
     if (p.id !== "custom") $("#s-base").value = p.base_url;
+    hintModel("");
     const list = $("#s-model-list");
-    list.innerHTML = (p.models.length ? p.models : ["mimo-v2.5"])
+    list.innerHTML = p.models
       .map(m => `<option value="${esc(m)}">`).join("");
-    if (p.models.length && !p.models.includes($("#s-model").value))
+    if (p.models.length && !$("#s-model").value.trim())
       $("#s-model").value = p.models[0];
     if (!p.needs_key) $("#s-key").placeholder = "本地服务无需密钥(留空即可)";
     else $("#s-key").placeholder = "sk-…";
@@ -766,14 +793,29 @@ const WS = {
 };
 
 async function workspace(tid) {
+  if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
   WS.tid = tid; WS.sel.clear(); WS.proposals = []; WS.review = null; WS.map = null;
   await reloadTask();
-  if (WS.task.status === "generating" && !GENERATING) {
+  if (location.hash !== `#/tasks/${tid}`) return;
+  if (WS.task.operation?.status === "running" && !GENERATING) {
     resumeInProgressGeneration();
     return;
   }
+  if (WS.task.input_mode === "draft_revision") WS.panelTab = "review";
   renderWorkspace();
+  if (WS.task.operation?.status === "interrupted") {
+    toast("服务重启导致上次运行中断，已保存正文保留。请手动重试。", true);
+    const endpoints = {
+      generate: ["generate", {}],
+      regenerate: ["regenerate", { preserve_angle: true }],
+      rediscover_angle: ["rediscover-angle", {}],
+    };
+    const retry = endpoints[WS.task.operation.kind];
+    if (retry) genFailureCard(
+      "服务已重启，本次运行中断。已保存正文保留，可从匹配的已完成步骤继续。",
+      retry[0], retry[1], "生成已完成。");
+  }
   if (AUTOSTART) {
     if (AUTOSTART === tid) {
       AUTOSTART = false;
@@ -785,6 +827,7 @@ async function workspace(tid) {
 async function reloadTask() {
   WS.task = await api("GET", `/tasks/${WS.tid}`);
   WS.draft = WS.task.draft;
+  WS.review = WS.task.review;
   WS.dirty = false;
   WS.editRevision = 0;
   WS.versions = WS.draft ? WS.task.draft.versions : [];
@@ -910,15 +953,27 @@ function renderCenter() {
       `<div class="para${WS.sel.has(i + 1) ? " sel" : ""}" contenteditable="true" data-p="${i + 1}">${esc(p)}</div>`).join("")}</div>
     <div id="proposals">${WS.proposals.map(proposalCard).join("")}</div>`;
   wireEditor();
+  showRecovery();
 }
 
 /* editor */
 function wireEditor() {
   const ed = $("#editor");
+  let composition = null;
+  ed.addEventListener("compositionstart", () => {
+    clearTimeout(WS.saveTimer);
+    WS.composition = new Promise(resolve => { composition = resolve; });
+  });
+  ed.addEventListener("compositionend", () => {
+    if (composition) composition();
+    composition = null; WS.composition = null;
+    clearTimeout(WS.saveTimer);
+    WS.saveTimer = setTimeout(() => saveDraft().catch(() => {}), 1200);
+  });
   ed.addEventListener("input", () => {
     WS.dirty = true; WS.editRevision += 1; setSave("保存中…");
     clearTimeout(WS.saveTimer);
-    WS.saveTimer = setTimeout(() => saveDraft().catch(() => {}), 1200);
+    if (!WS.composition) WS.saveTimer = setTimeout(() => saveDraft().catch(() => {}), 1200);
   });
   ed.addEventListener("click", e => {
     const p = e.target.closest(".para"); if (!p) return;
@@ -961,6 +1016,7 @@ function captureEditorContent() {
     .join("\n\n");
   if (content === WS.draft.working_content) return false;
   WS.draft.working_content = content;
+  if (WS.review) WS.review.stale = true;
   WS.dirty = true;
   WS.editRevision += 1;
   return true;
@@ -974,24 +1030,57 @@ function setEditorEditable(enabled) {
 }
 
 async function saveDraft() {
+  if (WS.composition) await WS.composition;
   if (!WS.draft) return false;
   clearTimeout(WS.saveTimer); WS.saveTimer = null;
-  if (WS.savePromise) await WS.savePromise;
+  while (WS.savePromise) await WS.savePromise;
   captureEditorContent();
   if (!WS.dirty) { setSave("已保存"); return true; }
   const draftId = WS.draft.id;
   const content = WS.draft.working_content || "";
   const revision = WS.editRevision;
   try {
-    WS.savePromise = api("PATCH", `/drafts/${draftId}`, { working_content: content });
-    await WS.savePromise;
+    WS.savePromise = api("PATCH", `/drafts/${draftId}`, { working_content: content, expected_revision: WS.draft.revision });
+    const saved = await WS.savePromise;
+    if (WS.draft && WS.draft.id === draftId) WS.draft.revision = saved.revision;
     if (WS.draft && WS.draft.id === draftId && WS.editRevision === revision) WS.dirty = false;
     setSave(WS.dirty ? "有待保存的修改" : "已保存");
     return true;
   } catch (e) {
+    if (["STALE_BASE", "REVISION_REQUIRED"].includes(e.code)) {
+      try { sessionStorage.setItem(`workbench-recovery:${draftId}`, WS.draft.working_content); } catch (_) {}
+      showRecovery(WS.draft.working_content);
+    }
     setSave("保存失败"); toast(e.message || "正文保存失败。", true); throw e;
   } finally { WS.savePromise = null; }
 }
+function showRecovery(content = null) {
+  if (!WS.draft || !$("#editor")) return;
+  if (content === null) {
+    try { content = sessionStorage.getItem(`workbench-recovery:${WS.draft.id}`); } catch (_) {}
+  }
+  if (content === null) return;
+  $("#save-conflict")?.remove();
+  const box = document.createElement("div");
+  box.id = "save-conflict"; box.className = "card";
+  box.innerHTML = `<b>检测到另一处修改，本地输入已保留</b><p>可复制下方文字，或下载本地副本后载入服务端正文。</p>
+    <textarea aria-label="未保存的本地正文" rows="5" readonly></textarea>
+    <button id="recover-reload">下载副本并载入服务端正文</button>`;
+  box.querySelector("textarea").value = content;
+  $("#editor").before(box);
+  $("#recover-reload").onclick = async () => {
+    const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = `稿件本地副本-${WS.draft.id}.txt`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const draftId = WS.draft.id;
+    try {
+      await reloadTask();
+      sessionStorage.removeItem(`workbench-recovery:${draftId}`);
+      renderWorkspace();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
 function setSave(s) { const el = $("#save-state"); if (el) el.textContent = s; }
 
 /* patches */
@@ -1000,7 +1089,7 @@ function selRange() {
   return { paragraph_start: a[0], paragraph_end: a[a.length - 1] };
 }
 
-async function proposePatch(instruction) {
+async function proposePatch(instruction, reviewId = null) {
   if (!instruction) { toast("请写下修改要求。", true); return; }
   try { await flushAutosave({ checkpoint: false }); }
   catch (_) { return; }
@@ -1013,6 +1102,7 @@ async function proposePatch(instruction) {
   try {
     const p = await api("POST", `/tasks/${WS.tid}/patch`, {
       base_version_id: WS.draft.current_version_id,
+      expected_revision: WS.draft.revision, review_id: reviewId,
       selection: selRange(), instruction, locks,
     });
     p.instruction = instruction;
@@ -1117,6 +1207,7 @@ function renderPanel() {
 
   if (WS.panelTab === "goal") {
     $("#p-gen").onclick = generateDraft;
+    if (t.input_mode === "draft_revision") $("#p-gen").hidden = true;
     const another = $("#p-another"), same = $("#p-same");
     if (another) another.onclick = () => retryGeneration("rediscover-angle", "Trying another angle…");
     if (same) same.onclick = () => retryGeneration("regenerate", "Rewriting with the same angle…", { preserve_angle: true });
@@ -1124,7 +1215,7 @@ function renderPanel() {
        if (!WS.draft) { toast("还没有可保存的正文。", true); return; }
        try {
          await flushAutosave({ checkpoint: false });
-         await api("POST", `/tasks/${WS.tid}/checkpoint`);
+         await checkpointDraft();
          await reloadTask(); renderWorkspace(); toast("版本节点已保存。");
        } catch (e) { toast(e.message || "版本节点保存失败。", true); }
      };
@@ -1139,6 +1230,7 @@ function renderPanel() {
       locks[cb.dataset.lock] = cb.checked;
       await api("PATCH", `/tasks/${WS.tid}`, { config: { locks } });
       WS.task.config.locks = locks;
+      if (WS.review) WS.review.stale = true;
       toast("保护项已保存。");
     });
   }
@@ -1157,6 +1249,7 @@ async function saveGoalPanel() {
       await api("PATCH", `/tasks/${tid}`, { instruction, config });
       task.instruction = instruction;
       Object.assign(task.config, config);
+      if (WS.tid === tid && WS.review) WS.review.stale = true;
     } catch (e) {
       toast("写作目标尚未保存，请重试。" + (e.message || ""), true);
       throw e;
@@ -1268,10 +1361,10 @@ function renderBanner(st) {
   const n = $("#gb-proc-n");
   if (n) n.textContent = st.sums.length ? `(${st.sums.length})` : "";
   const su = $("#gb-sums");
-  if (su) su.innerHTML = st.sums.map(s => {
+  if (su) su.innerHTML = st.sums.length ? st.sums.map(s => {
     const lbl = STEP_LABELS[s.stage] || [s.stage, ""];
     return `<div class="sum-line"><b>${esc(lbl[1] || lbl[0])}</b> ${esc(s.text)}</div>`;
-  }).join("");
+  }).join("") : `<div class="sum-line muted">各阶段完成后会在这里留一条小结；现在还在跑第一步，不用担心。</div>`;
 }
 
 function stepsView(steps, angle, errMsg) {
@@ -1304,43 +1397,69 @@ function renderProgressState(st) {
       ti.innerHTML = `${esc(lbl[0])} <span class="muted small">${esc(lbl[1])}</span>`;
     } else ti.textContent = "正在准备…";
   }
+  const n = $("#gb-proc-n");
+  if (n) n.textContent = st.sums.length ? `(${st.sums.length})` : "";
+  const su = $("#gb-sums");
+  if (su) su.innerHTML = st.sums.length ? st.sums.map(s => {
+    const lbl = STEP_LABELS[s.stage] || [s.stage, ""];
+    return `<div class="sum-line"><b>${esc(lbl[1] || lbl[0])}</b> ${esc(s.text)}</div>`;
+  }).join("") : `<div class="sum-line muted">各阶段完成后会在这里留一条小结；现在还在跑第一步，不用担心。</div>`;
 }
 
 function genFailureCard(errMsg, endpoint, body, okMsg) {
   const host = $("#center-body") || $("#app");
   host?.insertAdjacentHTML?.("afterbegin",
     `<div class="card" style="border-color:var(--warn)">
-      <b style="color:var(--warn)">生成失败 — 你的现有正文没有被改动</b>
+      <b style="color:var(--warn)">本次生成未提交，现有正文已保留</b>
       <p class="small">${esc(errMsg || "The draft could not be generated correctly.")}</p>
-      <p class="small muted">重试将从已完成的步骤继续(已发现的角度与已定稿的结构不会重跑)。
+      <p class="small muted">重试会复用输入与模型配置仍匹配的已完成步骤；配置变化时重新计算。
       想全新重来,请用 Goal 面板的 Generate。</p>
       <button class="primary" id="gen-retry" data-tip="从上一个成功的节点继续,不重复已完成的步骤">重试(继续)Retry</button></div>`);
+  const taskId = WS.tid;
+  const failureCard = $("#gen-retry")?.closest(".card");
+  api("GET", `/tasks/${taskId}`).then(async t => {
+    if (!failureCard?.isConnected || !t.operation || t.operation.status !== "failed") return;
+    const op = await api("GET", `/tasks/${taskId}/operations/${t.operation.id}`);
+    if (!failureCard.isConnected || !op.unapplied_result) return;
+    const details = document.createElement("details");
+    details.innerHTML = '<summary>查看已保留、尚未应用的生成结果</summary><textarea rows="8" readonly aria-label="未应用的生成结果"></textarea>';
+    details.querySelector("textarea").value = op.unapplied_result.content;
+    failureCard.appendChild(details);
+  }).catch(() => {});
   const r = $("#gen-retry");
   if (r) r.onclick = () => runGeneration(
     endpoint || "generate", { ...collectPanelParams(), ...(body || {}), resume: true },
     okMsg || "初稿已生成。");
 }
 
-function openProgress(tid, onUpdate, onEnd) {
-  let es;
+function openProgress(tid, onUpdate, onEnd, operationId = null) {
+  let es, polling = false;
+  const previousId = operationId ? null : WS.task.operation?.id;
 const state = { steps: [], angle: "", error: "", live: "", shown: "",
-                  seq: -1, sums: [], raw: {} };
+                  seq: -1, sums: [], raw: {}, operationId };
   let ended = false;
   const finish = (errMsg) => {
     if (ended) return;
     ended = true;
     if (errMsg) state.error = errMsg;
-    clearInterval(iv);
+    clearInterval(iv); clearInterval(poll);
     es.close();
     if (onEnd) onEnd(errMsg || null);
   };
-  try { es = new EventSource(`/tasks/${tid}/progress`); }
+  const query = operationId ? `?operation_id=${encodeURIComponent(operationId)}`
+    : previousId ? `?after_operation_id=${encodeURIComponent(previousId)}` : "";
+  try { es = new EventSource(`/tasks/${tid}/progress${query}`); }
   catch (e) { return { close() {}, alive: () => false }; }
-  const push = () => onUpdate(state);
+  const push = () => { if (location.hash === `#/tasks/${tid}`) onUpdate(state); };
   // Reconnect safety: the server replays full history from seq 0 after any
   // EventSource reconnect; without seq dedupe the live text doubles.
   const handle = (kind, fn) => es.addEventListener(kind, ev => {
     let e; try { e = JSON.parse(ev.data); } catch (_) { return; }
+    if (e.operation_id) {
+      if (!state.operationId && e.operation_id === previousId) return;
+      if (state.operationId && e.operation_id !== state.operationId) return;
+      state.operationId = e.operation_id;
+    }
     if (typeof e.seq === "number" && e.seq <= state.seq) return;
     if (typeof e.seq === "number") state.seq = e.seq;
     fn(e.data || {});
@@ -1352,7 +1471,7 @@ const state = { steps: [], angle: "", error: "", live: "", shown: "",
     if (behind <= 0) return;
     state.shown = state.live.slice(
       0, state.shown.length + Math.max(2, Math.ceil(behind * 0.12)));
-    onUpdate(state);
+    push();
   }, 40);
   handle("stage", d => {
     if (!state.steps.includes(d.stage)) { state.steps.push(d.stage); push(); }
@@ -1380,10 +1499,29 @@ const state = { steps: [], angle: "", error: "", live: "", shown: "",
     state.error = d.message || "";
     if (state.error) { push(); finish(d.message || ""); }
   });
-  es.addEventListener("done", () => finish(null));
-  es.addEventListener("eof", () => finish(null));
+  async function checkStatus() {
+    if (ended || polling) return;
+    polling = true;
+    try {
+      let op;
+      if (state.operationId) op = await api("GET", `/tasks/${tid}/operations/${state.operationId}`);
+      else {
+        op = (await api("GET", `/tasks/${tid}`)).operation;
+        if (!op || op.id === previousId) return;
+        state.operationId = op.id;
+      }
+      if (op.status === "succeeded") finish(null);
+      else if (op.status === "failed" || op.status === "interrupted")
+        finish(op.status === "interrupted" ? "服务已重启，本次运行中断。已保存正文保留，可手动重试。" : (state.error || "本次运行失败，请重试。"));
+    } catch (_) { /* transient disconnect: EventSource and status polling retry */ }
+    finally { polling = false; }
+  }
+  const poll = setInterval(checkStatus, 2000);
+  es.addEventListener("done", checkStatus);
+  es.addEventListener("eof", checkStatus);
+  es.onerror = checkStatus;
   return {
-    close() { clearInterval(iv); es.close(); },
+    close() { ended = true; clearInterval(iv); clearInterval(poll); es.close(); },
     alive: () => state.steps.length > 0,
   };
 }
@@ -1417,6 +1555,12 @@ async function retryGeneration(endpoint, label, body) {
                       label.replace("…", "") + " — done.");
 }
 
+async function checkpointDraft() {
+  const r = await api("POST", `/tasks/${WS.tid}/checkpoint`, { expected_revision: WS.draft.revision });
+  WS.draft.revision = r.revision;
+  WS.draft.current_version_id = r.version_id;
+}
+
 async function flushAutosave({ checkpoint = true } = {}) {
   await saveGoalPanel();
   // Persist any in-flight editor text before a destructive generation, and
@@ -1428,13 +1572,14 @@ async function flushAutosave({ checkpoint = true } = {}) {
   // An edit can land while a PATCH is in flight. Keep saving until the
   // revision persisted by saveDraft is still the latest local revision.
   while (WS.dirty || WS.savePromise) await saveDraft();
-  if (checkpoint) await api("POST", `/tasks/${WS.tid}/checkpoint`);
+  if (checkpoint) await checkpointDraft();
 }
 
 async function runGeneration(endpoint, body, okMsg) {
   const myTid = WS.tid;
   try { await flushAutosave(); }
   catch (_) { return; }
+  body = { ...body, expected_revision: WS.draft ? WS.draft.revision : null };
   GENERATING = true;
   WS.panelTab = "goal";
   if (!WS.draft) renderWorkspace();
@@ -1455,9 +1600,13 @@ const render = renderBanner;
   }, 9000);
   const tick = setInterval(() => {
     const time = $("#gb-time");
-    if (time) time.textContent = `已用时 ${Math.round((Date.now() - t0) / 1000)} 秒`;
+    if (!time) return;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    time.textContent = secs > 180
+      ? `已用时 ${secs} 秒（比平时慢，模型可能在排队或思考较长，可继续等或检查设置里的模型地址）`
+      : `已用时 ${secs} 秒`;
   }, 1000);
-  const stillHere = () => WS.tid === myTid;
+  const stillHere = () => WS.tid === myTid && location.hash === `#/tasks/${myTid}`;
   try {
     await api("POST", `/tasks/${myTid}/${endpoint}`, body);
     if (!stillHere()) { toast("生成已完成，打开任务即可查看。"); }
@@ -1495,7 +1644,7 @@ function resumeInProgressGeneration() {
   const btns = [$("#p-gen"), $("#gen-now"), $("#p-another"), $("#p-same")].filter(Boolean);
   btns.forEach(b => { b.disabled = true; });
   let i = 0, t0 = Date.now();
-  const stillHere = () => WS.tid === myTid;
+  const stillHere = () => WS.tid === myTid && location.hash === `#/tasks/${myTid}`;
   const prog = openProgress(myTid, renderProgressState, (errMsg) => {
     prog.close();
     clearInterval(timer); clearInterval(tick);
@@ -1506,13 +1655,15 @@ function resumeInProgressGeneration() {
       WS.view = "draft";
       renderWorkspace();
       if (errMsg) {
-        genFailureCard(errMsg);
+        if (WS.task.operation?.kind === "review") {
+          WS.panelTab = "review"; renderPanel();
+        } else genFailureCard(errMsg);
         toast(errMsg || "生成失败。", true);
       } else {
         toast("生成完成。");
       }
     }).catch(e => toast(e.message || "Reload failed.", true));
-  });
+  }, WS.task.operation?.id);
   const timer = setInterval(() => {
     if (prog.alive()) return;             // real events win; rotate only as fallback
     i = Math.min(i + 1, STG.length - 1);
@@ -1521,7 +1672,11 @@ function resumeInProgressGeneration() {
   }, 9000);
   const tick = setInterval(() => {
     const time = $("#gb-time");
-    if (time) time.textContent = `已用时 ${Math.round((Date.now() - t0) / 1000)} 秒`;
+    if (!time) return;
+    const secs = Math.round((Date.now() - t0) / 1000);
+    time.textContent = secs > 180
+      ? `已用时 ${secs} 秒（比平时慢，模型可能在排队或思考较长，可继续等或检查设置里的模型地址）`
+      : `已用时 ${secs} 秒`;
   }, 1000);
 }
 
@@ -1561,8 +1716,15 @@ async function runReview() {
 }
 
 function reviewView(r) {
-  return `<div class="row" style="flex-wrap:wrap">${Object.entries(r.summary).map(([k, v]) =>
-    `<span class="small">${({progression:"推进",meaning_density:"意义密度",immersion:"沉浸",restraint:"克制",coherence:"连贯"})[k] || k}</span> <span class="label ${v}">${({strong:"稳健",good:"良好",needs_attention:"需留意"})[v] || v}</span>`).join(" ")}</div>` +
+  if (r.stale) return `<p class="muted">正文或目标已改变，请重新检查后再定位和修改。</p>`;
+  const labels = { progression:"推进", meaning_density:"意义密度", immersion:"沉浸", restraint:"克制", coherence:"连贯" };
+  const qualities = { strong:"稳健", good:"良好", needs_attention:"需留意" };
+  const decision = r.summary.decision === "PATCH_REQUIRED" ? "这篇还有需要修订的地方。" :
+    r.summary.decision === "PASS" ? "本次检查已通过。" : "";
+  return `<p class="small">${decision}</p><div class="row" style="flex-wrap:wrap">${Object.entries(labels).map(([k, label]) => {
+    const value = Object.hasOwn(qualities, r.summary[k]) ? r.summary[k] : "unknown";
+    return `<span class="small">${label}</span> <span class="label ${value}">${qualities[value] || "未完成"}</span>`;
+  }).join(" ")}</div>` +
     (r.issues.length ? r.issues.map((is, n) => `
       <div class="issue"><p class="small">${esc(is.message)}</p>
       <p class="loc">¶${is.location.paragraph_start}${is.location.paragraph_end !== is.location.paragraph_start ? "–" + is.location.paragraph_end : ""}</p>
@@ -1576,6 +1738,7 @@ document.addEventListener("click", async e => {
   const fix = e.target.closest("[data-fix]");
   if (!show && !fix) return;
   try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
+  if (!WS.review || WS.review.stale) { toast("正文或目标已改变，请重新检查。", true); return; }
   const is = WS.review.issues[parseInt((show || fix).dataset.show ?? (show || fix).dataset.fix)];
   WS.view = "draft"; renderWorkspace();
   const a = is.location.paragraph_start, b = is.location.paragraph_end;
@@ -1584,13 +1747,13 @@ document.addEventListener("click", async e => {
   const el = $(`.para[data-p="${a}"]`);
   if (el) { el.classList.add("hl"); el.scrollIntoView({ behavior: "smooth", block: "center" });
     setTimeout(() => el.classList.remove("hl"), 2600); }
-  if (fix) proposePatch(is.message);
+  if (fix) proposePatch(is.message, WS.review.id);
 });
 
 /* writing map */
 function mapView() {
   const beats = (WS.map && WS.map.beats) || [];
-  return `<p class="muted small">查看读者的理解如何随正文一步步变化。写作地图只读。</p>` +
+  return `<p class="muted small">这是生成时的结构参考，段落对应关系为估算；手工修改后可能偏移。写作地图只读。</p>` +
     (beats.length ? beats.map((b, i) => `
       <div class="beat" role="button" tabindex="0" data-a="${b.paragraph_start}" data-b="${b.paragraph_end}">
         <div class="t">第 ${i + 1} 步 · ${esc(b.function)}</div>
@@ -1616,9 +1779,12 @@ function wireMap() {
 
 /* ------------------------------------------------------------- versions */
 async function versions(tid) {
+  if (location.hash !== `#/tasks/${tid}/versions`) return;
   const task = await api("GET", `/tasks/${tid}`);
+  if (location.hash !== `#/tasks/${tid}/versions`) return;
   if (!task.draft) { $("#app").innerHTML = '<p class="muted">还没有初稿。</p>'; return; }
   const vs = await api("GET", `/drafts/${task.draft.id}/versions`);
+  if (location.hash !== `#/tasks/${tid}/versions`) return;
   const rows = vs.versions.slice().reverse();            // newest first
   const cont = new Map();                                // id -> full content (lazy)
   const open = new Set();                                // expanded ids
@@ -1742,9 +1908,9 @@ async function versions(tid) {
     if (!(await confirmDialog(
         "恢复这个版本？", "恢复会生成一个新版本，当前状态仍保留在历史里，可以随时反悔。", "恢复版本"))) return;
     try {
-      await api("POST", `/versions/${b.dataset.v}/restore`);
+      await api("POST", `/versions/${b.dataset.v}/restore`, { expected_revision: task.draft.revision });
       toast("已恢复；原先的当前稿仍保留在版本历史中。");
-      versions(tid);
+      if (location.hash === `#/tasks/${tid}/versions`) versions(tid);
     } catch (err) { toast(err.message, true); }
   });
 }

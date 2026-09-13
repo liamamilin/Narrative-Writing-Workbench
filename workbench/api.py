@@ -109,64 +109,55 @@ def create_app(service: Service | None = None) -> FastAPI:
     def suggest_topics(body: dict | None = None):
         return svc().suggest_topics(body or {})
 
-    @app.get("/tasks/{task_id}/progress")
-    def progress(task_id: str):
-        """Server-Sent Events stream of generation stage/angle events.
+    @app.get("/tasks/{task_id}/operations/{operation_id}")
+    def operation(task_id: str, operation_id: str):
+        return svc().operation_detail(task_id, operation_id)
 
-        Replays buffered history (so a late/refreshing client catches up),
-        then follows live until the channel closes.
-        """
-        svc().get_task(task_id)  # 404 guard
-        # Two situations involve a *closed* channel with events:
-        #  (a) a second run is about to start (client opens SSE a few ms
-        #      before POST resets the channel) -> we must NOT replay the
-        #      previous run; wait for the swap;
-        #  (b) a late subscriber after completion -> replay is desired.
-        # Distinguish by watching for the channel object to change; if no
-        # new run appears within the grace window, fall through to replay.
-        ch = BROKER.channel(task_id)
-        for _ in range(20):
-            cur = BROKER.channel(task_id)
-            if cur is not ch:
-                ch = cur
-            if not ch.closed and (ch.events or
-                                  svc().get_task(task_id)["status"] == "generating"):
-                break
-            time.sleep(0.1)
-        if not ch.events and svc().get_task(task_id)["status"] != "generating":
-            async def _eof():
-                yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
-            return StreamingResponse(_eof(), media_type="text/event-stream",
-                                     headers={"Cache-Control": "no-cache"})
+    @app.get("/tasks/{task_id}/progress")
+    def progress(task_id: str, operation_id: str | None = None,
+                 after_operation_id: str | None = None):
+        """Replay one operation, then follow it. Transport lifetime is not a timeout."""
+        svc().get_task(task_id)
+        ch = BROKER.get(task_id)
+        if operation_id:
+            saved = svc().operation_detail(task_id, operation_id)
+            if not ch or ch.operation_id != operation_id:
+                def persisted():
+                    for event in saved["events"]:
+                        yield sse_format({**event, "operation_id": operation_id})
+                    yield sse_format({"seq": -1, "kind": "eof", "operation_id": operation_id, "data": {"status": saved["status"]}})
+                return StreamingResponse(persisted(), media_type="text/event-stream")
+        else:
+            # Legacy/start-before-POST clients get a short rendezvous window.
+            for _ in range(20):
+                latest = BROKER.get(task_id)
+                if latest and (latest is not ch or (not latest.closed and latest.events)):
+                    ch = latest
+                    if not after_operation_id or ch.operation_id != after_operation_id:
+                        break
+                time.sleep(0.1)
+            if after_operation_id and ch and ch.operation_id == after_operation_id:
+                ch = None
 
         def gen():
-            cur, idx = ch, 0
-            deadline = time.monotonic() + 300  # cap on a stuck channel
+            if not ch:
+                yield sse_format({"seq": -1, "kind": "eof", "data": {}})
+                return
+            idx = 0
             while True:
-                latest = BROKER.channel(task_id)
-                if latest is not cur:          # new run reset the channel
-                    cur, idx = latest, 0
-                with cur.cond:
-                    cur.cond.wait_for(
-                        lambda: idx < len(cur.events) or cur.closed
-                        or BROKER.channel(task_id) is not cur,
-                        timeout=0.5)
-                    batch = cur.events[idx:]
-                    idx = len(cur.events)
-                    closed = cur.closed
-                for ev in batch:
-                    yield sse_format(ev)
-                if BROKER.channel(task_id) is not cur:
-                    continue                   # swapped mid-wait: follow the new run
-                if closed and idx >= len(cur.events):
-                    yield 'event: eof\ndata: {"seq":-1,"kind":"eof"}\n\n'
+                with ch.cond:
+                    ch.cond.wait_for(lambda: idx < len(ch.events) or ch.closed, timeout=1)
+                    batch, closed = ch.events[idx:], ch.closed
+                    idx = len(ch.events)
+                for event in batch:
+                    yield sse_format(event)
+                if closed:
+                    yield sse_format({"seq": -1, "kind": "eof", "operation_id": ch.operation_id, "data": {}})
                     return
-                if time.monotonic() > deadline:
-                    return
-
-        headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                if not batch:
+                    yield ": heartbeat\n\n"
         return StreamingResponse(gen(), media_type="text/event-stream",
-                                 headers=headers)
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/tasks/{task_id}/review")
     def review(task_id: str):
@@ -181,8 +172,8 @@ def create_app(service: Service | None = None) -> FastAPI:
         return svc().writing_map(task_id)
 
     @app.post("/tasks/{task_id}/checkpoint")
-    def checkpoint(task_id: str):
-        return svc().checkpoint(task_id)
+    def checkpoint(task_id: str, body: dict | None = None):
+        return svc().checkpoint(task_id, (body or {}).get("expected_revision"))
 
     # ----------------------------------------------------------- patches ----
 
@@ -205,15 +196,15 @@ def create_app(service: Service | None = None) -> FastAPI:
         content = body.get("working_content")
         if not isinstance(content, str):
             raise ApiError("VALIDATION", "working_content must be text.")
-        return svc().autosave(draft_id, content)
+        return svc().autosave(draft_id, content, body.get("expected_revision"))
 
     @app.get("/versions/{version_id}")
     def get_version(version_id: str):
         return svc().get_version(version_id)
 
     @app.post("/versions/{version_id}/restore")
-    def restore_version(version_id: str):
-        return svc().restore_version(version_id)
+    def restore_version(version_id: str, body: dict | None = None):
+        return svc().restore_version(version_id, (body or {}).get("expected_revision"))
 
     # ------------------------------------------------------------- misc ----
 

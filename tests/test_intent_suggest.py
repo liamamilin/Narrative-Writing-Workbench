@@ -7,7 +7,7 @@ returns a suggestion; nothing is persisted unless the client PATCHes.
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import RevisionClient as TestClient
 
 from workbench.api import create_app
 from workbench.db import Database

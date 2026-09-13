@@ -14,7 +14,6 @@ import hashlib
 import json
 import logging
 import re
-import threading
 import time
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -23,9 +22,9 @@ from pathlib import Path
 from . import meaning_schema
 from . import settings as settings_mod
 from .db import Database, new_id
-from .engine import (EngineError, GenerationFailed, LockConflict,
+from .engine import (EngineError, LockConflict,
                      get_engine)
-from .progress import BROKER
+from .operations import CURRENT, tracked, recover_interrupted
 
 log = logging.getLogger("workbench.service")
 
@@ -210,10 +209,30 @@ class Service:
     def __init__(self, db: Database | None = None, engine=None):
         self.db = db or Database()
         self.engine = engine or get_engine()
-        # In-flight reviews per task (in-memory: dies with the process, so a
-        # crash can never wedge it; generation uses the DB stale flag instead).
-        self._reviewing: set[str] = set()
-        self._reviewing_lock = threading.Lock()
+        recover_interrupted(self.db)
+
+    def _operation_view(self, tid):
+        return self.db.q1("SELECT id,kind,status,stage,started_at,finished_at,elapsed_ms,error_code,retry_of FROM writing_operations WHERE task_id=? ORDER BY rowid DESC LIMIT 1", (tid,))
+
+    def operation_detail(self, tid, oid):
+        self.get_task(tid)
+        row = self.db.q1("SELECT id,kind,status,stage,started_at,finished_at,elapsed_ms,error_code,retry_of,result_json,usage_json FROM writing_operations WHERE task_id=? AND id=?", (tid, oid))
+        if not row:
+            raise ApiError("NOT_FOUND", "Operation not found.", 404)
+        row["result"] = json.loads(row.pop("result_json") or "{}")
+        row["usage"] = json.loads(row.pop("usage_json") or "null")
+        row["events"] = [dict(seq=e["seq"], kind=e["kind"], data=json.loads(e["data_json"]), elapsed_ms=e["elapsed_ms"])
+                         for e in self.db.q("SELECT * FROM operation_events WHERE operation_id=? ORDER BY seq", (oid,))]
+        row["unapplied_result"] = self.db.q1(
+            "SELECT id,content FROM generation_results WHERE operation_id=? AND accepted_version_id IS NULL ORDER BY rowid DESC LIMIT 1", (oid,))
+        row["records"] = [
+            {"category": r["category"], "name": r["name"],
+             "status": r["status"], "data": json.loads(r["data_json"]),
+             "elapsed_ms": r["elapsed_ms"]}
+            for r in self.db.q(
+                "SELECT category,name,status,data_json,elapsed_ms FROM operation_records "
+                "WHERE operation_id=? ORDER BY rowid", (oid,))]
+        return row
 
     # ------------------------------------------------------------- project ----
 
@@ -308,34 +327,44 @@ class Service:
         expected_language = cfg.get("expected_language")
         if expected_language not in (None, "auto", "zh", "en"):
             raise ApiError("VALIDATION", "expected_language must be zh, en or auto.")
-        tid = new_id("task")
-        ts = now()
-        self.db.exec(
-            "INSERT INTO tasks(id,project_id,type,title,instruction,status,"
-            "expected_language,created_at,updated_at,input_mode,topic,"
-            "writing_mode,angle_mode,custom_angle) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tid, project_id, ttype, (payload.get("title") or "").strip(),
-             instruction, "draft", expected_language or "auto", ts, ts,
-             input_mode, topic, writing_mode, angle_mode, custom_angle))
-        locks = dict(cfg.get("locks") or {})
-        if input_mode == "topic_only":
-            locks.setdefault("core_meaning", True)  # Preserve Core Meaning default ON
-        self.db.exec("INSERT INTO writing_configs VALUES(?,?,?,?,?,?,?)",
-                     (tid, cfg.get("immersion"), cfg.get("explicitness"),
-                      cfg.get("intensity"), cfg.get("target_length"),
-                      json.dumps(locks, ensure_ascii=False),
-                      json.dumps(cfg.get("constraints") or {}, ensure_ascii=False)))
-        if material:
-            src = self.create_source(project_id, "Task material",
-                                     "pasted_text", material)
-            self.db.exec("INSERT INTO task_sources VALUES(?,?,?)",
-                         (tid, src["id"], "primary"))
+        if input_mode == "draft_revision" and not material:
+            raise ApiError("VALIDATION", "请先粘贴要修改的旧稿。")
         for sid in payload.get("source_ids") or []:
             if not self.db.q1("SELECT id FROM sources WHERE id=?", (sid,)):
                 raise ApiError("NOT_FOUND", f"Source {sid} not found.", 404)
-            self.db.exec("INSERT OR IGNORE INTO task_sources VALUES(?,?,?)",
-                         (tid, sid, "context"))
+        with self.db.transaction() as tx:
+            tid = new_id("task")
+            ts = now()
+            tx.exec(
+                "INSERT INTO tasks(id,project_id,type,title,instruction,status,"
+                "expected_language,created_at,updated_at,input_mode,topic,"
+                "writing_mode,angle_mode,custom_angle) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (tid, project_id, ttype, (payload.get("title") or "").strip(),
+                 instruction, "draft", expected_language or "auto", ts, ts,
+                 input_mode, topic, writing_mode, angle_mode, custom_angle))
+            locks = dict(cfg.get("locks") or {})
+            if input_mode == "topic_only":
+                locks.setdefault("core_meaning", True)  # Preserve Core Meaning default ON
+            tx.exec("INSERT INTO writing_configs VALUES(?,?,?,?,?,?,?)",
+                         (tid, cfg.get("immersion"), cfg.get("explicitness"),
+                          cfg.get("intensity"), cfg.get("target_length"),
+                          json.dumps(locks, ensure_ascii=False),
+                          json.dumps(cfg.get("constraints") or {}, ensure_ascii=False)))
+            if material:
+                sid = new_id("src")
+                tx.exec("INSERT INTO sources(id,project_id,title,type,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                        (sid, project_id, "Task material", "pasted_text", material, ts, ts))
+                tx.exec("INSERT INTO task_sources VALUES(?,?,?)", (tid, sid, "primary"))
+            for sid in payload.get("source_ids") or []:
+                tx.exec("INSERT OR IGNORE INTO task_sources VALUES(?,?,?)",
+                             (tid, sid, "context"))
+            if input_mode == "draft_revision":
+                did = new_id("draft")
+                tx.exec("INSERT INTO drafts(id,task_id,working_content,updated_at) VALUES(?,?,?,?)", (did, tid, material, ts))
+                draft = tx.q1("SELECT * FROM drafts WHERE id=?", (did,))
+                self._version_write(tx, draft, material, "manual_checkpoint", instruction="导入原稿")
+                tx.exec("UPDATE tasks SET status='ready' WHERE id=?", (tid,))
         return self.get_task(tid)
 
     def get_task(self, tid: str) -> dict:
@@ -370,6 +399,13 @@ class Service:
                 for p in self.db.q(
                     "SELECT * FROM proposed_patches WHERE draft_id=? AND status='proposed'",
                     (draft["id"],))]
+        task["operation"] = self._operation_view(tid)
+        task["review"] = None
+        if draft:
+            row = self.db.q1("SELECT * FROM reviews WHERE draft_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                             (draft["id"],))
+            if row:
+                task["review"] = self._review_payload(row, task, draft)
         # fact-heavy topic warning: only while still topic_only with no sources
         if task.get("input_mode") == "topic_only" and not task["sources"]:
             task["factuality_warning"] = detect_fact_heavy(task.get("topic", ""))
@@ -435,46 +471,47 @@ class Service:
         return "\n\n".join(parts)
 
     def update_task(self, tid: str, payload: dict) -> dict:
-        task = self.get_task(tid)
-        ts = now()
-        sets, args = [], []
-        if "instruction" in payload:
-            sets.append("instruction=?"); args.append(payload["instruction"])
-        if "title" in payload:
-            sets.append("title=?"); args.append(payload["title"])
-        if "status" in payload:
-            if payload["status"] not in ("draft", "ready", "failed", "done"):
-                raise ApiError("VALIDATION", "Unknown task status.")
-            sets.append("status=?"); args.append(payload["status"])
-        if "expected_language" in payload:
-            if payload["expected_language"] not in ("auto", "zh", "en"):
-                raise ApiError("VALIDATION", "expected_language must be zh/en/auto.")
-            sets.append("expected_language=?"); args.append(payload["expected_language"])
-        sets.append("updated_at=?"); args.append(ts)
-        self.db.exec(f"UPDATE tasks SET {','.join(sets)} WHERE id=?",
-                     (*args, tid))
-        cfg = payload.get("config")
-        if cfg:
-            cur = task["config"]
-            merged = {
-                "immersion": cfg.get("immersion", cur.get("immersion")),
-                "explicitness": cfg.get("explicitness", cur.get("explicitness")),
-                "intensity": cfg.get("intensity", cur.get("intensity")),
-                "target_length": cfg.get("target_length", cur.get("target_length")),
-                "locks": cfg.get("locks", cur.get("locks")),
-                "constraints": cfg.get("constraints", cur.get("constraints")),
-            }
-            for key in ("immersion", "explicitness", "intensity"):
-                if merged[key] and merged[key] not in EXPERIENCE_LEVELS:
-                    raise ApiError("VALIDATION", f"Invalid {key} value.")
-            _validate_target_length(merged["target_length"])
-            self.db.exec(
-                "UPDATE writing_configs SET immersion=?,explicitness=?,intensity=?"
-                ",target_length=?,locks_json=?,constraints_json=? WHERE task_id=?",
-                (merged["immersion"], merged["explicitness"], merged["intensity"],
-                 merged["target_length"],
-                 json.dumps(merged["locks"] or {}, ensure_ascii=False),
-                 json.dumps(merged["constraints"] or {}, ensure_ascii=False), tid))
+        with self.db.transaction() as tx:
+            task = self.get_task(tid)
+            ts = now()
+            sets, args = [], []
+            if "instruction" in payload:
+                sets.append("instruction=?"); args.append(payload["instruction"])
+            if "title" in payload:
+                sets.append("title=?"); args.append(payload["title"])
+            if "status" in payload:
+                if payload["status"] not in ("draft", "ready", "failed", "done"):
+                    raise ApiError("VALIDATION", "Unknown task status.")
+                sets.append("status=?"); args.append(payload["status"])
+            if "expected_language" in payload:
+                if payload["expected_language"] not in ("auto", "zh", "en"):
+                    raise ApiError("VALIDATION", "expected_language must be zh/en/auto.")
+                sets.append("expected_language=?"); args.append(payload["expected_language"])
+            sets.append("updated_at=?"); args.append(ts)
+            tx.exec(f"UPDATE tasks SET {','.join(sets)} WHERE id=?",
+                         (*args, tid))
+            cfg = payload.get("config")
+            if cfg:
+                cur = task["config"]
+                merged = {
+                    "immersion": cfg.get("immersion", cur.get("immersion")),
+                    "explicitness": cfg.get("explicitness", cur.get("explicitness")),
+                    "intensity": cfg.get("intensity", cur.get("intensity")),
+                    "target_length": cfg.get("target_length", cur.get("target_length")),
+                    "locks": cfg.get("locks", cur.get("locks")),
+                    "constraints": cfg.get("constraints", cur.get("constraints")),
+                }
+                for key in ("immersion", "explicitness", "intensity"):
+                    if merged[key] and merged[key] not in EXPERIENCE_LEVELS:
+                        raise ApiError("VALIDATION", f"Invalid {key} value.")
+                _validate_target_length(merged["target_length"])
+                tx.exec(
+                    "UPDATE writing_configs SET immersion=?,explicitness=?,intensity=?"
+                    ",target_length=?,locks_json=?,constraints_json=? WHERE task_id=?",
+                    (merged["immersion"], merged["explicitness"], merged["intensity"],
+                     merged["target_length"],
+                     json.dumps(merged["locks"] or {}, ensure_ascii=False),
+                     json.dumps(merged["constraints"] or {}, ensure_ascii=False), tid))
         return self.get_task(tid)
 
     def add_task_source(self, tid: str, title: str, content: str) -> dict:
@@ -502,33 +539,24 @@ class Service:
 
     # ---------------------------------------------------------- generate ----
 
-    def _guard_not_generating(self, task: dict) -> None:
-        """Reject concurrent generation; allow retry past a 5-min stale flag.
+    def _generation_task(self, tid, payload):
+        task = self.get_task(tid)
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        if draft:
+            self._check_revision(draft, payload.get("expected_revision"))
+        task = self._apply_param_overrides(task, payload)
+        task["_base_draft"] = draft
+        op = CURRENT.get()
+        task["_engine_snapshot"] = op.snapshot
+        op.bind_inputs(self._gen_inputs_fingerprint(task, None, self._material(task) or task["topic"]))
+        return task
 
-        Must run BEFORE any param persistence: update_task refreshes
-        updated_at, which would reset the staleness clock forever.
-        """
-        if task["status"] != "generating":
-            return
-        age = (datetime.now(timezone.utc)
-               - datetime.fromisoformat(task["updated_at"])).total_seconds()
-        if age < 300:
-            raise ApiError("GENERATING", "Generation is already running.", 409)
-        # stale generating flag (client/server died): allow retry
-
-    def _guard_not_reviewing(self, tid: str) -> None:
-        """Reject generation starts while a review holds the task channel."""
-        with self._reviewing_lock:
-            if tid in self._reviewing:
-                raise ApiError("REVIEWING",
-                               "A review is running. Wait for it to finish.",
-                               409)
-
+    @tracked("generate")
     def generate(self, tid: str, payload: dict | None = None) -> dict:
-        self._guard_not_generating(self.get_task(tid))
-        self._guard_not_reviewing(tid)
-        task = self._apply_param_overrides(self.get_task(tid), payload or {})
-        ch = BROKER.channel(tid, reset=True)
+        task = self._generation_task(tid, payload or {})
+        if task.get("input_mode") == "draft_revision":
+            raise ApiError("DRAFT_REVISION", "旧稿已保留，请使用检查与局部修改。", 409)
+        ch = CURRENT.get().channel
         ch.emit("stage", {"stage": "queued"})
         material = self._material(task)
         resume = bool((payload or {}).get("resume"))
@@ -544,7 +572,7 @@ class Service:
         # Quick Write golden path: Meaning Discovery -> Angle -> WIR -> Writer
         try:
             if resume:
-                discovery = self._latest_discovery(tid)
+                discovery = self._resumable_discovery(task)
                 if discovery:
                     ch.emit("stage_summary", {
                         "stage": "discovery",
@@ -568,11 +596,12 @@ class Service:
         """Run Meaning Discovery, validate, persist (append-only lineage)."""
         tid = task["id"]
         avoid = avoid if avoid is not None else self._past_angle_labels(tid)
+        CURRENT.get().discovery_inputs = self._discovery_inputs(task, CURRENT.get().snapshot)
         self.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
                      (now(), tid))
         stage_cb = _stage_stream(emit, "discovery") if (emit and _debug_stream()) else None
         try:
-            data = self.engine.discover_meaning(
+            data = CURRENT.get().engine.discover_meaning(
                 topic=task["topic"], writing_mode=task.get("writing_mode") or "deep_narrative",
                 angle_mode=task.get("angle_mode") or "auto",
                 custom_angle=task.get("custom_angle") or "",
@@ -635,9 +664,24 @@ class Service:
             "status,data_json,created_at) VALUES(?,?,?,?,?,?,?)",
             (mid, tid, topic, selected_id, status,
              json.dumps(data, ensure_ascii=False), now()))
+        op = CURRENT.get()
+        if op:
+            self.db.exec("UPDATE meaning_discoveries SET operation_id=?,inputs_json=? WHERE id=?",
+                         (op.id, json.dumps(op.discovery_inputs, ensure_ascii=False), mid))
         row = self.db.q1("SELECT * FROM meaning_discoveries WHERE id=?", (mid,))
         row["data"] = data if status == "ready" else None
         return row
+
+    def _discovery_inputs(self, task, snapshot):
+        return {"topic": task["topic"], "writing_mode": task.get("writing_mode"),
+                "angle_mode": task.get("angle_mode"), "custom_angle": task.get("custom_angle"),
+                "config": self._config_dict(task), "engine": snapshot}
+
+    def _resumable_discovery(self, task):
+        row = self._latest_discovery(task["id"])
+        if row and json.loads(row.get("inputs_json") or "{}") == self._discovery_inputs(task, CURRENT.get().snapshot):
+            return row
+        return None
 
     def _past_angle_labels(self, tid: str) -> list[str]:
         labels = []
@@ -667,11 +711,12 @@ class Service:
         reusable when this matches the snapshot stored with it."""
         cfg = task["config"]
         return {
+            "engine": task.get("_engine_snapshot"),
             "instruction": task["instruction"],
             "dials": {k: cfg.get(k) for k in
                       ("immersion", "explicitness", "intensity")},
             "target_length": cfg.get("target_length"),
-            "expected_language": cfg.get("expected_language"),
+            "expected_language": task.get("expected_language"),
             "locks": cfg.get("locks"),
             "constraints": cfg.get("constraints"),
             "meaning_id": (meaning or {}).get("id"),
@@ -683,7 +728,7 @@ class Service:
                         meaning: dict | None = None) -> dict | None:
         """Latest plan for this task, valid only if inputs still match."""
         row = self.db.q1(
-            "SELECT data_json, inputs_json FROM engine_plans WHERE task_id=?"
+            "SELECT id, data_json, inputs_json FROM engine_plans WHERE task_id=?"
             " ORDER BY created_at DESC, rowid DESC LIMIT 1", (task["id"],))
         if not row:
             return None
@@ -695,7 +740,7 @@ class Service:
         if saved != self._gen_inputs_fingerprint(task, meaning, material):
             return None
         try:
-            return json.loads(row["data_json"])
+            return {**json.loads(row["data_json"]), "_plan_id": row["id"]}
         except json.JSONDecodeError:
             return None
 
@@ -703,7 +748,7 @@ class Service:
                        material: str | None = None,
                        plan: dict | None = None) -> dict:
         tid = task["id"]
-        ch = BROKER.channel(tid)
+        ch = CURRENT.get().channel
         emit = ch.emit
         stream = _delta_stream(ch)
         struct_cb = (_stage_stream(emit, "structure")
@@ -712,10 +757,13 @@ class Service:
             material = self._material(task)
         self.db.exec("UPDATE tasks SET status='generating',updated_at=? WHERE id=?",
                      (now(), tid))
+        plan_id = (plan or {}).get("_plan_id")
         if plan:
             on_plan = None      # resume: architect skipped, plan row exists
         else:
             def on_plan(new_plan: dict) -> None:
+                nonlocal plan_id
+                plan_id = new_id("plan")
                 # Persist the WIR the moment the Architect finishes: if the
                 # Writer or gates fail, this node is already saved and a
                 # resume can skip straight to writing.
@@ -723,13 +771,14 @@ class Service:
                     "INSERT INTO engine_plans(id,task_id,schema_version,"
                     "data_json,created_at,meaning_id,inputs_json)"
                     " VALUES(?,?,?,?,?,?,?)",
-                    (new_id("plan"), tid, "1",
+                    (plan_id, tid, "1",
                      json.dumps(new_plan, ensure_ascii=False), now(),
                      (meaning or {}).get("id"),
                      json.dumps(self._gen_inputs_fingerprint(
                          task, meaning, material), ensure_ascii=False)))
+                self.db.exec("UPDATE engine_plans SET operation_id=? WHERE id=?", (CURRENT.get().id, plan_id))
         try:
-            result = self.engine.generate(
+            result = CURRENT.get().engine.generate(
                 material=material, instruction=task["instruction"],
                 task_type=task["type"], config=self._config_dict(task),
                 meaning=(meaning or {}).get("data") if meaning else None,
@@ -758,53 +807,66 @@ class Service:
         finally:
             if struct_cb:
                 struct_cb.flush()
-        ts = now()
-        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
-        if not draft:
-            did = new_id("draft")
-            self.db.exec("INSERT INTO drafts VALUES(?,?,?,?,?)",
-                         (did, tid, None, "", ts))
-            draft = self.db.q1("SELECT * FROM drafts WHERE id=?", (did,))
-        vid = new_id("ver")
-        self.db.exec("INSERT INTO versions VALUES(?,?,?,?,?,?,?)",
-                     (vid, draft["id"], draft["current_version_id"],
-                      result.text, "generation", None, ts))
-        self.db.exec("UPDATE drafts SET current_version_id=?,working_content=?,updated_at=?"
-                     " WHERE id=?", (vid, result.text, ts, draft["id"]))
-        self.db.exec("UPDATE tasks SET status='ready',updated_at=? WHERE id=?", (ts, tid))
+        if not plan_id:
+            # Adapters may return a plan without supporting the early callback.
+            plan_id = new_id("plan")
+            self.db.exec("INSERT INTO engine_plans(id,task_id,data_json,created_at,meaning_id)"
+                         " VALUES(?,?,?,?,?)", (plan_id, tid, json.dumps(result.plan), now(),
+                                                (meaning or {}).get("id")))
+        result_id = new_id("result")
+        self.db.exec("UPDATE engine_plans SET operation_id=COALESCE(operation_id,?) WHERE id=?", (CURRENT.get().id, plan_id))
+        self.db.exec("INSERT INTO generation_results(id,task_id,engine_plan_id,content,accepted_version_id,created_at) VALUES(?,?,?,?,?,?)",
+                     (result_id, tid, plan_id, result.text, None, now()))
+        self.db.exec("UPDATE generation_results SET operation_id=? WHERE id=?", (CURRENT.get().id, result_id))
+        try:
+            with self.db.transaction() as tx:
+                draft = tx.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+                base = task.get("_base_draft")
+                if base:
+                    if not draft or draft["id"] != base["id"]:
+                        raise ApiError("STALE_BASE", "正文已改变，请重新载入。", 409, True)
+                    self._check_revision(draft, base["revision"])
+                elif draft:
+                    raise ApiError("STALE_BASE", "已有另一份初稿，请重新载入。", 409, True)
+                else:
+                    did = new_id("draft")
+                    tx.exec("INSERT INTO drafts(id,task_id,current_version_id,working_content,updated_at)"
+                            " VALUES(?,?,?,?,?)", (did, tid, None, "", now()))
+                    draft = tx.q1("SELECT * FROM drafts WHERE id=?", (did,))
+                draft = self._preserve_working_copy(tx, draft)
+                vid, revision = self._version_write(
+                    tx, draft, result.text, "generation", plan_id=plan_id)
+                tx.exec("UPDATE generation_results SET accepted_version_id=? WHERE id=?", (vid, result_id))
+                tx.exec("UPDATE tasks SET status='ready',updated_at=? WHERE id=?", (now(), tid))
+        except Exception:
+            self.db.exec("UPDATE tasks SET status='failed',updated_at=? WHERE id=?", (now(), tid))
+            emit("error", {"message": "生成结果已保留，但未替换当前正文；请重新载入后重试。"})
+            raise
         stream.flush()
         emit("done", {"version_id": vid})
         return {"task_id": tid, "draft_id": draft["id"], "version_id": vid,
-                "content": result.text, "status": "completed"}
+                "content": result.text, "status": "completed", "revision": revision}
 
     # ------------------------------------------------------------ review ----
 
+    @tracked("review")
     def review(self, tid: str) -> dict:
         task = self.get_task(tid)
-        # Review resets the task's SSE channel; running it mid-generation would
-        # orphan the live stream. Serialize against in-flight generation.
-        self._guard_not_generating(task)
         draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
         if not draft or not draft["working_content"].strip():
             raise ApiError("NO_DRAFT", "Generate a draft before review.", 409)
-        with self._reviewing_lock:
-            if tid in self._reviewing:
-                raise ApiError("REVIEWING", "Review is already running.", 409)
-            self._reviewing.add(tid)
-        try:
-            return self._review_inner(tid, task, draft)
-        finally:
-            with self._reviewing_lock:
-                self._reviewing.discard(tid)
+        CURRENT.get().bind_inputs({**self._review_config(task), "revision": draft["revision"],
+                                   "content_hash": hashlib.sha256(draft["working_content"].encode()).hexdigest()})
+        return self._review_inner(tid, task, draft)
 
     def _review_inner(self, tid: str, task: dict, draft: dict) -> dict:
-        plan = self._latest_plan(tid)
-        ch = BROKER.channel(tid, reset=True)
+        plan = self._plan_for_draft(draft)
+        ch = CURRENT.get().channel
         rev_cb = _stage_stream(ch.emit, "review") if _debug_stream() else None
         ch.emit("stage", {"stage": "review"})
         try:
             try:
-                payload = self.engine.review(
+                payload = CURRENT.get().engine.review(
                     content=draft["working_content"], material=self._material(task),
                     instruction=task["instruction"], plan=plan,
                     config=self._config_dict(task), on_delta=rev_cb)
@@ -818,26 +880,58 @@ class Service:
                                f"检查失败:{type(exc).__name__} — 请重试。",
                                500, retryable=True) from exc
             rid = new_id("rev")
-            self.db.exec("INSERT INTO reviews VALUES(?,?,?,?,?,?)",
+            self.db.exec("INSERT INTO reviews(id,draft_id,version_id,summary_json,issues_json,"
+                         "created_at,content_hash,draft_revision,config_json) VALUES(?,?,?,?,?,?,?,?,?)",
                          (rid, draft["id"], draft["current_version_id"],
                           json.dumps(payload["summary"], ensure_ascii=False),
-                          json.dumps(payload["issues"], ensure_ascii=False), now()))
+                          json.dumps(payload["issues"], ensure_ascii=False), now(),
+                          hashlib.sha256(draft["working_content"].encode()).hexdigest(),
+                          draft["revision"], json.dumps(self._review_config(task), ensure_ascii=False)))
+            self.db.exec("UPDATE reviews SET operation_id=? WHERE id=?", (CURRENT.get().id, rid))
             ch.emit("stage_summary", {"stage": "review",
                                       "text": _review_summary_text(payload)})
             ch.emit("done", {"review_id": rid})
-            return payload
+            row = self.db.q1("SELECT * FROM reviews WHERE id=?", (rid,))
+            current = self.db.q1("SELECT * FROM drafts WHERE id=?", (draft["id"],))
+            return self._review_payload(row, self.get_task(tid), current)
         finally:
             if rev_cb:
                 rev_cb.flush()
             ch.close()
 
-    def _latest_plan(self, tid: str) -> dict | None:
-        row = self.db.q1("SELECT data_json FROM engine_plans WHERE task_id=?"
-                         " ORDER BY created_at DESC LIMIT 1", (tid,))
+    def _plan_for_draft(self, draft: dict) -> dict | None:
+        row = self.db.q1("SELECT p.data_json FROM versions v JOIN engine_plans p"
+                         " ON p.id=v.engine_plan_id WHERE v.id=? AND v.draft_id=?",
+                         (draft["current_version_id"], draft["id"]))
         return json.loads(row["data_json"]) if row else None
+
+    def _current_discovery(self, tid: str) -> dict | None:
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        if not draft:
+            return self._latest_discovery(tid)
+        row = self.db.q1("SELECT m.* FROM versions v JOIN engine_plans p ON p.id=v.engine_plan_id"
+                         " JOIN meaning_discoveries m ON m.id=p.meaning_id"
+                         " WHERE v.id=? AND v.draft_id=? AND m.task_id=?",
+                         (draft["current_version_id"], draft["id"], tid))
+        if row:
+            row["data"] = json.loads(row["data_json"])
+        return row
+
+    def _review_config(self, task):
+        return {"config": self._config_dict(task), "instruction": task["instruction"],
+                "material_hash": hashlib.sha256(self._material(task).encode()).hexdigest()}
+
+    def _review_payload(self, row, task, draft):
+        digest = hashlib.sha256(draft["working_content"].encode()).hexdigest()
+        stale = (row["draft_revision"] != draft["revision"] or row["content_hash"] != digest
+                 or json.loads(row["config_json"] or "null") != self._review_config(task))
+        return {"id": row["id"], "revision": row["draft_revision"], "stale": stale,
+                "summary": json.loads(row["summary_json"]),
+                "issues": json.loads(row["issues_json"])}
 
     # ------------------------------------------------------------- patch ----
 
+    @tracked("patch")
     def propose_patch(self, tid: str, payload: dict) -> dict:
         base_version_id = payload.get("base_version_id")
         selection = payload.get("selection") or {}
@@ -845,7 +939,7 @@ class Service:
         if not instruction:
             raise ApiError("VALIDATION", "Tell me how to revise the passage.")
         ps, pe = selection.get("paragraph_start"), selection.get("paragraph_end")
-        if not (isinstance(ps, int) and isinstance(pe, int) and 1 <= ps <= pe):
+        if not (type(ps) is int and type(pe) is int and 1 <= ps <= pe):
             raise ApiError("VALIDATION", "Select a passage first.")
         task = self.get_task(tid)
         draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
@@ -855,12 +949,23 @@ class Service:
             raise ApiError("STALE_BASE",
                            "The draft changed since this revision was requested.",
                            409, retryable=True)
+        self._check_revision(draft, payload.get("expected_revision"))
+        if payload.get("review_id"):
+            row = self.db.q1("SELECT * FROM reviews WHERE id=? AND draft_id=?",
+                             (payload["review_id"], draft["id"]))
+            if not row or self._review_payload(row, task, draft)["stale"]:
+                raise ApiError("STALE_REVIEW", "正文或目标已改变，请重新检查后再修改。", 409, True)
         content = draft["working_content"]
         char_start, char_end = paragraph_span(content, ps, pe)
         before_text = content[char_start:char_end]
         locks = payload.get("locks") or task["config"].get("locks") or {}
+        CURRENT.get().bind_inputs({
+            "content_hash": hashlib.sha256(content.encode()).hexdigest(),
+            "revision": draft["revision"], "selection": selection,
+            "instruction": instruction, "locks": locks,
+            "engine": CURRENT.get().snapshot})
         try:
-            after_text = self.engine.patch(
+            after_text = CURRENT.get().engine.patch(
                 content=content, before_text=before_text,
                 instruction=instruction, locks=locks,
                 config=self._config_dict(task))
@@ -869,6 +974,8 @@ class Service:
             raise ApiError("LOCK_CONFLICT", str(exc), 422, retryable=True) from exc
         except EngineError as exc:
             raise ApiError("PATCH_FAILED", str(exc), 500, retryable=True) from exc
+        CURRENT.get().record("stage_result", "revision", data={
+            "paragraph_count": pe - ps + 1})
         pid = new_id("patch")
         ts = now()
         selection_json = json.dumps(
@@ -876,60 +983,98 @@ class Service:
              "char_start": char_start, "char_end": char_end},
             ensure_ascii=False)
         self.db.exec(
-            "INSERT INTO proposed_patches VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO proposed_patches(id,draft_id,base_version_id,selection_json,instruction,"
+            "before_text,after_text,status,locks_json,error,created_at,base_revision,task_locks_json)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, draft["id"], draft["current_version_id"], selection_json,
              instruction, before_text, after_text, "proposed",
-             json.dumps(locks, ensure_ascii=False), None, ts))
+             json.dumps(locks, ensure_ascii=False), None, ts, draft["revision"],
+             json.dumps(task["config"].get("locks") or {}, ensure_ascii=False)))
         return {"patch_id": pid, "before": before_text, "after": after_text,
                 "status": "proposed"}
 
-    def accept_patch(self, patch_id: str) -> dict:
-        patch = self.db.q1("SELECT * FROM proposed_patches WHERE id=?", (patch_id,))
-        if not patch:
-            raise ApiError("NOT_FOUND", "Patch not found.", 404)
-        if patch["status"] != "proposed":
-            raise ApiError("STALE_PATCH", "This patch was already resolved.", 409)
-        draft = self.db.q1("SELECT * FROM drafts WHERE id=?", (patch["draft_id"],))
-        if draft["current_version_id"] != patch["base_version_id"]:
-            raise ApiError("STALE_BASE",
-                           "The draft changed; review the patch against the new version.",
-                           409, retryable=True)
-        sel = json.loads(patch["selection_json"])
-        content = draft["working_content"]
-        # integrity: the recorded slice must still match byte-for-byte
-        if content[sel["char_start"]:sel["char_end"]] != patch["before_text"]:
-            raise ApiError("STALE_BASE", "The selected passage changed.", 409,
+    @staticmethod
+    def _check_revision(draft: dict, expected) -> None:
+        if type(expected) is not int or expected < 0:
+            raise ApiError("REVISION_REQUIRED", "页面需要刷新后再保存，请先保留本地输入。", 428)
+        if draft["revision"] != expected:
+            raise ApiError("STALE_BASE", "正文已在其他操作中改变；请保留本地修改并重新载入。", 409,
                            retryable=True)
-        new_content = (content[:sel["char_start"]] + patch["after_text"]
-                       + content[sel["char_end"]:])
-        ts = now()
-        vid = new_id("ver")
-        self.db.exec("INSERT INTO versions VALUES(?,?,?,?,?,?,?)",
-                     (vid, draft["id"], draft["current_version_id"], new_content,
-                      "patch", patch["instruction"], ts))
-        self.db.exec("UPDATE drafts SET current_version_id=?,working_content=?,updated_at=?"
-                     " WHERE id=?", (vid, new_content, ts, draft["id"]))
-        self.db.exec("UPDATE proposed_patches SET status='accepted' WHERE id=?",
-                     (patch_id,))
-        return {"patch_id": patch_id, "version_id": vid, "status": "accepted",
-                "content": new_content}
+
+    @staticmethod
+    def _version_write(tx, draft, content, source_type, *, instruction=None,
+                       plan_id=None, restored_from=None):
+        vid, ts = new_id("ver"), now()
+        tx.exec("INSERT INTO versions(id,draft_id,parent_version_id,content,source_type,"
+                "instruction,created_at,engine_plan_id,restore_source_version_id)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (vid, draft["id"], draft["current_version_id"], content, source_type,
+                 instruction, ts, plan_id, restored_from))
+        tx.exec("UPDATE drafts SET current_version_id=?,working_content=?,updated_at=?,"
+                "revision=revision+1 WHERE id=?",
+                (vid, content, ts, draft["id"]))
+        return vid, draft["revision"] + 1
+
+    @staticmethod
+    def _draft_plan_id(tx, draft):
+        version = tx.q1("SELECT engine_plan_id FROM versions WHERE id=?",
+                         (draft["current_version_id"],))
+        return (version or {}).get("engine_plan_id")
+
+    def _preserve_working_copy(self, tx, draft):
+        current = tx.q1("SELECT content FROM versions WHERE id=?", (draft["current_version_id"],))
+        if draft["current_version_id"] and (not current or current["content"] != draft["working_content"]):
+            vid, revision = self._version_write(
+                tx, draft, draft["working_content"], "manual_checkpoint",
+                plan_id=self._draft_plan_id(tx, draft))
+            return {**draft, "current_version_id": vid, "revision": revision}
+        return draft
+
+    def accept_patch(self, patch_id: str) -> dict:
+        with self.db.transaction() as tx:
+            patch = tx.q1("SELECT * FROM proposed_patches WHERE id=?", (patch_id,))
+            if not patch:
+                raise ApiError("NOT_FOUND", "Patch not found.", 404)
+            if patch["status"] != "proposed":
+                raise ApiError("STALE_PATCH", "This patch was already resolved.", 409)
+            draft = tx.q1("SELECT * FROM drafts WHERE id=?", (patch["draft_id"],))
+            if draft["current_version_id"] != patch["base_version_id"]:
+                raise ApiError("STALE_BASE", "正文版本已改变，请重新提出修改。", 409, True)
+            self._check_revision(draft, patch["base_revision"])
+            config = tx.q1("SELECT locks_json FROM writing_configs WHERE task_id=?", (draft["task_id"],))
+            if json.loads(patch["task_locks_json"] or "null") != json.loads(config["locks_json"] or "{}"):
+                raise ApiError("LOCK_CONFLICT", "保护项已改变，请按当前保护项重新提出修改。", 409, True)
+            sel = json.loads(patch["selection_json"])
+            content = draft["working_content"]
+            if content[sel["char_start"]:sel["char_end"]] != patch["before_text"]:
+                raise ApiError("STALE_BASE", "The selected passage changed.", 409, True)
+            new_content = (content[:sel["char_start"]] + patch["after_text"]
+                           + content[sel["char_end"]:])
+            draft = self._preserve_working_copy(tx, draft)
+            vid, revision = self._version_write(
+                tx, draft, new_content, "patch", instruction=patch["instruction"],
+                plan_id=self._draft_plan_id(tx, draft))
+            tx.exec("UPDATE proposed_patches SET status='accepted',accepted_version_id=? WHERE id=?",
+                    (vid, patch_id))
+        return {"patch_id": patch_id, "version_id": vid, "revision": revision,
+                "status": "accepted", "content": new_content}
 
     def reject_patch(self, patch_id: str) -> dict:
-        patch = self.db.q1("SELECT * FROM proposed_patches WHERE id=?", (patch_id,))
-        if not patch:
-            raise ApiError("NOT_FOUND", "Patch not found.", 404)
-        if patch["status"] != "proposed":
-            raise ApiError("STALE_PATCH", "This patch was already resolved.", 409)
-        self.db.exec("UPDATE proposed_patches SET status='rejected' WHERE id=?",
-                     (patch_id,))
-        # invariant: reject never touches the draft
+        with self.db.transaction() as tx:
+            patch = tx.q1("SELECT * FROM proposed_patches WHERE id=?", (patch_id,))
+            if not patch:
+                raise ApiError("NOT_FOUND", "Patch not found.", 404)
+            if patch["status"] != "proposed":
+                raise ApiError("STALE_PATCH", "This patch was already resolved.", 409)
+            tx.exec("UPDATE proposed_patches SET status='rejected' WHERE id=?", (patch_id,))
         return {"patch_id": patch_id, "status": "rejected"}
 
     # ---------------------------------------------------------- versions ----
 
     def list_versions(self, draft_id: str) -> list[dict]:
         rows = self.db.q(
-            "SELECT id,draft_id,parent_version_id,source_type,instruction,created_at"
+            "SELECT id,draft_id,parent_version_id,source_type,instruction,created_at,"
+            "engine_plan_id,restore_source_version_id"
             " FROM versions WHERE draft_id=? ORDER BY created_at, rowid", (draft_id,))
         for r in rows:
             r["origin"] = _ORIGINS.get(r["source_type"], r["source_type"])
@@ -942,65 +1087,64 @@ class Service:
         row["origin"] = _ORIGINS.get(row["source_type"], row["source_type"])
         return row
 
-    def restore_version(self, version_id: str) -> dict:
-        version = self.get_version(version_id)
-        draft = self.db.q1("SELECT * FROM drafts WHERE id=?", (version["draft_id"],))
-        ts = now()
-        rid = new_id("ver")
-        # restore is itself a new version: fully reversible
-        self.db.exec("INSERT INTO versions VALUES(?,?,?,?,?,?,?)",
-                     (rid, draft["id"], draft["current_version_id"],
-                      version["content"], "restore", None, ts))
-        self.db.exec("UPDATE drafts SET current_version_id=?,working_content=?,updated_at=?"
-                     " WHERE id=?", (rid, version["content"], ts, draft["id"]))
-        return {"version_id": rid, "restored_from": version_id, "content": version["content"]}
+    def restore_version(self, version_id: str, expected_revision=None) -> dict:
+        with self.db.transaction() as tx:
+            version = tx.q1("SELECT * FROM versions WHERE id=?", (version_id,))
+            if not version:
+                raise ApiError("NOT_FOUND", "Version not found.", 404)
+            draft = tx.q1("SELECT * FROM drafts WHERE id=?", (version["draft_id"],))
+            self._check_revision(draft, expected_revision)
+            draft = self._preserve_working_copy(tx, draft)
+            rid, revision = self._version_write(
+                tx, draft, version["content"], "restore",
+                plan_id=version["engine_plan_id"], restored_from=version_id)
+        return {"version_id": rid, "restored_from": version_id,
+                "content": version["content"], "revision": revision}
 
-    def checkpoint(self, tid: str) -> dict:
-        task = self.get_task(tid)
-        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
-        if not draft:
-            raise ApiError("NO_DRAFT", "Generate a draft first.", 409)
-        if draft["current_version_id"]:
-            cur = self.db.q1("SELECT content FROM versions WHERE id=?",
-                             (draft["current_version_id"],))
+    def checkpoint(self, tid: str, expected_revision=None) -> dict:
+        self.get_task(tid)
+        with self.db.transaction() as tx:
+            draft = tx.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+            if not draft:
+                raise ApiError("NO_DRAFT", "Generate a draft first.", 409)
+            self._check_revision(draft, expected_revision)
+            cur = tx.q1("SELECT content FROM versions WHERE id=?", (draft["current_version_id"],))
             if cur and cur["content"] == draft["working_content"]:
-                return {"version_id": draft["current_version_id"], "deduped": True}
-        ts = now()
-        vid = new_id("ver")
-        self.db.exec("INSERT INTO versions VALUES(?,?,?,?,?,?,?)",
-                     (vid, draft["id"], draft["current_version_id"],
-                      draft["working_content"], "manual_checkpoint", None, ts))
-        self.db.exec("UPDATE drafts SET current_version_id=?,updated_at=? WHERE id=?",
-                     (vid, ts, draft["id"]))
-        return {"version_id": vid}
+                return {"version_id": draft["current_version_id"], "revision": draft["revision"],
+                        "deduped": True}
+            vid, revision = self._version_write(
+                tx, draft, draft["working_content"], "manual_checkpoint",
+                plan_id=self._draft_plan_id(tx, draft))
+        return {"version_id": vid, "revision": revision}
 
-    # --------------------------------------------------------- autosave ----
-
-    def autosave(self, draft_id: str, working_content: str) -> dict:
-        draft = self.db.q1("SELECT * FROM drafts WHERE id=?", (draft_id,))
-        if not draft:
-            raise ApiError("NOT_FOUND", "Draft not found.", 404)
-        self.db.exec("UPDATE drafts SET working_content=?,updated_at=? WHERE id=?",
-                     (working_content, now(), draft_id))
-        # note: no version created (autosave must not spam history)
-        return {"draft_id": draft_id, "saved_at": now()}
+    def autosave(self, draft_id: str, working_content: str, expected_revision=None) -> dict:
+        with self.db.transaction() as tx:
+            draft = tx.q1("SELECT * FROM drafts WHERE id=?", (draft_id,))
+            if not draft:
+                raise ApiError("NOT_FOUND", "Draft not found.", 404)
+            self._check_revision(draft, expected_revision)
+            revision = draft["revision"]
+            if working_content != draft["working_content"]:
+                tx.exec("UPDATE drafts SET working_content=?,updated_at=?,revision=revision+1 WHERE id=?",
+                        (working_content, now(), draft_id))
+                revision += 1
+        return {"draft_id": draft_id, "saved_at": now(), "revision": revision}
 
     # ------------------------------------------------------ retry paths ----
 
+    @tracked("rediscover_angle")
     def rediscover_angle(self, tid: str, payload: dict | None = None) -> dict:
         """Try Another Angle: rerun Meaning Discovery/selection, then generate.
 
         Distinct code path from regenerate(): discovery runs again with an
         avoid-list of every previously selected angle.
         """
-        self._guard_not_generating(self.get_task(tid))
-        self._guard_not_reviewing(tid)
-        task = self._apply_param_overrides(self.get_task(tid), payload or {})
+        task = self._generation_task(tid, payload or {})
         if task.get("input_mode") != "topic_only":
             raise ApiError("VALIDATION",
                            "Angle retry is only for idea-based tasks.", 409)
         avoid = self._past_angle_labels(tid)
-        ch = BROKER.channel(tid, reset=True)
+        ch = CURRENT.get().channel
         ch.emit("stage", {"stage": "queued"})
         try:
             discovery = self.discover(task, avoid=avoid, emit=ch.emit)
@@ -1009,22 +1153,21 @@ class Service:
         finally:
             ch.close()
 
+    @tracked("regenerate")
     def regenerate(self, tid: str, payload: dict) -> dict:
         """Rewrite Same Angle: preserve the selected meaning, rerun downstream."""
-        self._guard_not_generating(self.get_task(tid))
-        self._guard_not_reviewing(tid)
-        task = self._apply_param_overrides(self.get_task(tid), payload)
+        task = self._generation_task(tid, payload)
         if task.get("input_mode") != "topic_only":
             raise ApiError("VALIDATION",
                            "This rewrite applies only to idea-based tasks.", 409)
         preserve = payload.get("preserve_angle", True)
         if preserve is not True:
             raise ApiError("VALIDATION", "preserve_angle must be true.")
-        discovery = self._latest_discovery(tid)
+        discovery = self._current_discovery(tid)
         if not discovery:
             raise ApiError("NO_MEANING",
                            "Generate once first so an angle can be preserved.", 409)
-        ch = BROKER.channel(tid, reset=True)
+        ch = CURRENT.get().channel
         ch.emit("stage", {"stage": "queued"})
         ch.emit("angle", meaning_schema.product_safe_summary(discovery["data"]))
         try:
@@ -1047,7 +1190,7 @@ class Service:
             raise ApiError("VALIDATION",
                            "先给素材或话题,我才能帮你提一个意图.", 409)
         config = self._config_dict(task)
-        meaning = self._latest_discovery(tid)
+        meaning = self._current_discovery(tid)
         avoid = [str(x).strip() for x in (payload or {}).get("avoid") or []
                  if str(x).strip()]
         try:
@@ -1129,7 +1272,7 @@ class Service:
     def meaning_summary(self, tid: str) -> dict:
         """Product-safe view of the latest discovery (4 fields; no reasoning)."""
         self.get_task(tid)  # 404 guard
-        discovery = self._latest_discovery(tid)
+        discovery = self._current_discovery(tid)
         if not discovery:
             raise ApiError("NO_MEANING", "No meaning has been discovered yet.", 404)
         return meaning_schema.product_safe_summary(discovery["data"])
@@ -1252,9 +1395,11 @@ class Service:
         draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
         if not draft:
             return {"beats": []}
-        beats = self.engine.writing_map(plan=self._latest_plan(tid),
-                                        content=draft["working_content"])
-        return {"beats": beats}
+        plan = self._plan_for_draft(draft)
+        if not plan:
+            return {"beats": [], "mapping": "unknown", "revision": draft["revision"]}
+        beats = self.engine.writing_map(plan=plan, content=draft["working_content"])
+        return {"beats": beats, "mapping": "heuristic", "revision": draft["revision"]}
 
 
 def _session_headers() -> dict[str, str]:

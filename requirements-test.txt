@@ -1,0 +1,11 @@
+# Reproducible local/CI test environment; Python 3.10+.
+-r requirements.txt
+-r requirements-workbench.txt
+# Direct versions used by the baseline; runtime requirements remain replaceable.
+pytest==9.0.2
+httpx==0.27.2
+fastapi==0.116.1
+uvicorn==0.35.0
+openai==1.55.3
+jsonschema==4.26.0
+PyYAML==6.0.2

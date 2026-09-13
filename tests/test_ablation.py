@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 
 from app.benchmark import ABLATION_PAIRS, BenchmarkRunner
@@ -192,7 +194,7 @@ def test_ablation_benchmark_end_to_end(tmp_path, tmp_config):
     path = tmp_path / "cases.jsonl"
     path.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n"
                             for c in cases), encoding="utf-8")
-    runner = BenchmarkRunner(tmp_config, client=_ablation_client())
+    runner = BenchmarkRunner(tmp_config, baselines_dir=Path(__file__).parent / "fixtures" / "baselines", client=_ablation_client())
     outcome = runner.run(
         path, baselines=("B0", "B1", "A1", "A2", "A2_GI", "A3"),
         experiment_id="ablation_test", pairs=ABLATION_PAIRS)
@@ -244,7 +246,7 @@ def test_hard_failure_cannot_win_on_quality_alone(tmp_path, tmp_config):
         "writer": [GOOD_ZH_TEXT],
         "critic": [critique_json()],
     })
-    runner = BenchmarkRunner(tmp_config, client=client)
+    runner = BenchmarkRunner(tmp_config, baselines_dir=Path(__file__).parent / "fixtures" / "baselines", client=client)
     outcome = runner.run(path, baselines=("B0", "A3"),
                          experiment_id="gate_flip", pairs=(("A3", "B0"),))
     rows = {r["baseline"]: r for r in

@@ -12,7 +12,9 @@ import time
 
 
 class Channel:
-    def __init__(self):
+    def __init__(self, operation_id=None, on_event=None):
+        self.operation_id = operation_id
+        self.on_event = on_event
         self.events: list[dict] = []
         self.closed = False
         self.cond = threading.Condition()
@@ -21,8 +23,12 @@ class Channel:
         with self.cond:
             if self.closed:
                 return
-            self.events.append({"seq": len(self.events), "kind": kind,
-                                "data": data or {}, "at": time.time()})
+            event = {"seq": len(self.events), "kind": kind,
+                     "operation_id": self.operation_id,
+                     "data": data or {}, "at": time.time()}
+            if self.on_event:
+                self.on_event(event)
+            self.events.append(event)
             self.cond.notify_all()
 
     def close(self):
@@ -36,10 +42,10 @@ class Broker:
         self._channels: dict[str, Channel] = {}
         self._lock = threading.Lock()
 
-    def channel(self, key: str, reset: bool = False) -> Channel:
+    def channel(self, key: str, reset: bool = False, operation_id=None, on_event=None) -> Channel:
         with self._lock:
             if reset or key not in self._channels:
-                self._channels[key] = Channel()
+                self._channels[key] = Channel(operation_id, on_event)
             return self._channels[key]
 
     def get(self, key: str) -> Channel | None:

@@ -22,6 +22,10 @@ Material → Intent → Generate → Read → Review → Patch → Accept
 | Product V0 Workbench | ✅ 完成(M0–M10) | `docs/narrative-writing-product-v0-spec/`, `docs/reports/PRODUCT_V0_IMPLEMENTATION_REPORT.md` |
 | Product V0.1 Quick Write | ✅ 完成(Q0–Q9) | `docs/narrative-writing-product-v0.1-quick-write-spec/`, `docs/reports/QUICK_WRITE_V0_1_IMPLEMENTATION_REPORT.md` |
 
+本轮稳定性修复与剩余验收见 [实施报告](docs/reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md)，持续进度见 [开发日志](docs/reports/DEVELOPMENT_PROGRESS.md)。
+
+产品真实调用：Quick Write 先发现意义并评审命题，再生成结构与正文；检查是单独动作。旧稿入口直接导入原文后检查和局部修订。操作、阶段、模型调用耗时与可取得的 usage 已可追溯；固定真实模型 12 例工程评估已经完成，人工质量评分仍待填写，详见 [真实模型评估报告](docs/reports/REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。
+
 ## 目录结构
 
 ```text
@@ -32,7 +36,7 @@ schemas/        WIR / critique / outline JSON Schema
 docs/           引擎规范 00-18 + 产品规范 narrative-writing-product-v0-spec/
 docs/reports/   实现/消融/运行报告(V1、V1.1、V1.2、Product V0/V0.1)
 benchmarks/     测试用例、消融结果、盲评表导出/导入
-tests/          pytest(230 项:引擎 + 产品 + Quick Write + Settings)
+tests/          pytest + 浏览器回归(引擎、产品、Quick Write、提交安全与运行恢复)
 runs/           每次引擎运行的全量中间产物
 ui/             运行观察面板(Flask,8551,非产品 UI)
 ```
@@ -51,7 +55,7 @@ pip install -r requirements.txt -r requirements-workbench.txt
 `WORKBENCH_IDLE_TIMEOUT` 分钟可调,0 关闭)。
 
 切换到**真实引擎**:在浏览器打开的 Settings 页填 Base URL / API Key / Model
-(选服务商会自动填入端点与本机可用模型),或手动:
+(选服务商填入端点；模型清单供参考，也可手填别名),或手动:
 
 ```bash
 cp workbench/settings.example.json workbench/settings.json
@@ -67,7 +71,7 @@ Draft → 点选段落 → Revise/Shorter… → Generate Patch → Before/After
 Accept(生成版本)→ Versions → Restore。
 
 硬规则:**AI proposes, user accepts** —— 补丁在 Accept 前绝不改动草稿;
-Reject 不留痕;生成/补丁失败不破坏已有正文;Restore 自身可逆;
+Reject 保留提案记录、不创建正文版本;生成/补丁失败不破坏已有正文;Restore 自身可逆;
 autosave 不产生版本。UI 不暴露 WIR/Critic/Patcher。
 
 ### 2. 引擎 CLI
@@ -105,10 +109,18 @@ H4-confirm(GI 增益)、H5(Critic 应作用于 GI 草稿)。盲评结果导入�
 ## 测试
 
 ```bash
-python3 -m pytest tests/ -q        # 270 passed
+python3 -m pip install -r requirements-test.txt
+python3 scripts/check_clean.py    # 从源码副本执行，不依赖私人数据
+python3 scripts/mock_server.py    # 独立临时 mock 服务，随机端口
+# 浏览器套件的安装与运行见 tests/browser/README.md
+python3 scripts/evaluate_product.py --output .scratch/product-evaluation-new
 ```
 
+浏览器与评估均使用合成数据，mock 通过不代表真实写作质量已验证。当前部署为单服务进程；旧库升级前自动创建一致性备份，迁移与回退规则见 [数据/API 契约](docs/planning/STABILIZATION_API_AND_DATA.md)。
+
 ## 阅读顺序
+
+**当前情况与开发规划**:[规划总入口](docs/planning/README.md)（现状检查、稳定性开发计划、产品方向、新功能开发计划；2026-09-13）
 
 **想了解产品是什么**:`docs/PRODUCT_INTRODUCTION.md`(中文,面向读者)
 **产品层**:`docs/narrative-writing-product-v0-spec/README.md` →
