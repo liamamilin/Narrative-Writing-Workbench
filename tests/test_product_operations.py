@@ -170,7 +170,7 @@ def test_migration_failure_rolls_back_and_consistent_backup_restores(tmp_path, m
     with sqlite3.connect(path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
         assert conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall() == [("preserved",)]
-    backup = next(tmp_path.glob("*.pre-v3-*.sqlite3"))
+    backup = next(tmp_path.glob("*.pre-v4-*.sqlite3"))
     restored = tmp_path / "restored.db"
     with sqlite3.connect(backup) as source, sqlite3.connect(restored) as target:
         source.backup(target)
@@ -178,7 +178,7 @@ def test_migration_failure_rolls_back_and_consistent_backup_restores(tmp_path, m
         assert target.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     monkeypatch.setattr(Database, "_migrate", original)
     upgraded = Database(path)
-    assert upgraded.q1("PRAGMA user_version")["user_version"] == 3
+    assert upgraded.q1("PRAGMA user_version")["user_version"] == 4
     assert upgraded.q1("SELECT * FROM preserved")["value"] == "original"
 
 

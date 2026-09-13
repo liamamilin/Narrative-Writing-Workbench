@@ -209,6 +209,20 @@ def paragraph_span(content: str, start: int, end: int) -> tuple[int, int]:
     return char_start, char_end
 
 
+def content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def paragraph_range_for_span(content: str, char_start: int,
+                             char_end: int) -> tuple[int, int]:
+    """Return the 1-based paragraphs touched by an exact character span."""
+    if not (0 <= char_start < char_end <= len(content)):
+        raise ApiError("PRESERVED_TEXT_CONFLICT", "保留片段的位置已失效。", 409, True)
+    start = content[:char_start].count("\n\n") + 1
+    end = content[:max(char_start, char_end - 1)].count("\n\n") + 1
+    return start, end
+
+
 class Service:
     def __init__(self, db: Database | None = None, engine=None,
                  restore_root: str | Path | None = None):
@@ -406,7 +420,8 @@ class Service:
             task["pending_patches"] = [
                 {"patch_id": p["id"], "instruction": p["instruction"],
                  "before": p["before_text"] or "", "after": p["after_text"] or "",
-                 "selection": json.loads(p["selection_json"])}
+                 "selection": json.loads(p["selection_json"]),
+                 "revision_item_id": p.get("revision_item_id")}
                 for p in self.db.q(
                     "SELECT * FROM proposed_patches WHERE draft_id=? AND status='proposed' "
                     "ORDER BY created_at,rowid",
@@ -524,6 +539,10 @@ class Service:
                      merged["target_length"],
                      json.dumps(merged["locks"] or {}, ensure_ascii=False),
                      json.dumps(merged["constraints"] or {}, ensure_ascii=False), tid))
+            if any(key in payload for key in ("instruction", "expected_language", "config")):
+                draft = tx.q1("SELECT id FROM drafts WHERE task_id=?", (tid,))
+                if draft:
+                    self._invalidate_revision_context(tx, draft["id"], preserve=False)
         return self.get_task(tid)
 
     def add_task_source(self, tid: str, title: str, content: str) -> dict:
@@ -539,6 +558,10 @@ class Service:
             self._record_mode_transition(tid, "topic_only", "source_grounded")
             self.db.exec("UPDATE tasks SET input_mode='source_grounded',"
                          "updated_at=? WHERE id=?", (now(), tid))
+        draft = self.db.q1("SELECT id FROM drafts WHERE task_id=?", (tid,))
+        if draft:
+            with self.db.transaction() as tx:
+                self._invalidate_revision_context(tx, draft["id"], preserve=False)
         return src
 
     def _record_mode_transition(self, tid, frm, to):
@@ -1051,6 +1074,7 @@ class Service:
                 draft = self._preserve_working_copy(tx, draft)
                 vid, revision = self._version_write(
                     tx, draft, result.text, "generation", plan_id=plan_id)
+                self._invalidate_revision_context(tx, draft["id"], preserve=True)
                 tx.exec("UPDATE generation_results SET accepted_version_id=? WHERE id=?", (vid, result_id))
                 tx.exec("UPDATE tasks SET status='ready',updated_at=? WHERE id=?", (now(), tid))
         except Exception:
@@ -1094,15 +1118,62 @@ class Service:
                 raise ApiError("REVIEW_FAILED",
                                f"检查失败:{type(exc).__name__} — 请重试。",
                                500, retryable=True) from exc
-            rid = new_id("rev")
-            self.db.exec("INSERT INTO reviews(id,draft_id,version_id,summary_json,issues_json,"
-                         "created_at,content_hash,draft_revision,config_json) VALUES(?,?,?,?,?,?,?,?,?)",
-                         (rid, draft["id"], draft["current_version_id"],
-                          json.dumps(payload["summary"], ensure_ascii=False),
-                          json.dumps(payload["issues"], ensure_ascii=False), now(),
-                          hashlib.sha256(draft["working_content"].encode()).hexdigest(),
-                          draft["revision"], json.dumps(self._review_config(task), ensure_ascii=False)))
-            self.db.exec("UPDATE reviews SET operation_id=? WHERE id=?", (CURRENT.get().id, rid))
+            rid, ts = new_id("rev"), now()
+            digest = content_hash(draft["working_content"])
+            normalized = []
+            with self.db.transaction() as tx:
+                current = tx.q1("SELECT * FROM drafts WHERE id=?", (draft["id"],))
+                if (not current or current["revision"] != draft["revision"]
+                        or content_hash(current["working_content"]) != digest):
+                    raise ApiError("STALE_BASE", "正文在检查期间发生了变化，请重新检查。",
+                                   409, True)
+                self._invalidate_revision_context(tx, draft["id"], preserve=False)
+                for index, raw in enumerate(payload.get("issues") or [], 1):
+                    issue = dict(raw)
+                    issue_id = str(issue.get("id") or f"issue_{index}")
+                    loc = issue.get("location") or {}
+                    ps, pe = loc.get("paragraph_start"), loc.get("paragraph_end")
+                    try:
+                        if type(ps) is not int or type(pe) is not int:
+                            raise ApiError("INVALID_SELECTION", "Invalid review location.")
+                        char_start, char_end = paragraph_span(
+                            draft["working_content"], ps, pe)
+                    except ApiError:
+                        issue["fixable"] = False
+                        normalized.append(issue)
+                        continue
+                    item_id = new_id("item")
+                    quote = draft["working_content"][char_start:char_end]
+                    severity = issue.get("severity")
+                    if severity not in {"fatal", "major", "moderate", "minor"}:
+                        severity = "moderate"
+                    goal = str(issue.get("goal") or issue.get("action")
+                               or issue.get("message") or "Revise this passage.")
+                    effect = str(issue.get("effect") or "")
+                    message = str(issue.get("message") or goal)
+                    tx.exec(
+                        "INSERT INTO revision_items(id,review_id,draft_id,issue_id,base_revision,"
+                        "content_hash,paragraph_start,paragraph_end,char_start,char_end,quote,type,"
+                        "severity,message,effect,goal,status,created_at,updated_at)"
+                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'open',?,?)",
+                        (item_id, rid, draft["id"], issue_id, draft["revision"], digest,
+                         ps, pe, char_start, char_end, quote,
+                         str(issue.get("type") or "issue"), severity, message, effect,
+                         goal, ts, ts))
+                    issue.update({"id": issue_id, "revision_item_id": item_id,
+                                  "severity": severity, "effect": effect, "goal": goal,
+                                  "quote": quote, "status": "open", "fixable": True})
+                    normalized.append(issue)
+                tx.exec(
+                    "INSERT INTO reviews(id,draft_id,version_id,summary_json,issues_json,"
+                    "created_at,content_hash,draft_revision,config_json,operation_id)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (rid, draft["id"], draft["current_version_id"],
+                     json.dumps(payload["summary"], ensure_ascii=False),
+                     json.dumps(normalized, ensure_ascii=False), ts, digest,
+                     draft["revision"], json.dumps(self._review_config(task), ensure_ascii=False),
+                     CURRENT.get().id))
+            payload = {**payload, "issues": normalized}
             ch.emit("stage_summary", {"stage": "review",
                                       "text": _review_summary_text(payload)})
             ch.emit("done", {"review_id": rid})
@@ -1137,12 +1208,167 @@ class Service:
                 "material_hash": hashlib.sha256(self._material(task).encode()).hexdigest()}
 
     def _review_payload(self, row, task, draft):
-        digest = hashlib.sha256(draft["working_content"].encode()).hexdigest()
+        digest = content_hash(draft["working_content"])
         stale = (row["draft_revision"] != draft["revision"] or row["content_hash"] != digest
                  or json.loads(row["config_json"] or "null") != self._review_config(task))
+        items = {item["issue_id"]: item for item in self.db.q(
+            "SELECT * FROM revision_items WHERE review_id=? ORDER BY rowid", (row["id"],))}
+        issues = []
+        for raw in json.loads(row["issues_json"]):
+            issue = dict(raw)
+            item = items.get(issue.get("id"))
+            if item:
+                status = "stale" if stale and item["status"] in ("open", "proposed") else item["status"]
+                issue.update({
+                    "revision_item_id": item["id"], "status": status,
+                    "severity": item["severity"], "message": item["message"],
+                    "effect": item["effect"], "goal": item["goal"],
+                    "quote": item["quote"],
+                    "location": {"paragraph_start": item["paragraph_start"],
+                                 "paragraph_end": item["paragraph_end"]},
+                    "fixable": status == "open",
+                })
+            issues.append(issue)
+        priority = {"fatal": 0, "major": 1, "moderate": 2, "minor": 3}
+        issues.sort(key=lambda issue: (
+            0 if issue.get("status") in ("open", "proposed") else 1,
+            priority.get(issue.get("severity"), 9),
+            (issue.get("location") or {}).get("paragraph_start", 10**9)))
+        total = len(issues)
         return {"id": row["id"], "revision": row["draft_revision"], "stale": stale,
                 "summary": json.loads(row["summary_json"]),
-                "issues": json.loads(row["issues_json"])}
+                "issues": issues[:3], "total_issue_count": total,
+                "remaining_issue_count": sum(
+                    issue.get("status") in ("open", "proposed") for issue in issues)}
+
+    def revision_worklist(self, tid: str) -> dict:
+        task = self.get_task(tid)
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        if not draft:
+            raise ApiError("NO_DRAFT", "Generate a draft before review.", 409)
+        row = self.db.q1(
+            "SELECT * FROM reviews WHERE draft_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            (draft["id"],))
+        if not row:
+            return {"review_id": None, "revision": draft["revision"], "stale": False,
+                    "items": []}
+        review = self._review_payload(row, task, draft)
+        return {"review_id": row["id"], "revision": row["draft_revision"],
+                "stale": review["stale"], "items": review["issues"],
+                "total_issue_count": review["total_issue_count"],
+                "remaining_issue_count": review["remaining_issue_count"]}
+
+    @staticmethod
+    def _invalidate_revision_context(tx, draft_id: str, *, preserve: bool) -> None:
+        ts = now()
+        tx.exec("UPDATE revision_items SET status='stale',updated_at=? WHERE draft_id=? "
+                "AND status IN ('open','proposed')", (ts, draft_id))
+        if preserve:
+            tx.exec("UPDATE preserved_spans SET status='stale',updated_at=? WHERE draft_id=? "
+                    "AND status='active'", (ts, draft_id))
+
+    def list_preserved_spans(self, tid: str) -> dict:
+        self.get_task(tid)
+        draft = self.db.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+        if not draft:
+            return {"draft_id": None, "revision": None, "spans": []}
+        digest = content_hash(draft["working_content"])
+        spans = self.db.q(
+            "SELECT * FROM preserved_spans WHERE draft_id=? ORDER BY char_start,rowid",
+            (draft["id"],))
+        for span in spans:
+            valid = (span["status"] == "active"
+                     and span["base_revision"] == draft["revision"]
+                     and span["content_hash"] == digest
+                     and draft["working_content"][span["char_start"]:span["char_end"]]
+                     == span["quote"])
+            if not valid and span["status"] == "active":
+                span["status"] = "stale"
+        return {"draft_id": draft["id"], "revision": draft["revision"], "spans": spans}
+
+    def create_preserved_span(self, tid: str, payload: dict) -> dict:
+        selection = payload.get("selection") or {}
+        ps, pe = selection.get("paragraph_start"), selection.get("paragraph_end")
+        if not (type(ps) is int and type(pe) is int and 1 <= ps <= pe):
+            raise ApiError("VALIDATION", "Select one or more complete paragraphs first.")
+        self.get_task(tid)
+        with self.db.transaction() as tx:
+            draft = tx.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+            if not draft:
+                raise ApiError("NO_DRAFT", "Generate a draft first.", 409)
+            self._check_revision(draft, payload.get("expected_revision"))
+            char_start, char_end = paragraph_span(draft["working_content"], ps, pe)
+            quote = draft["working_content"][char_start:char_end]
+            if not quote.strip():
+                raise ApiError("VALIDATION", "An empty paragraph cannot be preserved.")
+            existing = tx.q1(
+                "SELECT * FROM preserved_spans WHERE draft_id=? AND status='active' "
+                "AND char_start=? AND char_end=? AND quote=?",
+                (draft["id"], char_start, char_end, quote))
+            if existing:
+                return {**existing, "deduped": True}
+            sid, ts = new_id("keep"), now()
+            digest = content_hash(draft["working_content"])
+            tx.exec(
+                "INSERT INTO preserved_spans(id,draft_id,base_revision,content_hash,"
+                "paragraph_start,paragraph_end,char_start,char_end,quote,status,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,'active',?,?)",
+                (sid, draft["id"], draft["revision"], digest, ps, pe,
+                 char_start, char_end, quote, ts, ts))
+            return tx.q1("SELECT * FROM preserved_spans WHERE id=?", (sid,))
+
+    def delete_preserved_span(self, span_id: str) -> dict:
+        with self.db.transaction() as tx:
+            span = tx.q1("SELECT * FROM preserved_spans WHERE id=?", (span_id,))
+            if not span:
+                raise ApiError("NOT_FOUND", "Preserved passage not found.", 404)
+            tx.exec("DELETE FROM preserved_spans WHERE id=?", (span_id,))
+        return {"preserved_span_id": span_id, "status": "removed"}
+
+    @staticmethod
+    def _rebase_preserved_spans(spans: list[dict], content: str,
+                                char_start: int, char_end: int,
+                                after_text: str, revision: int) -> tuple[str, list[tuple[dict, int, int]]]:
+        candidate = content[:char_start] + after_text + content[char_end:]
+        delta = len(after_text) - (char_end - char_start)
+        rebased = []
+        digest = content_hash(content)
+        for span in spans:
+            if (span["status"] != "active" or span["base_revision"] != revision
+                    or span["content_hash"] != digest
+                    or content[span["char_start"]:span["char_end"]] != span["quote"]):
+                raise ApiError("PRESERVED_TEXT_CONFLICT",
+                               "保留片段已失效，请重新载入后再修改。", 409, True)
+            if span["char_end"] <= char_start:
+                new_start = span["char_start"]
+            elif span["char_start"] >= char_end:
+                new_start = span["char_start"] + delta
+            else:
+                occurrences = [m.start() for m in re.finditer(
+                    re.escape(span["quote"]), candidate)]
+                if len(occurrences) != 1:
+                    raise ApiError("PRESERVED_TEXT_CONFLICT",
+                                   "这次修改会改变已保留的原文，请先调整选区或取消保留。",
+                                   422, True)
+                new_start = occurrences[0]
+            new_end = new_start + len(span["quote"])
+            if candidate[new_start:new_end] != span["quote"]:
+                raise ApiError("PRESERVED_TEXT_CONFLICT",
+                               "这次修改会改变已保留的原文，请先调整选区或取消保留。",
+                               422, True)
+            rebased.append((span, new_start, new_end))
+        return candidate, rebased
+
+    def dismiss_revision_item(self, item_id: str) -> dict:
+        with self.db.transaction() as tx:
+            item = tx.q1("SELECT * FROM revision_items WHERE id=?", (item_id,))
+            if not item:
+                raise ApiError("NOT_FOUND", "Revision item not found.", 404)
+            if item["status"] != "open":
+                raise ApiError("STALE_REVISION_ITEM", "This revision item is no longer open.", 409)
+            tx.exec("UPDATE revision_items SET status='dismissed',updated_at=? WHERE id=?",
+                    (now(), item_id))
+        return {"revision_item_id": item_id, "status": "dismissed"}
 
     # ------------------------------------------------------------- patch ----
 
@@ -1150,9 +1376,6 @@ class Service:
     def propose_patch(self, tid: str, payload: dict) -> dict:
         base_version_id = payload.get("base_version_id")
         selection = payload.get("selection") or {}
-        instruction = (payload.get("instruction") or "").strip()
-        if not instruction:
-            raise ApiError("VALIDATION", "Tell me how to revise the passage.")
         ps, pe = selection.get("paragraph_start"), selection.get("paragraph_end")
         if not (type(ps) is int and type(pe) is int and 1 <= ps <= pe):
             raise ApiError("VALIDATION", "Select a passage first.")
@@ -1165,6 +1388,29 @@ class Service:
                            "The draft changed since this revision was requested.",
                            409, retryable=True)
         self._check_revision(draft, payload.get("expected_revision"))
+        revision_item = None
+        revision_item_id = payload.get("revision_item_id")
+        if revision_item_id:
+            revision_item = self.db.q1(
+                "SELECT * FROM revision_items WHERE id=? AND draft_id=?",
+                (revision_item_id, draft["id"]))
+            if not revision_item:
+                raise ApiError("NOT_FOUND", "Revision item not found.", 404)
+            if revision_item["status"] != "open":
+                raise ApiError("STALE_REVISION_ITEM", "This revision item is no longer open.", 409)
+            if payload.get("review_id") and payload["review_id"] != revision_item["review_id"]:
+                raise ApiError("WRONG_REVIEW", "Revision item belongs to another review.", 409)
+            if (ps, pe) != (revision_item["paragraph_start"], revision_item["paragraph_end"]):
+                raise ApiError("INVALID_SELECTION", "Use the passage anchored by this revision item.")
+            if self.db.q1(
+                    "SELECT id FROM revision_items WHERE review_id=? AND status='proposed' LIMIT 1",
+                    (revision_item["review_id"],)):
+                raise ApiError("PATCH_ALREADY_PROPOSED",
+                               "Resolve the current proposal before starting another work item.", 409)
+        instruction = (payload.get("instruction")
+                       or (revision_item or {}).get("goal") or "").strip()
+        if not instruction:
+            raise ApiError("VALIDATION", "Tell me how to revise the passage.")
         if payload.get("review_id"):
             row = self.db.q1("SELECT * FROM reviews WHERE id=? AND draft_id=?",
                              (payload["review_id"], draft["id"]))
@@ -1173,6 +1419,15 @@ class Service:
         content = draft["working_content"]
         char_start, char_end = paragraph_span(content, ps, pe)
         before_text = content[char_start:char_end]
+        digest = content_hash(content)
+        if revision_item and (
+                revision_item["base_revision"] != draft["revision"]
+                or revision_item["content_hash"] != digest
+                or revision_item["char_start"] != char_start
+                or revision_item["char_end"] != char_end
+                or revision_item["quote"] != before_text):
+            raise ApiError("STALE_REVISION_ITEM",
+                           "The anchored passage changed; run review again.", 409, True)
         locks = payload.get("locks") or task["config"].get("locks") or {}
         CURRENT.get().bind_inputs({
             "content_hash": hashlib.sha256(content.encode()).hexdigest(),
@@ -1189,6 +1444,11 @@ class Service:
             raise ApiError("LOCK_CONFLICT", str(exc), 422, retryable=True) from exc
         except EngineError as exc:
             raise ApiError("PATCH_FAILED", str(exc), 500, retryable=True) from exc
+        active_spans = self.db.q(
+            "SELECT * FROM preserved_spans WHERE draft_id=? AND status='active' ORDER BY rowid",
+            (draft["id"],))
+        self._rebase_preserved_spans(
+            active_spans, content, char_start, char_end, after_text, draft["revision"])
         CURRENT.get().record("stage_result", "revision", data={
             "paragraph_count": pe - ps + 1})
         pid = new_id("patch")
@@ -1197,16 +1457,42 @@ class Service:
             {"paragraph_start": ps, "paragraph_end": pe,
              "char_start": char_start, "char_end": char_end},
             ensure_ascii=False)
-        self.db.exec(
-            "INSERT INTO proposed_patches(id,draft_id,base_version_id,selection_json,instruction,"
-            "before_text,after_text,status,locks_json,error,created_at,base_revision,task_locks_json)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (pid, draft["id"], draft["current_version_id"], selection_json,
-             instruction, before_text, after_text, "proposed",
-             json.dumps(locks, ensure_ascii=False), None, ts, draft["revision"],
-             json.dumps(task["config"].get("locks") or {}, ensure_ascii=False)))
+        with self.db.transaction() as tx:
+            current = tx.q1("SELECT * FROM drafts WHERE id=?", (draft["id"],))
+            if (not current or current["revision"] != draft["revision"]
+                    or current["current_version_id"] != draft["current_version_id"]
+                    or current["working_content"] != content):
+                raise ApiError("STALE_BASE", "正文已改变，请重新提出修改。", 409, True)
+            spans = tx.q(
+                "SELECT * FROM preserved_spans WHERE draft_id=? AND status='active' ORDER BY rowid",
+                (draft["id"],))
+            self._rebase_preserved_spans(
+                spans, content, char_start, char_end, after_text, draft["revision"])
+            if revision_item_id:
+                live = tx.q1("SELECT * FROM revision_items WHERE id=?", (revision_item_id,))
+                if (not live or live["status"] != "open"
+                        or live["base_revision"] != draft["revision"]
+                        or live["content_hash"] != digest):
+                    raise ApiError("STALE_REVISION_ITEM",
+                                   "This revision item changed; reload and try again.", 409, True)
+                if tx.q1("SELECT id FROM revision_items WHERE review_id=? "
+                         "AND status='proposed' LIMIT 1", (live["review_id"],)):
+                    raise ApiError("PATCH_ALREADY_PROPOSED",
+                                   "Resolve the current proposal before starting another work item.", 409)
+            tx.exec(
+                "INSERT INTO proposed_patches(id,draft_id,base_version_id,selection_json,instruction,"
+                "before_text,after_text,status,locks_json,error,created_at,base_revision,"
+                "task_locks_json,revision_item_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (pid, draft["id"], draft["current_version_id"], selection_json,
+                 instruction, before_text, after_text, "proposed",
+                 json.dumps(locks, ensure_ascii=False), None, ts, draft["revision"],
+                 json.dumps(task["config"].get("locks") or {}, ensure_ascii=False),
+                 revision_item_id))
+            if revision_item_id:
+                tx.exec("UPDATE revision_items SET status='proposed',patch_id=?,updated_at=? "
+                        "WHERE id=?", (pid, ts, revision_item_id))
         return {"patch_id": pid, "before": before_text, "after": after_text,
-                "status": "proposed"}
+                "status": "proposed", "revision_item_id": revision_item_id}
 
     @staticmethod
     def _check_revision(draft: dict, expected) -> None:
@@ -1252,6 +1538,14 @@ class Service:
                 raise ApiError("NOT_FOUND", "Patch not found.", 404)
             if patch["status"] != "proposed":
                 raise ApiError("STALE_PATCH", "This patch was already resolved.", 409)
+            item = None
+            if patch.get("revision_item_id"):
+                item = tx.q1("SELECT * FROM revision_items WHERE id=?",
+                              (patch["revision_item_id"],))
+                if (not item or item["status"] != "proposed"
+                        or item["patch_id"] != patch_id):
+                    raise ApiError("STALE_REVISION_ITEM",
+                                   "This work item is no longer current.", 409, True)
             draft = tx.q1("SELECT * FROM drafts WHERE id=?", (patch["draft_id"],))
             if draft["current_version_id"] != patch["base_version_id"]:
                 raise ApiError("STALE_BASE", "正文版本已改变，请重新提出修改。", 409, True)
@@ -1263,14 +1557,34 @@ class Service:
             content = draft["working_content"]
             if content[sel["char_start"]:sel["char_end"]] != patch["before_text"]:
                 raise ApiError("STALE_BASE", "The selected passage changed.", 409, True)
-            new_content = (content[:sel["char_start"]] + patch["after_text"]
-                           + content[sel["char_end"]:])
+            spans = tx.q(
+                "SELECT * FROM preserved_spans WHERE draft_id=? AND status='active' ORDER BY rowid",
+                (draft["id"],))
+            new_content, rebased = self._rebase_preserved_spans(
+                spans, content, sel["char_start"], sel["char_end"],
+                patch["after_text"], draft["revision"])
             draft = self._preserve_working_copy(tx, draft)
             vid, revision = self._version_write(
                 tx, draft, new_content, "patch", instruction=patch["instruction"],
                 plan_id=self._draft_plan_id(tx, draft))
+            digest = content_hash(new_content)
+            for span, new_start, new_end in rebased:
+                ps, pe = paragraph_range_for_span(new_content, new_start, new_end)
+                tx.exec(
+                    "UPDATE preserved_spans SET base_revision=?,content_hash=?,paragraph_start=?,"
+                    "paragraph_end=?,char_start=?,char_end=?,updated_at=? WHERE id=?",
+                    (revision, digest, ps, pe, new_start, new_end, now(), span["id"]))
             tx.exec("UPDATE proposed_patches SET status='accepted',accepted_version_id=? WHERE id=?",
                     (vid, patch_id))
+            if item:
+                ts = now()
+                tx.exec("UPDATE revision_items SET status='resolved',updated_at=? WHERE id=?",
+                        (ts, item["id"]))
+                tx.exec("UPDATE revision_items SET status='stale',updated_at=? WHERE review_id=? "
+                        "AND id<>? AND status IN ('open','proposed')",
+                        (ts, item["review_id"], item["id"]))
+            else:
+                self._invalidate_revision_context(tx, draft["id"], preserve=False)
         return {"patch_id": patch_id, "version_id": vid, "revision": revision,
                 "status": "accepted", "content": new_content}
 
@@ -1282,6 +1596,10 @@ class Service:
             if patch["status"] != "proposed":
                 raise ApiError("STALE_PATCH", "This patch was already resolved.", 409)
             tx.exec("UPDATE proposed_patches SET status='rejected' WHERE id=?", (patch_id,))
+            if patch.get("revision_item_id"):
+                tx.exec("UPDATE revision_items SET status='open',patch_id=NULL,updated_at=? "
+                        "WHERE id=? AND status='proposed' AND patch_id=?",
+                        (now(), patch["revision_item_id"], patch_id))
         return {"patch_id": patch_id, "status": "rejected"}
 
     # ---------------------------------------------------------- versions ----
@@ -1366,6 +1684,7 @@ class Service:
             rid, revision = self._version_write(
                 tx, draft, version["content"], "restore",
                 plan_id=version["engine_plan_id"], restored_from=version_id)
+            self._invalidate_revision_context(tx, draft["id"], preserve=True)
         return {"version_id": rid, "restored_from": version_id,
                 "content": version["content"], "revision": revision}
 
@@ -1395,6 +1714,7 @@ class Service:
             if working_content != draft["working_content"]:
                 tx.exec("UPDATE drafts SET working_content=?,updated_at=?,revision=revision+1 WHERE id=?",
                         (working_content, now(), draft_id))
+                self._invalidate_revision_context(tx, draft_id, preserve=True)
                 revision += 1
         return {"draft_id": draft_id, "saved_at": now(), "revision": revision}
 

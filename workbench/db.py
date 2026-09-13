@@ -12,7 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "workbench" / "workbench.db"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects(
@@ -68,11 +68,32 @@ CREATE TABLE IF NOT EXISTS proposed_patches(
   selection_json TEXT NOT NULL, instruction TEXT NOT NULL,
   before_text TEXT NOT NULL, after_text TEXT, status TEXT NOT NULL
     CHECK(status IN ('proposed','accepted','rejected')),
-  locks_json TEXT DEFAULT '{}', error TEXT, created_at TEXT NOT NULL);
+  locks_json TEXT DEFAULT '{}', error TEXT, created_at TEXT NOT NULL,
+  base_revision INTEGER, accepted_version_id TEXT, task_locks_json TEXT,
+  revision_item_id TEXT);
 CREATE TABLE IF NOT EXISTS reviews(
   id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, version_id TEXT NOT NULL,
   summary_json TEXT NOT NULL, issues_json TEXT NOT NULL,
   created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS revision_items(
+  id TEXT PRIMARY KEY, review_id TEXT NOT NULL, draft_id TEXT NOT NULL,
+  issue_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, paragraph_start INTEGER NOT NULL,
+  paragraph_end INTEGER NOT NULL, char_start INTEGER NOT NULL,
+  char_end INTEGER NOT NULL, quote TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'issue', severity TEXT NOT NULL DEFAULT 'moderate',
+  message TEXT NOT NULL, effect TEXT NOT NULL DEFAULT '', goal TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK(status IN ('open','proposed','resolved','dismissed','stale')),
+  patch_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(review_id, issue_id));
+CREATE TABLE IF NOT EXISTS preserved_spans(
+  id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL, paragraph_start INTEGER NOT NULL,
+  paragraph_end INTEGER NOT NULL, char_start INTEGER NOT NULL,
+  char_end INTEGER NOT NULL, quote TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','stale')),
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS writing_operations(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
   process_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','interrupted')),
@@ -89,6 +110,8 @@ CREATE TABLE IF NOT EXISTS operation_records(
   name TEXT NOT NULL, status TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}',
   elapsed_ms INTEGER NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS operation_records_operation ON operation_records(operation_id);
+CREATE INDEX IF NOT EXISTS revision_items_review ON revision_items(review_id);
+CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id);
 CREATE TABLE IF NOT EXISTS generation_results(
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL, engine_plan_id TEXT,
   content TEXT NOT NULL, accepted_version_id TEXT, created_at TEXT NOT NULL);
@@ -130,9 +153,9 @@ class Database:
             if version > SCHEMA_VERSION:
                 self.conn.close()
                 raise RuntimeError("Database schema is newer than this Workbench; use a compatible version.")
-            if version < 3 and self.path != ":memory:" and self.conn.execute(
+            if version < SCHEMA_VERSION and self.path != ":memory:" and self.conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
-                self.migration_backup = f"{self.path}.pre-v3-{new_id('backup')}.sqlite3"
+                self.migration_backup = f"{self.path}.pre-v4-{new_id('backup')}.sqlite3"
                 with sqlite3.connect(self.migration_backup) as backup:
                     self.conn.backup(backup)
             try:
@@ -178,7 +201,8 @@ class Database:
                          ("restore_source_version_id", "TEXT")],
             "proposed_patches": [("base_revision", "INTEGER"),
                                  ("accepted_version_id", "TEXT"),
-                                 ("task_locks_json", "TEXT")],
+                                 ("task_locks_json", "TEXT"),
+                                 ("revision_item_id", "TEXT")],
             "reviews": [("content_hash", "TEXT"), ("draft_revision", "INTEGER"),
                         ("config_json", "TEXT"), ("operation_id", "TEXT")],
         }
@@ -204,6 +228,8 @@ class Database:
                               (vid, did, original["content"], "恢复旧稿入口的原稿", at))
             self.conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (original["id"],))
         self.conn.execute("CREATE INDEX IF NOT EXISTS versions_plan ON versions(engine_plan_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS revision_items_review ON revision_items(review_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS preserved_spans_draft ON preserved_spans(draft_id)")
         self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     # -- tiny helpers ----------------------------------------------------

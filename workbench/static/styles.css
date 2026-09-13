@@ -240,6 +240,10 @@ h3{font-size:1rem;font-weight:650}
 .para:focus{outline:none;border-color:var(--line-strong);background:#fffefb;
   box-shadow:inset 3px 0 0 var(--cinnabar)}
 .para.sel{background:#e9efe6}
+.para.preserved{border-left:3px solid var(--accent);position:relative;padding-right:62px}
+.para.preserved::after{content:"已保留";position:absolute;right:8px;top:9px;
+  font-family:var(--sans);font-size:11px;line-height:1;color:var(--accent);
+  background:#eef2e9;border-radius:999px;padding:4px 6px;pointer-events:none}
 .para.hl{outline:2px solid var(--cinnabar);outline-offset:-2px}
 #selbar{position:sticky;top:0;display:none;gap:6px;z-index:5;
   background:rgba(255,253,248,.97);border:1px solid var(--line-strong);
@@ -256,6 +260,13 @@ h3{font-size:1rem;font-weight:650}
 .issue{border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;
   margin:8px 0;background:rgba(255,253,248,.55)}
 .issue .loc{color:var(--muted);font-size:12.5px}
+.issue-quote{margin:7px 0;padding:6px 9px;border-left:2px solid var(--line-strong);
+  color:var(--muted);font-size:12.5px;line-height:1.6;max-height:5.2em;overflow:hidden}
+.revision-item.resolved,.revision-item.dismissed,.revision-item.stale{opacity:.68}
+.preserved-list{border:1px solid #b9c6b3;border-radius:var(--r-sm);
+  background:#f3f5ee;padding:10px 12px;margin-bottom:var(--sp-3)}
+.kept-row{display:flex;align-items:center;gap:8px;justify-content:space-between;margin-top:7px}
+.kept-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .label{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12.5px;font-weight:600}
 .label.strong{background:#e2eee4;color:var(--ok)}
 .label.good{background:#eceee9;color:#4d5c50}

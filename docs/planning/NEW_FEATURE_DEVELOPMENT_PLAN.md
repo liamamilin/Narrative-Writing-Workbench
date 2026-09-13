@@ -98,6 +98,8 @@ Quick Write 保留“直接写”，新增可选“先定角度”。系统发�
 
 ## 5. F03：修订工作单与保留片段
 
+实施状态：已于 2026-09-13 完成 F03-1～F03-6；F03-7 的真实使用对照数据待收集。规格与验收证据见 `docs/narrative-writing-product-v0.4-revision-worklist-spec/` 和 `docs/reports/PRODUCT_V0_4_REVISION_WORKLIST_IMPLEMENTATION_REPORT.md`。
+
 优先级：第二批核心功能。预计 4–6 人日。
 
 ### MVP 用户流程

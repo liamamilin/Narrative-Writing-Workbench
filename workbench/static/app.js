@@ -1020,14 +1020,14 @@ const WS = {
   tid: null, task: null, draft: null, versions: [], sel: new Set(),
   selAnchor: null,
   panelTab: "goal", view: "draft", review: null, map: null,
-  proposals: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
+  proposals: [], preserved: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
 };
 
 async function workspace(tid) {
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
   WS.tid = tid; WS.sel.clear(); WS.selAnchor = null;
-  WS.proposals = []; WS.review = null; WS.map = null;
+  WS.proposals = []; WS.preserved = []; WS.review = null; WS.map = null;
   await reloadTask();
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.task.operation?.status === "running" && !GENERATING) {
@@ -1067,6 +1067,8 @@ async function reloadTask() {
   WS.versions = WS.draft ? WS.task.draft.versions : [];
   WS.proposals = (WS.task.pending_patches || [])
     .filter(p => p.after);   // restorable after reload/refactor
+  const kept = await api("GET", `/tasks/${WS.tid}/preserved-spans`);
+  WS.preserved = kept.spans || [];
   WS.meaning = null;
   if (WS.task.input_mode === "topic_only") {
     try { WS.meaning = await api("GET", `/tasks/${WS.tid}/meaning`); }
@@ -1181,6 +1183,7 @@ function renderCenter() {
        <button data-i="less" data-tip="少说破，让画面自己说话">少些直白</button>
        <button data-i="natural" data-tip="去掉做作措辞，更像人话">更自然</button>
        <button data-i="immersive" data-tip="增强细节、动作与声音">更沉浸</button>
+       <button data-i="preserve" data-tip="保护所选完整段落，后续局部修改不得改变这段原文">保留原文</button>
     </div>
     <div id="revise-box" style="display:none" class="card">
        <b class="small">修改所选段落</b>
@@ -1198,8 +1201,11 @@ function renderCenter() {
          <button id="revise-cancel" data-tip="放弃本次修改，正文不动">取消</button>
       </div>
     </div>
-    <div id="editor">${contentParas().map((p, i) =>
-      `<div class="para${WS.sel.has(i + 1) ? " sel" : ""}" contenteditable="true" data-p="${i + 1}">${esc(p)}</div>`).join("")}</div>
+    <div id="editor">${contentParas().map((p, i) => {
+      const kept = WS.preserved.some(s => s.status === "active" &&
+        s.paragraph_start <= i + 1 && s.paragraph_end >= i + 1);
+      return `<div class="para${WS.sel.has(i + 1) ? " sel" : ""}${kept ? " preserved" : ""}" contenteditable="true" data-p="${i + 1}">${esc(p)}</div>`;
+    }).join("")}</div>
     <div id="proposals">${WS.proposals.map(proposalCard).join("")}</div>`;
   wireEditor();
   showRecovery();
@@ -1251,6 +1257,8 @@ function wireEditor() {
     b.onclick = () => {
       if (b.dataset.i === "revise") {
         $("#revise-box").style.display = "block"; $("#revise-instr").focus();
+      } else if (b.dataset.i === "preserve") {
+        preserveSelection();
       } else {
         proposePatch({ shorter: "Make this shorter.", less: "Make this less explicit.",
           natural: "Make this more natural.", immersive: "Make this more immersive." }[b.dataset.i]);
@@ -1273,6 +1281,7 @@ function captureEditorContent() {
   if (content === WS.draft.working_content) return false;
   WS.draft.working_content = content;
   if (WS.review) WS.review.stale = true;
+  WS.preserved.forEach(s => { if (s.status === "active") s.status = "stale"; });
   WS.dirty = true;
   WS.editRevision += 1;
   return true;
@@ -1345,7 +1354,20 @@ function selRange() {
   return { paragraph_start: a[0], paragraph_end: a[a.length - 1] };
 }
 
-async function proposePatch(instruction, reviewId = null) {
+async function preserveSelection() {
+  if (!WS.sel.size) return;
+  try {
+    await flushAutosave({ checkpoint: false });
+    await api("POST", `/tasks/${WS.tid}/preserved-spans`, {
+      expected_revision: WS.draft.revision, selection: selRange(),
+    });
+    await reloadTask();
+    renderWorkspace();
+    toast("所选原文已保留，局部修改会避开它。");
+  } catch (e) { toast(e.message || "无法保留所选原文。", true); }
+}
+
+async function proposePatch(instruction, reviewId = null, revisionItemId = null) {
   if (!instruction) { toast("请写下修改要求。", true); return; }
   try { await flushAutosave({ checkpoint: false }); }
   catch (_) { return; }
@@ -1359,6 +1381,7 @@ async function proposePatch(instruction, reviewId = null) {
     const p = await api("POST", `/tasks/${WS.tid}/patch`, {
       base_version_id: WS.draft.current_version_id,
       expected_revision: WS.draft.revision, review_id: reviewId,
+      revision_item_id: revisionItemId,
       selection: selRange(), instruction, locks,
     });
     p.instruction = instruction;
@@ -1378,29 +1401,43 @@ function proposalCard(p) {
     <div class="row">
        <button class="primary act-accept" data-tip="只替换选中段落，并存为一个新版本">接受并应用</button>
        <button class="act-reject" data-tip="正文原样保留">拒绝</button>
-       <button class="act-retry" data-tip="同一范围再提一版">再试一版</button></div></div>`;
+       ${p.revision_item_id ? "" : '<button class="act-retry" data-tip="同一范围再提一版">再试一版</button>'}</div></div>`;
 }
 
 document.addEventListener("click", async e => {
   const card = e.target.closest(".patch-card"); if (!card) return;
+  if (card.dataset.busy === "true") return;
   const id = card.dataset.id;
   const prog = WS.proposals.find(x => x.patch_id === id);
+  const actionTask = WS.tid;
+  card.dataset.busy = "true";
+  card.querySelectorAll("button").forEach(button => { button.disabled = true; });
   try {
     if (e.target.classList.contains("act-accept")) {
       await flushAutosave({ checkpoint: false });
       setEditorEditable(false);
       await api("POST", `/patches/${id}/accept`);
       WS.proposals = WS.proposals.filter(x => x !== prog);
-      await reloadTask(); renderWorkspace();
+      if (location.hash === `#/tasks/${actionTask}`) {
+        await reloadTask(); renderWorkspace();
+      }
        toast("修改已接受，并保存为新版本。");
     } else if (e.target.classList.contains("act-reject")) {
       await api("POST", `/patches/${id}/reject`);
-      card.remove();
       WS.proposals = WS.proposals.filter(x => x.patch_id !== id);
+      if (location.hash === `#/tasks/${actionTask}`) {
+        await reloadTask(); renderWorkspace();
+      }
     } else if (e.target.classList.contains("act-retry")) {
       await proposePatch(prog.instruction);
     }
   } catch (err) { setEditorEditable(true); toast(err.message, true); }
+  finally {
+    if (card.isConnected) {
+      delete card.dataset.busy;
+      card.querySelectorAll("button").forEach(button => { button.disabled = false; });
+    }
+  }
 });
 
 /* panel */
@@ -1444,6 +1481,12 @@ function renderPanel() {
      <p><button id="p-check" style="width:100%" ${WS.draft ? "" : "disabled"} data-tip="把现在的正文存为手动版本，随时可回">保存版本节点</button></p>`;
   if (WS.panelTab === "review") box.innerHTML = `
      <p><button id="r-run" style="width:100%" ${WS.draft ? "" : "disabled"} data-tip="检查当前稿，问题卡片可定位或发起修改">检查当前稿</button></p>
+    ${WS.preserved.some(s => s.status === "active") ? `<div class="preserved-list">
+      <b class="small">保留原文</b>
+      ${WS.preserved.filter(s => s.status === "active").map(s => `<div class="kept-row small">
+        <span>¶${s.paragraph_start}${s.paragraph_end !== s.paragraph_start ? "–" + s.paragraph_end : ""} · ${esc(s.quote.slice(0, 36))}${s.quote.length > 36 ? "…" : ""}</span>
+        <button class="small" data-unkeep="${s.id}" data-tip="取消后，新的局部修改可以改动这段文字">取消保留</button>
+      </div>`).join("")}</div>` : ""}
     <div id="review-out">${WS.review ? reviewView(WS.review) :
        '<p class="muted small">检查会指出可能没有起效的段落；修不修、怎么修，由你决定。</p>'}</div>`;
   if (WS.panelTab === "locks") box.innerHTML = `
@@ -1975,30 +2018,51 @@ async function runReview() {
 }
 
 function reviewView(r) {
-  if (r.stale) return `<p class="muted">正文或目标已改变，请重新检查后再定位和修改。</p>`;
+  const staleBanner = r.stale
+    ? `<p class="muted">正文或目标已改变；已记录本轮结果，继续处理前请重新检查。</p>` : "";
   const labels = { progression:"推进", meaning_density:"意义密度", immersion:"沉浸", restraint:"克制", coherence:"连贯" };
   const qualities = { strong:"稳健", good:"良好", needs_attention:"需留意" };
   const decision = r.summary.decision === "PATCH_REQUIRED" ? "这篇还有需要修订的地方。" :
     r.summary.decision === "PASS" ? "本次检查已通过。" : "";
-  return `<p class="small">${decision}</p><div class="row" style="flex-wrap:wrap">${Object.entries(labels).map(([k, label]) => {
+  const statuses = { open:"待处理", proposed:"提案中", resolved:"已完成",
+    dismissed:"已跳过", stale:"已失效" };
+  const severities = { fatal:"致命", major:"重要", moderate:"中等", minor:"轻微" };
+  const activeProposal = r.issues.some(i => i.status === "proposed");
+  return staleBanner + `<p class="small">${decision}</p><div class="row" style="flex-wrap:wrap">${Object.entries(labels).map(([k, label]) => {
     const value = Object.hasOwn(qualities, r.summary[k]) ? r.summary[k] : "unknown";
     return `<span class="small">${label}</span> <span class="label ${value}">${qualities[value] || "未完成"}</span>`;
   }).join(" ")}</div>` +
     (r.issues.length ? r.issues.map((is, n) => `
-      <div class="issue"><p class="small">${esc(is.message)}</p>
+      <div class="issue revision-item ${esc(is.status || "open")}">
+      <div class="row"><span class="label">${esc(severities[is.severity] || "中等")}</span><span class="small muted">${esc(statuses[is.status] || "待处理")}</span></div>
+      <p class="small"><b>${esc(is.message)}</b></p>
+      ${is.effect ? `<p class="small muted">影响：${esc(is.effect)}</p>` : ""}
+      ${is.goal ? `<p class="small">修改目标：${esc(is.goal)}</p>` : ""}
+      ${is.quote ? `<blockquote class="issue-quote">${esc(is.quote)}</blockquote>` : ""}
       <p class="loc">¶${is.location.paragraph_start}${is.location.paragraph_end !== is.location.paragraph_start ? "–" + is.location.paragraph_end : ""}</p>
       <div class="row"><button class="small" data-show="${n}" data-tip="跳到并高亮对应段落">定位</button>
-      ${is.fixable ? `<button class="small" data-fix="${n}" data-tip="对该段落直接发起局部修改提案">修改</button>` : ""}</div></div>`).join("")
+      ${is.status === "open" ? `<button class="small" data-fix="${n}" ${activeProposal ? "disabled" : ""} data-tip="按修改目标生成局部提案">处理</button>
+      <button class="small" data-dismiss="${n}" data-tip="本轮不处理此项，正文不会改变">跳过</button>` : ""}</div></div>`).join("")
       : '<p class="muted small">没有发现需要特别留意的问题。</p>');
 }
 
 document.addEventListener("click", async e => {
   const show = e.target.closest("[data-show]");
   const fix = e.target.closest("[data-fix]");
-  if (!show && !fix) return;
+  const dismiss = e.target.closest("[data-dismiss]");
+  if (!show && !fix && !dismiss) return;
   try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
   if (!WS.review || WS.review.stale) { toast("正文或目标已改变，请重新检查。", true); return; }
-  const is = WS.review.issues[parseInt((show || fix).dataset.show ?? (show || fix).dataset.fix)];
+  const target = show || fix || dismiss;
+  const is = WS.review.issues[parseInt(target.dataset.show ?? target.dataset.fix ?? target.dataset.dismiss)];
+  if (dismiss) {
+    try {
+      await api("POST", `/revision-items/${is.revision_item_id}/dismiss`);
+      await reloadTask(); renderWorkspace();
+      toast("已跳过这一项，正文未改变。");
+    } catch (e) { toast(e.message, true); }
+    return;
+  }
   WS.view = "draft"; renderWorkspace();
   const a = is.location.paragraph_start, b = is.location.paragraph_end;
   WS.sel.clear(); WS.selAnchor = a;
@@ -2007,7 +2071,17 @@ document.addEventListener("click", async e => {
   const el = $(`.para[data-p="${a}"]`);
   if (el) { el.classList.add("hl"); el.scrollIntoView({ behavior: "smooth", block: "center" });
     setTimeout(() => el.classList.remove("hl"), 2600); }
-  if (fix) proposePatch(is.message, WS.review.id);
+  if (fix) proposePatch(is.goal, WS.review.id, is.revision_item_id);
+});
+
+document.addEventListener("click", async e => {
+  const remove = e.target.closest("[data-unkeep]");
+  if (!remove) return;
+  try {
+    await api("DELETE", `/preserved-spans/${remove.dataset.unkeep}`);
+    await reloadTask(); renderWorkspace();
+    toast("已取消保留。");
+  } catch (err) { toast(err.message, true); }
 });
 
 /* writing map */

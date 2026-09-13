@@ -197,6 +197,26 @@ def create_app(service: Service | None = None) -> FastAPI:
     def review(task_id: str):
         return svc().review(task_id)
 
+    @app.get("/tasks/{task_id}/revision-worklist")
+    def revision_worklist(task_id: str):
+        return svc().revision_worklist(task_id)
+
+    @app.post("/revision-items/{item_id}/dismiss")
+    def dismiss_revision_item(item_id: str):
+        return svc().dismiss_revision_item(item_id)
+
+    @app.get("/tasks/{task_id}/preserved-spans")
+    def preserved_spans(task_id: str):
+        return svc().list_preserved_spans(task_id)
+
+    @app.post("/tasks/{task_id}/preserved-spans")
+    def create_preserved_span(task_id: str, body: dict):
+        return svc().create_preserved_span(task_id, body)
+
+    @app.delete("/preserved-spans/{span_id}")
+    def delete_preserved_span(span_id: str):
+        return svc().delete_preserved_span(span_id)
+
     @app.post("/tasks/{task_id}/patch")
     def propose_patch(task_id: str, body: dict):
         return svc().propose_patch(task_id, body)

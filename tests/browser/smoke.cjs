@@ -343,6 +343,43 @@ async function main() {
       assert.equal(written.operation.kind,'generate');
       await page.screenshot({path:path.join(output,'angle-confirmation.png'),fullPage:true});
     });
+    await check('B14 revision worklist and preserved passage', async()=>{
+      await go('/revise');
+      const opening='老人把钟放回桌上，却又一次解释自己为何等待。'.repeat(12);
+      const exact='这一段必须逐字保留。';
+      await page.locator('#f-material').fill(`${opening}\n\n${exact}\n\n门外终于传来脚步声。`);
+      await page.locator('#f-instruction').fill('删去重复解释，保留具体动作。');
+      await page.locator('#f-go').click(); await editor().waitFor();
+      const workTask=taskId();
+      await editor().click();
+      await page.locator('#selbar [data-i=preserve]').click();
+      await until(async()=>await page.locator('.para.preserved').count()===1,'preserved highlight');
+      await page.locator('[data-t=review]').click();
+      assert.match(await page.locator('.preserved-list').innerText(),/已保留|保留原文/);
+      await page.locator('#r-run').click();
+      await page.locator('[data-fix]').first().waitFor();
+      const before=(await api('GET',`/tasks/${workTask}`)).draft;
+      await page.locator('[data-fix]').first().click();
+      await until(async()=>/保留/.test(await page.locator('#toast').innerText()),'preserve conflict');
+      assert.equal(await page.locator('.patch-card').count(),0);
+      assert.equal((await api('GET',`/tasks/${workTask}`)).draft.working_content,before.working_content);
+
+      await page.locator('[data-t=review]').click();
+      await page.locator('[data-unkeep]').click();
+      await page.locator('[data-fix]').first().click();
+      await page.locator('.patch-card').waitFor();
+      await page.locator('.act-reject').click();
+      await page.locator('[data-fix]').first().waitFor();
+      assert.match(await page.locator('#review-out').innerText(),/待处理/);
+      await page.locator('[data-fix]').first().click();
+      await page.locator('.patch-card').waitFor();
+      await page.locator('.act-accept').click();
+      await until(async()=>/已完成/.test(await page.locator('#review-out').innerText()),'work item resolved');
+      const after=(await api('GET',`/tasks/${workTask}`)).draft;
+      assert.equal(after.versions.length,before.versions.length+1);
+      assert.match(after.working_content, new RegExp(exact));
+      await page.screenshot({path:path.join(output,'revision-worklist.png'),fullPage:true});
+    });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({environment,results,pageErrors},null,2));

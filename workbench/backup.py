@@ -39,16 +39,38 @@ REQUIRED_COLUMNS = {
     "versions": {"id", "draft_id", "parent_version_id", "content", "source_type", "instruction", "created_at", "engine_plan_id", "restore_source_version_id"},
     "proposed_patches": {"id", "draft_id", "base_version_id", "selection_json", "instruction", "before_text", "after_text", "status", "locks_json", "error", "created_at", "base_revision", "accepted_version_id", "task_locks_json"},
     "reviews": {"id", "draft_id", "version_id", "summary_json", "issues_json", "created_at", "content_hash", "draft_revision", "config_json", "operation_id"},
+    "revision_items": {"id", "review_id", "draft_id", "issue_id", "base_revision", "content_hash", "paragraph_start", "paragraph_end", "char_start", "char_end", "quote", "type", "severity", "message", "effect", "goal", "status", "patch_id", "created_at", "updated_at"},
+    "preserved_spans": {"id", "draft_id", "base_revision", "content_hash", "paragraph_start", "paragraph_end", "char_start", "char_end", "quote", "status", "created_at", "updated_at"},
     "writing_operations": {"id", "task_id", "kind", "process_id", "status", "stage", "started_at", "finished_at", "elapsed_ms", "input_fingerprint", "snapshot_json", "retry_of", "error_code", "result_json", "usage_json"},
     "operation_events": {"operation_id", "seq", "kind", "data_json", "elapsed_ms", "created_at"},
     "operation_records": {"id", "operation_id", "category", "name", "status", "data_json", "elapsed_ms", "created_at"},
     "generation_results": {"id", "task_id", "engine_plan_id", "content", "accepted_version_id", "created_at", "operation_id"},
 }
+REQUIRED_COLUMNS["proposed_patches"].add("revision_item_id")
 REQUIRED_INDEX_SQL = {
     "one_running_operation": "create unique index one_running_operation on writing_operations(task_id) where status='running'",
     "operation_records_operation": "create index operation_records_operation on operation_records(operation_id)",
     "versions_plan": "create index versions_plan on versions(engine_plan_id)",
+    "revision_items_review": "create index revision_items_review on revision_items(review_id)",
+    "preserved_spans_draft": "create index preserved_spans_draft on preserved_spans(draft_id)",
 }
+V3_REQUIRED_COLUMNS = {
+    table: set(columns) for table, columns in REQUIRED_COLUMNS.items()
+    if table not in {"revision_items", "preserved_spans"}
+}
+V3_REQUIRED_COLUMNS["proposed_patches"].discard("revision_item_id")
+V3_REQUIRED_INDEX_SQL = {
+    name: sql for name, sql in REQUIRED_INDEX_SQL.items()
+    if name not in {"revision_items_review", "preserved_spans_draft"}
+}
+
+
+def _schema_contract(version: int):
+    if version == SCHEMA_VERSION:
+        return REQUIRED_COLUMNS, REQUIRED_INDEX_SQL
+    if version == 3:
+        return V3_REQUIRED_COLUMNS, V3_REQUIRED_INDEX_SQL
+    raise BackupError("This backup schema is not supported.")
 
 
 class BackupError(ValueError):
@@ -104,9 +126,9 @@ def _hash(data: bytes) -> str:
     return sha256(data).hexdigest()
 
 
-def _read_counts(conn: sqlite3.Connection) -> dict[str, int]:
+def _read_counts(conn: sqlite3.Connection, columns=REQUIRED_COLUMNS) -> dict[str, int]:
     return {table: conn.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
-            for table in sorted(REQUIRED_COLUMNS)}
+            for table in sorted(columns)}
 
 
 def _validate_manifest(raw: bytes) -> dict:
@@ -120,10 +142,11 @@ def _validate_manifest(raw: bytes) -> dict:
             or type(value.get("format_version")) is not int
             or value["format_version"] != FORMAT_VERSION):
         raise BackupError("This backup package format is not supported.")
-    if type(value.get("schema_version")) is not int or value["schema_version"] != SCHEMA_VERSION:
-        if type(value.get("schema_version")) is int and value["schema_version"] > SCHEMA_VERSION:
-            raise BackupError("This backup was created by a newer Workbench schema.")
+    if type(value.get("schema_version")) is not int:
         raise BackupError("This backup schema is not supported.")
+    if value["schema_version"] > SCHEMA_VERSION:
+        raise BackupError("This backup was created by a newer Workbench schema.")
+    columns, _ = _schema_contract(value["schema_version"])
     if not isinstance(value.get("created_at"), str) or not value["created_at"]:
         raise BackupError("The backup creation time is missing.")
     try:
@@ -141,16 +164,16 @@ def _validate_manifest(raw: bytes) -> dict:
     if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise BackupError("The snapshot SHA-256 is invalid.")
     counts = value.get("table_counts")
-    if not isinstance(counts, dict) or set(counts) != set(REQUIRED_COLUMNS):
+    if not isinstance(counts, dict) or set(counts) != set(columns):
         raise BackupError("The table count manifest is incomplete.")
     if any(type(n) is not int or n < 0 for n in counts.values()):
         raise BackupError("The table count manifest is invalid.")
     return value
 
 
-def _orphan_checks() -> list[tuple[str, str]]:
+def _orphan_checks(version: int) -> list[tuple[str, str]]:
     """Named queries which must all return zero rows."""
-    return [
+    checks = [
         ("sources.project", "SELECT 1 FROM sources s LEFT JOIN projects p ON p.id=s.project_id WHERE s.project_id IS NOT NULL AND p.id IS NULL LIMIT 1"),
         ("tasks.project", "SELECT 1 FROM tasks t LEFT JOIN projects p ON p.id=t.project_id WHERE t.project_id IS NOT NULL AND p.id IS NULL LIMIT 1"),
         ("task_sources.task", "SELECT 1 FROM task_sources x LEFT JOIN tasks t ON t.id=x.task_id WHERE t.id IS NULL LIMIT 1"),
@@ -181,6 +204,14 @@ def _orphan_checks() -> list[tuple[str, str]]:
         ("results.operation", "SELECT 1 FROM generation_results x LEFT JOIN writing_operations o ON o.id=x.operation_id WHERE x.operation_id IS NOT NULL AND (o.id IS NULL OR o.task_id<>x.task_id) LIMIT 1"),
         ("results.accepted_version", "SELECT 1 FROM generation_results x LEFT JOIN versions v ON v.id=x.accepted_version_id LEFT JOIN drafts d ON d.id=v.draft_id WHERE x.accepted_version_id IS NOT NULL AND (v.id IS NULL OR d.task_id<>x.task_id) LIMIT 1"),
     ]
+    if version >= 4:
+        checks.extend([
+            ("revision_items.review_draft", "SELECT 1 FROM revision_items x LEFT JOIN reviews r ON r.id=x.review_id LEFT JOIN drafts d ON d.id=x.draft_id WHERE r.id IS NULL OR d.id IS NULL OR r.draft_id<>x.draft_id LIMIT 1"),
+            ("revision_items.patch", "SELECT 1 FROM revision_items x LEFT JOIN proposed_patches p ON p.id=x.patch_id WHERE x.patch_id IS NOT NULL AND (p.id IS NULL OR p.draft_id<>x.draft_id OR p.revision_item_id<>x.id) LIMIT 1"),
+            ("patches.revision_item", "SELECT 1 FROM proposed_patches p LEFT JOIN revision_items x ON x.id=p.revision_item_id WHERE p.revision_item_id IS NOT NULL AND (x.id IS NULL OR x.draft_id<>p.draft_id OR x.patch_id<>p.id) LIMIT 1"),
+            ("preserved_spans.draft", "SELECT 1 FROM preserved_spans x LEFT JOIN drafts d ON d.id=x.draft_id WHERE d.id IS NULL LIMIT 1"),
+        ])
+    return checks
 
 
 def _inspect_sqlite(path: Path, expected_counts: dict | None = None) -> dict[str, int]:
@@ -194,17 +225,16 @@ def _inspect_sqlite(path: Path, expected_counts: dict | None = None) -> dict[str
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version > SCHEMA_VERSION:
             raise BackupError("This backup was created by a newer Workbench schema.")
-        if version != SCHEMA_VERSION:
-            raise BackupError("This backup schema is not supported.")
+        columns_contract, indexes_contract = _schema_contract(version)
         objects = conn.execute(
             "SELECT type,name FROM sqlite_master WHERE type IN ('table','view','trigger')"
         ).fetchall()
         tables = {name for type_, name in objects if type_ == "table" and not name.startswith("sqlite_")}
-        if tables != set(REQUIRED_COLUMNS):
+        if tables != set(columns_contract):
             raise BackupError("The SQLite snapshot has an unexpected table set.")
         if any(type_ in ("view", "trigger") for type_, _ in objects):
             raise BackupError("The SQLite snapshot contains unsupported schema objects.")
-        for table, required in REQUIRED_COLUMNS.items():
+        for table, required in columns_contract.items():
             columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
             if columns != required:
                 raise BackupError(f"The {table} table schema is incompatible.")
@@ -212,12 +242,12 @@ def _inspect_sqlite(path: Path, expected_counts: dict | None = None) -> dict[str
             "SELECT name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
         ).fetchall()
         index_sql = {name: " ".join(sql.lower().split()) for name, sql in indexes}
-        if index_sql != REQUIRED_INDEX_SQL:
+        if index_sql != indexes_contract:
             raise BackupError("The SQLite snapshot has an incompatible index schema.")
-        counts = _read_counts(conn)
+        counts = _read_counts(conn, columns_contract)
         if expected_counts is not None and counts != expected_counts:
             raise BackupError("The snapshot table counts do not match the manifest.")
-        for name, query in _orphan_checks():
+        for name, query in _orphan_checks(version):
             if conn.execute(query).fetchone():
                 raise BackupError(f"The snapshot has an invalid reference ({name}).")
         return counts

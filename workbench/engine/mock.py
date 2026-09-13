@@ -382,7 +382,10 @@ class MockWritingEngine:
                     "id": f"issue_{i}",
                     "location": {"paragraph_start": i, "paragraph_end": i},
                     "type": "over_explanation",
+                    "severity": "moderate",
                     "message": "This paragraph may explain more than the reader needs.",
+                    "effect": "It leaves less room for the reader to infer the meaning.",
+                    "goal": "Make this shorter while preserving the concrete meaning.",
                     "fixable": True,
                 })
         return {

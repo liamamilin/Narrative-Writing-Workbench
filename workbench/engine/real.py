@@ -342,7 +342,10 @@ class RealWritingEngine:
             issues.append({
                 "id": f"issue_{i}", "location": para,
                 "type": (issue.get("diagnosis") or {}).get("type", "issue"),
+                "severity": issue.get("severity", "moderate"),
                 "message": (issue.get("diagnosis") or {}).get("description", ""),
+                "effect": issue.get("effect", ""),
+                "goal": issue.get("action", "Revise this passage."),
                 "fixable": True,
             })
         _operation_record("review", data={
