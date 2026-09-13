@@ -36,6 +36,7 @@ Quick Write 新增“收藏当前话题”“本次生成”“选题箱”、�
 - JavaScript：`node --check workbench/static/app.js` 与浏览器脚本语法通过。
 - Chrome 152 / Playwright 1.62.1：B01–B17 全部通过，无未处理页面异常。
 - B17 实际覆盖旧库迁移、服务端确认后删 key、候选不落库、明确收藏、搜索、备注、清空 localStorage 后重载、创建关联任务、已写过滤和打开原任务。
+- 实现提交 `7343e25` 已推送到 PR #2；GitHub Actions [push #47](https://github.com/liamamilin/Narrative-Writing-Workbench/actions/runs/34752261596) 与 [PR #48](https://github.com/liamamilin/Narrative-Writing-Workbench/actions/runs/34752263279) 均完成并通过。
 
 ## 限制与下一步
 
