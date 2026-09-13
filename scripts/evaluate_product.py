@@ -140,8 +140,9 @@ def main():
             rows.append(row)
             (output / 'results.json').write_text(json.dumps(rows, ensure_ascii=False, indent=2))
             print(case['id'], row['status'], flush=True)
-        worksheet = '# 产品效果人工评审表\n\n'
+        worksheet = '# 产品效果人工评审索引\n\n'
         worksheet += f'运行模式：{args.engine}。mock 只验证流程，不能用于评价真实写作效果。评分必须由实际评审者填写；usage 未取得时保持未知。\n\n'
+        worksheet += ('正式评分前，请用 `scripts/product_human_review.py prepare` 生成匿名、随机排序的评审包，并把私有映射保存在评审包目录之外。不要直接查看本目录的模型、自动审阅或 operation 信息后评分。\n\n')
         worksheet += '| 案例 | 运行 | 命题/推进 1–5 | 可辩护性 1–5 | 保留价值 1–5 | 补丁效果 1–5 | 评语/评审者 |\n|---|---|---|---|---|---|---|\n'
         for row in rows:
             worksheet += f'| {row["case"]} | {row["status"]} | 待评 | 待评 | 待评 | 待评 | |\n'

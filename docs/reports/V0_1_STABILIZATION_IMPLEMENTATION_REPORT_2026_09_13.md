@@ -24,6 +24,7 @@
 | 操作观测 | 记录意义尝试、评审结论、结构、语言/输出检查、补丁和模型调用耗时；usage 不可得时明确未知；不保存输入输出 | operations.py、engine/real.py、llm_client.py |
 | 迁移 | schema v3，增量迁移处于事务中；升级前 SQLite 一致性备份；失败回滚；未来 schema 拒绝降级打开 | db.py |
 | 测试交付 | 合成 fixture、源码隔离测试入口、独立 mock 服务、浏览器套件、CI 和有界评估脚本 | tests/、scripts/、.github/ |
+| 人工评审 | 固定种子匿名材料、公开包/私有映射隔离、评分完整性校验和分入口汇总 | scripts/product_human_review.py、docs/planning/PRODUCT_HUMAN_REVIEW_PROTOCOL.md |
 
 引擎编排语义与提示词未改动；`app/llm_client.py` 仅增加与产品 operation 绑定的提供方元数据观察钩子。未引入新编排框架，也未开始 F01–F09 候选新功能。
 
@@ -37,6 +38,8 @@
 - B09 自动检查 5,200 字中文剪贴板粘贴、保存后刷新、合成 composition、反向 Shift 连续选择、跨段 DOM 文字选择及 ¶2–3 提案范围；B10 已查看 1280×800 工作台与 1440×1000 快速写作截图，并验证 Writing Map Enter、话题卡 Enter/Space、Escape 关闭对话框和焦点恢复。没有把自动化剪贴板或合成事件当作原生输入法实测。
 - 三种入口各 4 个合成案例：12/12 完成 mock 演练，共导出 24 个 operation 的事件、阶段/调用记录、耗时和 usage。旧稿案例检查提案不自动应用、接受只改指定段落。人工评分为空；mock adapter 不经过提供方，24 个 usage 均明确为未知。
 - 固定 `gpt-oss:120b-cloud`、单次 120 秒和零重试的真实评估：12/12 案例完成，24/24 operation 与 40/40 模型调用成功；累计 151.71 秒。32 次非流式调用报告 83,923 input / 30,085 output tokens，8 次流式正文调用 usage 未返回。质量结论等待人工评分，详见 [真实模型评估报告](REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。
+- 真实 12 例已生成固定顺序的匿名评审包 `db7c1f2964ed9bdbf8a5`；公开目录不含模型、自动结论、operation 或原案例编号，私有映射独立保存。评分模板未代填，质量结论仍等待实际评审者。
+- 匿名评审工具加入后，最新源码隔离验证为 302 passed / 27.42 秒；Python 编译、JavaScript 语法和 diff 检查通过。
 - 迁移在临时旧库验证幂等、原稿回填、失败回滚、一致性备份恢复与 integrity_check；没有迁移或读取用户的 workbench.db。
 - 官方 npm 安装已验证：package-lock.json 校验通过，3 个测试依赖安装成功。GitHub Actions 首轮 Linux 检查暴露 B02 完成回调覆盖 B03 新路由的前端竞态；增加重载前后路由校验后，本地 298 项测试、浏览器 B01–B10、远端 push 与 PR 工作流均通过。
 
@@ -51,6 +54,7 @@ npm --prefix tests/browser ci --ignore-scripts --no-audit --no-fund
 # 首次按 tests/browser/README.md 安装 Chromium
 node tests/browser/smoke.cjs
 python3 scripts/evaluate_product.py --output .scratch/product-evaluation-new
+python3 scripts/product_human_review.py --help
 ```
 
 评估输出目录必须不存在，防止覆盖历史证据。mock 默认无需密钥；真实评估必须显式 `--engine real --config <配置路径>`，并经环境变量或显式 settings 来源提供凭据。

@@ -32,7 +32,7 @@
 
 operation 包括 generate 8、review 12、patch 4。8 个生成 operation 的结构生成、中文检查和输出硬门全部通过，且未使用结构修复或语言修复；4 个 Quick Write 命题评审均接受。8 篇生成稿的检查结论为 PASS，其中 2 篇仍返回一项非阻断问题。4 篇导入旧稿均为 PATCH_REQUIRED，共定位 5 项问题，并完成提案、接受及“只修改指定段落”的自动断言。
 
-这些状态只证明产品管线和既有自动规则走通。命题是否有推进、文本是否可辩护、哪些原句值得保留，以及补丁是否真正改善了文章，仍须实际评审者填写[人工评分表](REAL_MODEL_EVALUATION_HUMAN_REVIEW_2026_09_13.md)。
+这些状态只证明产品管线和既有自动规则走通。命题是否有推进、文本是否可辩护、哪些原句值得保留，以及补丁是否真正改善了文章，仍须实际评审者按[人工评分跟踪](REAL_MODEL_EVALUATION_HUMAN_REVIEW_2026_09_13.md)和[匿名评审协议](../planning/PRODUCT_HUMAN_REVIEW_PROTOCOL.md)完成独立评分。
 
 ## 调用与 usage
 
@@ -69,3 +69,5 @@ python3 scripts/evaluate_product.py \
 ```
 
 输出目录必须是新路径。运行会调用真实模型；`RUN_METADATA.json` 固定模型覆盖、超时、重试数、案例数及输入 hash，`results.json` 保存成功和失败 operation，`evaluation.db` 保留本地运行记录，`HUMAN_REVIEW.md` 不预填任何评分。
+
+工程运行完成后，用 `scripts/product_human_review.py prepare` 生成匿名评审包；不要让评审者直接从 `results.json` 评分。当前 12 例已生成 packet id `db7c1f2964ed9bdbf8a5`，评分仍为空。
