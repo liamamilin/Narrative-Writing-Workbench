@@ -230,3 +230,10 @@
 - 这次不是连接或超时失败。首轮 meaning discovery 在 208.38 秒返回 1,955/6,000 tokens；结构修复在 125.69 秒返回 2,011/6,000 tokens。两轮都达到 6,000 输出上限，operation 在 334,087 ms 后以 `DISCOVERY_FAILED` 结束。
 - 内存 debug 流显示修复结果只生成到第一个候选角度标签开头，随后用大量空白耗尽输出上限；`json.loads` 在字符 21,139 后报告缺少分隔符。当前角色已经使用 `reasoning_effort: low`、`structured_mode: auto`，因此这是 `mimo-v2.5` 在该长结构 JSON 请求上的兼容/稳定性问题，不是 Workbench 卡死。
 - Draft、Version 和未应用结果仍为空，失败安全再次成立。没有继续自动重试。下一步应先换用已通过完整评估的模型，或单独实现结构调用的 finish-reason/截断诊断与模型兼容策略后再试 `mimo-v2.5`。
+
+### 2026-09-13 19:29 — DeepSeek 现场成功对照
+
+- 用户在同一 OpenCode Go API 下把模型切换为 `deepseek-v4-flash`，同一任务以 `op_c055409816c3` 再次续跑并成功，证明前一轮问题不是 API、Key、任务数据或 Workbench 编排故障。
+- 意义发现 69.88 秒、命题评审 29.79 秒、结构 103.93 秒、正文 55.12 秒，总耗时 258,761 ms。三个结构化阶段均一次通过，结构未触发 repair；正文中文检查与输出门一次通过。
+- 任务进入 `ready`，创建 Draft `draft_dfa79137bad3` revision 1 和 generation Version `ver_f1b3d4b9c888`。本次 6 段正文已安全提交。
+- 这组同 API、同任务的直接对照把当前兼容性结论收窄到模型：`deepseek-v4-flash` 可完成主链路；`mimo-v2.5` 在 Meaning Discovery 长 JSON 上两次达到输出上限并产生截断结果。后续应把结构化稳定性列入模型准入检查。
