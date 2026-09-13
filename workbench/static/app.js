@@ -40,6 +40,7 @@ function toast(msg, err = false) {
 
 function openDialog({ title, message, confirmLabel = "确定", cancelLabel = "取消", inputLabel = "" }) {
   return new Promise(resolve => {
+    const previousFocus = document.activeElement;
     const dialog = document.createElement("dialog");
     dialog.className = "product-dialog";
     dialog.innerHTML = `<form method="dialog">
@@ -56,6 +57,7 @@ function openDialog({ title, message, confirmLabel = "确定", cancelLabel = "�
     const finish = value => {
       dialog.close();
       dialog.remove();
+      if (previousFocus?.isConnected) previousFocus.focus();
       resolve(value);
     };
     dialog.addEventListener("cancel", e => { e.preventDefault(); finish(null); });
@@ -365,6 +367,11 @@ function quickWrite() {
     saveComposeNow();
     renderLib();
     $("#qw-topic").focus();
+  };
+  $("#qw-lib").onkeydown = e => {
+    const card = e.target.closest(".qw-card");
+    if (!card || e.target !== card || !["Enter", " "].includes(e.key)) return;
+    e.preventDefault(); card.click();
   };
   const seedNow = () => ($("#qw-topic").value || "").trim();
   const refreshSuggestBtn = () => {
@@ -1776,17 +1783,23 @@ function mapView() {
       : '<div class="card"><p class="muted">还没有写作地图，请先生成初稿。</p></div>');
 }
 function wireMap() {
-  $("#center-body").querySelectorAll(".beat").forEach(el => el.onclick = async () => {
-    const a = parseInt(el.dataset.a), b = parseInt(el.dataset.b);
-    if (!a) return;
-    try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
-    WS.view = "draft"; renderWorkspace();
-    WS.sel.clear(); WS.selAnchor = a;
-    for (let k = a; k <= b; k++) WS.sel.add(k);
-    renderCenter();
-    const p = $(`.para[data-p="${a}"]`);
-    if (p) { p.classList.add("hl"); p.scrollIntoView({ behavior: "smooth", block: "center" });
-      setTimeout(() => p.classList.remove("hl"), 2600); }
+  $("#center-body").querySelectorAll(".beat").forEach(el => {
+    el.onclick = async () => {
+      const a = parseInt(el.dataset.a), b = parseInt(el.dataset.b);
+      if (!a) return;
+      try { await flushAutosave({ checkpoint: false }); } catch (_) { return; }
+      WS.view = "draft"; renderWorkspace();
+      WS.sel.clear(); WS.selAnchor = a;
+      for (let k = a; k <= b; k++) WS.sel.add(k);
+      renderCenter();
+      const p = $(`.para[data-p="${a}"]`);
+      if (p) { p.classList.add("hl"); p.scrollIntoView({ behavior: "smooth", block: "center" });
+        setTimeout(() => p.classList.remove("hl"), 2600); }
+    };
+    el.onkeydown = e => {
+      if (!["Enter", " "].includes(e.key)) return;
+      e.preventDefault(); el.click();
+    };
   });
 }
 

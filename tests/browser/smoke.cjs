@@ -126,9 +126,9 @@ async function main() {
       await until(async()=> (await api('GET', `/tasks/${quick}`)).draft.current_version_id !== firstVersion &&
         JSON.stringify(await api('GET', `/tasks/${quick}/meaning`))===JSON.stringify(firstMeaning), 'restore meaning');
       await go(`/tasks/${quick}`); await page.locator('#tab-map').click();
-      await page.locator('.beat').first().waitFor();
+      const beat=page.locator('.beat').first(); await beat.waitFor();
       assert.match(await page.locator('#center-body').innerText(),/结构参考/);
-      await page.locator('.beat').first().click();
+      await beat.focus(); await page.keyboard.press('Enter');
       await page.locator('#selbar.show').waitFor();
       assert.ok(await page.locator('#editor .para.sel').count());
     });
@@ -246,7 +246,18 @@ async function main() {
       await page.screenshot({path:path.join(output,'workspace-1280.png'),fullPage:true});
       await page.locator('#p-gen').click(); await page.locator('dialog[open]').waitFor();
       await page.keyboard.press('Escape'); assert.equal(await page.locator('dialog[open]').count(),0);
+      assert.equal(await page.evaluate(()=>document.activeElement?.id),'p-gen');
       await go('/quickwrite'); await page.setViewportSize({width:1440,height:1000});
+      await page.locator('#qw-topic-suggest').click();
+      const cards=page.locator('.qw-card'); await cards.first().waitFor();
+      const firstText=await cards.first().locator('b').innerText();
+      await cards.first().focus(); await page.keyboard.press('Enter');
+      assert.equal(await page.locator('#qw-topic').inputValue(),firstText);
+      assert.equal(await page.evaluate(()=>document.activeElement?.id),'qw-topic');
+      const second=page.locator('.qw-card').nth(1);
+      const secondText=await second.locator('b').innerText();
+      await second.focus(); await page.keyboard.press('Space');
+      assert.equal(await page.locator('#qw-topic').inputValue(),secondText);
       await page.screenshot({path:path.join(output,'quickwrite-1440.png'),fullPage:true});
     });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
