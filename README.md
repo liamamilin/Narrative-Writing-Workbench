@@ -155,8 +155,9 @@ python3 scripts/evaluate_product.py --output .scratch/product-evaluation-new
 
 ## 桌面 App(可选)
 
-`NarrativeWorkbench.app` 是本地包装(不入库)。重建图标:
-`python3 scripts/make_icon.py`(需 Pillow;自动生成 .icns 写入 app bundle)。
+`NarrativeWorkbench.app` 是本地包装(不入库)。图标源文件为
+`assets/app-icon-source.png`;运行 `python3 scripts/make_icon.py` 可重建
+`.icns` 并写入 app bundle(需 Pillow)。
 
 ---
 
