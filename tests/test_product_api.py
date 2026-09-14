@@ -77,6 +77,110 @@ def test_unknown_ids_404(client):
     assert client.get("/projects/nope").status_code == 404
 
 
+def test_task_list_is_complete_ordered_and_keeps_status(client):
+    assert client.get("/tasks").json() == {"tasks": []}
+    ids = [make_task(client, title=f"Task {i}") for i in range(51)]
+    client.patch(f"/tasks/{ids[0]}", json={"status": "done"})
+    client.patch(f"/tasks/{ids[1]}", json={"status": "failed"})
+    db = client.app.state.service.db
+    db.exec("UPDATE tasks SET updated_at=? WHERE id=?", ("2099-01-01T00:00:00+00:00", ids[0]))
+    db.exec("UPDATE tasks SET updated_at=? WHERE id=?", ("2098-01-01T00:00:00+00:00", ids[1]))
+
+    rows = client.get("/tasks").json()["tasks"]
+    assert len(rows) == 51
+    assert {row["id"] for row in rows} == set(ids)
+    assert rows[0]["id"] == ids[0]
+    assert rows[0]["status"] == "done"
+    assert {row["status"] for row in rows} >= {"draft", "failed", "done"}
+
+
+def test_delete_task_removes_writing_artifacts_but_keeps_project_sources(client):
+    project = client.post("/projects", json={"name": "Collection"}).json()
+    source = client.post(f"/projects/{project['id']}/sources", json={
+        "title": "Shared note", "type": "note", "content": "Shared evidence.",
+    }).json()
+    tid = make_task(client, type="essay", project_id=project["id"],
+                    source_ids=[source["id"]])
+    generated = client.post(f"/tasks/{tid}/generate", json={})
+    assert generated.status_code == 200, generated.text
+    task = client.get(f"/tasks/{tid}").json()
+    draft = task["draft"]
+    assert client.post(f"/tasks/{tid}/review").status_code == 200
+    assert client.post(f"/tasks/{tid}/reader-path-review").status_code == 200
+    assert client.post(f"/tasks/{tid}/preserved-spans", json={
+        "expected_revision": draft["revision"],
+        "selection": {"paragraph_start": 1, "paragraph_end": 1},
+    }).status_code == 200
+
+    db = client.app.state.service.db
+    assert db.q("SELECT * FROM versions WHERE draft_id=?", (draft["id"],))
+    assert db.q("SELECT * FROM writing_operations WHERE task_id=?", (tid,))
+    assert db.q("SELECT * FROM operation_events WHERE operation_id IN "
+                "(SELECT id FROM writing_operations WHERE task_id=?)", (tid,))
+
+    deleted = client.delete(f"/tasks/{tid}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert client.get(f"/tasks/{tid}").status_code == 404
+    project_after = client.get(f"/projects/{project['id']}").json()
+    assert project_after["tasks"] == []
+    assert source["id"] in {row["id"] for row in project_after["sources"]}
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],))
+    assert db.q("SELECT * FROM task_sources WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM writing_configs WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM drafts WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM versions WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM proposed_patches WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM reviews WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM revision_items WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM preserved_spans WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM claim_checks WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM claim_links WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM reader_path_steps WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM engine_plans WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM meaning_discoveries WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM generation_results WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM writing_operations WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT e.* FROM operation_events e LEFT JOIN writing_operations o "
+                "ON o.id=e.operation_id WHERE o.id IS NULL") == []
+    assert db.q("SELECT r.* FROM operation_records r LEFT JOIN writing_operations o "
+                "ON o.id=r.operation_id WHERE o.id IS NULL") == []
+    assert client.get("/backups/export").status_code == 200
+
+
+def test_delete_task_releases_linked_idea_and_cleans_private_source(client):
+    idea = client.post("/ideas", json={"topic": "等待为什么改变人"}).json()["idea"]
+    task = client.post("/tasks", json={
+        "input_mode": "topic_only", "topic": idea["topic"], "idea_id": idea["id"],
+    }).json()
+    private = client.post(f"/tasks/{task['id']}/sources", json={
+        "title": "Private", "content": "Only used by this task.",
+    }).json()
+
+    deleted = client.delete(f"/tasks/{task['id']}").json()
+    assert deleted["returned_ideas"] == 1
+    assert deleted["removed_unlinked_sources"] == 1
+    db = client.app.state.service.db
+    assert db.q1("SELECT id FROM sources WHERE id=?", (private["id"],)) is None
+    assert db.q1("SELECT task_id,status FROM ideas WHERE id=?", (idea["id"],)) == {
+        "task_id": None, "status": "to_write"}
+
+
+def test_delete_running_task_is_rejected_without_partial_cleanup(client):
+    tid = make_task(client)
+    db = client.app.state.service.db
+    db.exec(
+        "INSERT INTO writing_operations(id,task_id,kind,process_id,status,stage,"
+        "started_at,snapshot_json) VALUES(?,?,?,?,?,?,?,?)",
+        ("op_running", tid, "generate", "test", "running", "queued", "now", "{}"))
+
+    response = client.delete(f"/tasks/{tid}")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TASK_RUNNING"
+    assert client.get(f"/tasks/{tid}").status_code == 200
+    assert db.q1("SELECT task_id FROM writing_configs WHERE task_id=?", (tid,))
+
+
 # ---------------------------------------------------------- generation ----
 
 def test_generate_creates_version_and_draft(client):

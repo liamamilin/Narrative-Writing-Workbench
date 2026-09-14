@@ -120,6 +120,7 @@ const routes = [
   [/^#\/$/, "home"],
   [/^#\/quickwrite$/, "quickWrite"],
   [/^#\/revise$/, "reviseDraft"],
+  [/^#\/tasks$/, "tasks"],
   [/^#\/tasks\/new\?project=([^&]+)$/, "newTask"],
   [/^#\/tasks\/new$/, "newTask"],
   [/^#\/tasks\/([^/]+)$/, "workspace"],
@@ -163,6 +164,52 @@ async function route() {
 window.addEventListener("hashchange", route);
 
 /* ------------------------------------------------------------------ home */
+function taskDisplayTitle(task) {
+  return task.title || task.topic || (task.instruction || "").slice(0, 40) || "未命名任务";
+}
+
+function taskStatusLabel(status) {
+  return ({
+    draft: "草稿", generating: "生成中", ready: "待修改", failed: "失败", done: "已完成",
+  }[status] || status || "未知状态");
+}
+
+function taskRow(task, { showUpdatedAt = false } = {}) {
+  return `<div class="row-item task-row">
+    <a class="grow" href="#/tasks/${encodeURIComponent(task.id)}">
+      <b>${esc(taskDisplayTitle(task))}</b>
+      <span class="muted small"> · ${esc(taskStatusLabel(task.status))}</span>
+      ${showUpdatedAt ? `<span class="muted small task-updated">${esc(task.updated_at || "")}</span>` : ""}
+    </a>
+    <a class="small" href="#/tasks/${encodeURIComponent(task.id)}" data-tip="打开此任务">打开</a>
+    <button type="button" class="task-delete small" data-delete-task="${esc(task.id)}"
+      data-task-title="${esc(taskDisplayTitle(task))}" data-tip="删除任务及其正文、版本和运行记录">删除</button>
+  </div>`;
+}
+
+function bindTaskDeleteButtons(refresh) {
+  document.querySelectorAll("[data-delete-task]").forEach(button => {
+    button.onclick = async () => {
+      const taskId = button.dataset.deleteTask;
+      const title = button.dataset.taskTitle || "未命名任务";
+      const confirmed = await confirmDialog(
+        "删除任务",
+        `将永久删除《${title}》及其正文、版本、检查和运行记录。项目素材会保留；关联选题会回到待写。`,
+        "永久删除", "取消");
+      if (!confirmed) return;
+      button.disabled = true;
+      try {
+        await api("DELETE", `/tasks/${encodeURIComponent(taskId)}`);
+        toast("任务已删除。");
+        await refresh();
+      } catch (e) {
+        toast(e.message || "任务删除失败。", true);
+        if (button.isConnected) button.disabled = false;
+      }
+    };
+  });
+}
+
 async function home() {
   const [tasks, projects] = await Promise.all([api("GET", "/tasks"), api("GET", "/projects")]);
   $("#app").innerHTML = `
@@ -182,12 +229,10 @@ async function home() {
       </div>
     </div>
     <div class="home-sections">
-      <section><h2>最近任务</h2><div class="home-list">${
-        tasks.tasks.length ? tasks.tasks.slice(0, 8).map(t => `
-          <div class="row-item"><a class="grow" href="#/tasks/${t.id}">
-             <b>${esc(t.title || t.topic || t.instruction.slice(0, 40) || "未命名任务")}</b>
-            <span class="muted small"> · ${esc(t.status)}</span></a>
-            <a class="small" href="#/tasks/${t.id}" data-tip="打开此任务">打开</a></div>`).join("")
+      <section><div class="sec-head"><h2>最近任务</h2>
+          <a class="ghost small" href="#/tasks" data-tip="查看本机保存的全部任务">查看所有任务</a></div>
+        <div class="home-list">${
+        tasks.tasks.length ? tasks.tasks.slice(0, 8).map(t => taskRow(t)).join("")
         : `<p class="muted">还没有任务。从一个话题或一批素材开始。</p>`}
       </div></section>
       <section><div class="sec-head"><h2>项目</h2>
@@ -199,6 +244,30 @@ async function home() {
         : `<p class="muted">项目用于把相关素材与任务归堆(可选)。</p>`}
       </div></section>
     </div>`;
+  bindTaskDeleteButtons(home);
+}
+
+async function tasks() {
+  const data = await api("GET", "/tasks");
+  if (location.hash !== "#/tasks") return;
+  const rows = data.tasks.map(t => taskRow(t, { showUpdatedAt: true })).join("");
+  $("#app").innerHTML = `
+    <div class="page-head task-list-head">
+      <div>
+        <p class="slogan">把写作继续下去</p>
+        <h1>所有任务</h1>
+        <p class="muted">按最近更新时间排列，共 ${data.tasks.length} 个任务。</p>
+      </div>
+      <a class="primary action-link" href="#/tasks/new">从素材写</a>
+    </div>
+    <section class="task-list card">
+      ${rows || `<div class="task-empty">
+        <p>还没有任务。</p>
+        <p class="muted">从一个话题或一批素材开始，第一篇文章会出现在这里。</p>
+        <a class="primary action-link" href="#/tasks/new">开始写作</a>
+      </div>`}
+    </section>`;
+  bindTaskDeleteButtons(tasks);
 }
 
 async function newProjectPrompt() {
@@ -954,10 +1023,7 @@ async function project(pid) {
     <h1>${esc(p.name)}</h1><p class="muted">${esc(p.description || "")}</p>
     <div class="row"><button class="primary" data-tip="为本项目新建写作任务" onclick="location.hash='#/tasks/new?project=${encodeURIComponent(pid)}'">新建写作任务</button></div>
     <div class="cols">
-      <section class="card"><h3>任务</h3>${p.tasks.map(t => `
-        <div class="vrow"><a class="grow" href="#/tasks/${t.id}">
-          <b>${esc(t.title || t.instruction.slice(0, 40) || "未命名任务")}</b>
-          <span class="muted small"> · ${esc(t.status)}</span></a></div>`).join("")
+      <section class="card project-task-list"><h3>任务</h3>${p.tasks.map(t => taskRow(t)).join("")
         || '<p class="muted">还没有任务。</p>'}</section>
       <section class="card"><h3>素材</h3>
         <div id="src-list">${p.sources.map(s => `
@@ -969,6 +1035,7 @@ async function project(pid) {
         <textarea id="src-body" rows="4" aria-label="素材内容" placeholder="粘贴素材…"></textarea>
         <p><button id="src-add" data-tip="把素材存入本项目，供任务引用">添加素材</button></p></section>
     </div>`;
+  bindTaskDeleteButtons(() => project(pid));
   $("#src-add").onclick = async () => {
     try {
       await api("POST", `/projects/${pid}/sources`, {
@@ -1690,7 +1757,12 @@ function renderPanel() {
   if (WS.panelTab === "settings") box.innerHTML = `
      <p class="small">任务类型：<b>${esc(t.type)}</b></p>
      <p class="small">状态：<b>${esc(t.status)}</b></p>
-     <p class="small muted">自动保存不会创建版本。只有生成、接受 AI 修改、手动节点和恢复操作会留下版本。</p>`;
+     <p class="small muted">自动保存不会创建版本。只有生成、接受 AI 修改、手动节点和恢复操作会留下版本。</p>
+     <div class="task-danger-zone">
+       <b class="small">删除任务</b>
+       <p class="small muted">删除正文、版本、检查和运行记录。项目素材会保留。</p>
+       <button id="delete-current-task" class="danger">删除这个任务</button>
+     </div>`;
 
   if (WS.panelTab === "goal") {
     $("#p-gen").onclick = generateDraft;
@@ -1723,6 +1795,26 @@ function renderPanel() {
       if (WS.review) WS.review.stale = true;
       toast("保护项已保存。");
     });
+  }
+  if (WS.panelTab === "settings") {
+    $("#delete-current-task").onclick = async () => {
+      const taskId = WS.tid;
+      const button = $("#delete-current-task");
+      try {
+        await flushAutosave({ checkpoint: false });
+        const confirmed = await confirmDialog(
+          "删除任务",
+          `将永久删除《${taskDisplayTitle(t)}》及其正文、版本、检查和运行记录。项目素材会保留；关联选题会回到待写。`,
+          "永久删除", "取消");
+        if (!confirmed || WS.tid !== taskId) return;
+        button.disabled = true;
+        await api("DELETE", `/tasks/${encodeURIComponent(taskId)}`);
+        WS.tid = null; WS.task = null; WS.draft = null;
+        toast("任务已删除。");
+        location.hash = "#/tasks";
+      } catch (e) { toast(e.message || "任务删除失败。", true); }
+      finally { if (button.isConnected) button.disabled = false; }
+    };
   }
 }
 
@@ -2854,5 +2946,5 @@ window.addEventListener("beforeunload", () => {
   } catch (_) { /* unloading: best effort only */ }
 });
 
-const SCREENS = { home, quickWrite, reviseDraft, newTask, workspace, versions, projects, project, guide, settings };
+const SCREENS = { home, quickWrite, reviseDraft, tasks, newTask, workspace, versions, projects, project, guide, settings };
 route();

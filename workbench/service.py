@@ -353,6 +353,70 @@ class Service:
     def list_projects(self) -> list[dict]:
         return self.db.q("SELECT * FROM projects ORDER BY updated_at DESC")
 
+    def list_tasks(self) -> list[dict]:
+        return self.db.q(
+            "SELECT * FROM tasks ORDER BY updated_at DESC, created_at DESC, id DESC")
+
+    def delete_task(self, tid: str) -> dict:
+        """Delete one idle task and all task-owned writing artifacts atomically.
+
+        Sources in a project are library data and remain available. A source
+        without a project is removed only when the deleted task was its final
+        link. Linked ideas are preserved and become available to write again.
+        """
+        with self.db.transaction() as tx:
+            task = tx.q1("SELECT id,project_id FROM tasks WHERE id=?", (tid,))
+            if not task:
+                raise ApiError("NOT_FOUND", "Task not found.", 404)
+            if tx.q1(
+                    "SELECT id FROM writing_operations "
+                    "WHERE task_id=? AND status='running' LIMIT 1", (tid,)):
+                raise ApiError(
+                    "TASK_RUNNING", "任务仍在执行，请等待完成后再删除。", 409)
+
+            source_ids = [row["source_id"] for row in tx.q(
+                "SELECT source_id FROM task_sources WHERE task_id=?", (tid,))]
+            ts = now()
+            returned_ideas = tx.exec(
+                "UPDATE ideas SET task_id=NULL,"
+                "status=CASE WHEN status='written' THEN 'to_write' ELSE status END,"
+                "updated_at=? WHERE task_id=?", (ts, tid)).rowcount
+
+            # Draft-owned records must go before their Draft lookup disappears.
+            draft_lookup = "SELECT id FROM drafts WHERE task_id=?"
+            tx.exec(f"DELETE FROM reader_path_steps WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec(f"DELETE FROM revision_items WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec(f"DELETE FROM preserved_spans WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec(f"DELETE FROM claim_links WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec(f"DELETE FROM claim_checks WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec(f"DELETE FROM proposed_patches WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec(f"DELETE FROM reviews WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec(f"DELETE FROM versions WHERE draft_id IN ({draft_lookup})", (tid,))
+            tx.exec("DELETE FROM drafts WHERE task_id=?", (tid,))
+
+            operation_lookup = "SELECT id FROM writing_operations WHERE task_id=?"
+            tx.exec(f"DELETE FROM operation_events WHERE operation_id IN ({operation_lookup})", (tid,))
+            tx.exec(f"DELETE FROM operation_records WHERE operation_id IN ({operation_lookup})", (tid,))
+            tx.exec("DELETE FROM generation_results WHERE task_id=?", (tid,))
+            tx.exec("DELETE FROM engine_plans WHERE task_id=?", (tid,))
+            tx.exec("DELETE FROM meaning_discoveries WHERE task_id=?", (tid,))
+            tx.exec("DELETE FROM writing_operations WHERE task_id=?", (tid,))
+            tx.exec("DELETE FROM writing_configs WHERE task_id=?", (tid,))
+            tx.exec("DELETE FROM task_sources WHERE task_id=?", (tid,))
+            tx.exec("DELETE FROM tasks WHERE id=?", (tid,))
+
+            removed_sources = 0
+            for source_id in source_ids:
+                removed_sources += tx.exec(
+                    "DELETE FROM sources WHERE id=? AND project_id IS NULL "
+                    "AND NOT EXISTS(SELECT 1 FROM task_sources WHERE source_id=?)",
+                    (source_id, source_id)).rowcount
+            if task.get("project_id"):
+                tx.exec("UPDATE projects SET updated_at=? WHERE id=?",
+                        (ts, task["project_id"]))
+        return {"id": tid, "deleted": True, "returned_ideas": returned_ideas,
+                "removed_unlinked_sources": removed_sources}
+
     def get_project(self, pid: str) -> dict:
         row = self.db.q1("SELECT * FROM projects WHERE id=?", (pid,))
         if not row:

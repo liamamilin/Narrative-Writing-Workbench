@@ -69,7 +69,23 @@ async function main() {
         throw new Error(`${name}: ${message}`, {cause:e});
       }
     }
-    let source, quick, imported, firstVersion, firstMeaning, releaseAcceptReload;
+    let source, quick, imported, firstVersion, firstMeaning, releaseAcceptReload, linkedIdeaTask;
+    await check('B00 home task overview opens a task', async()=>{
+      const overview = await api('POST', '/tasks', {
+        type: 'essay', title: '任务总览入口验收',
+        instruction: '验证任务可以从总览页打开。',
+        material: '一段用于任务列表验收的素材。',
+        config: {expected_language: 'zh', target_length: 400,
+          immersion: 'medium', explicitness: 'medium', intensity: 'medium'}
+      });
+      await go('/');
+      await page.locator('a[href="#/tasks"]').click();
+      await page.locator('.task-list').waitFor();
+      assert.match(await page.locator('.task-list').innerText(), /任务总览入口验收/);
+      await page.locator(`.task-row a[href="#/tasks/${overview.id}"]`).first().click();
+      await page.locator(`.workspace[data-task-id="${overview.id}"]`).waitFor();
+      assert.match(page.url(), new RegExp(`#\\/tasks\\/${overview.id}$`));
+    });
     await check('B01 source generation, manual edit and reload', async()=>{
       await go('/tasks/new');
       await page.locator('#f-material').fill('修好的钟放在桌上。老人仍每天等待邮递员。');
@@ -522,15 +538,31 @@ async function main() {
       await page.locator('.idea-card [data-use-idea]').click();
       assert.equal(await page.locator('#qw-topic').inputValue(),'迁移后继续写');
       await page.locator('#qw-go').click(); await editor().waitFor();
-      const linkedTask=taskId();
+      linkedIdeaTask=taskId();
       const linked=(await api('GET',`/ideas?q=${encodeURIComponent('迁移后继续')}`)).ideas[0];
-      assert.equal(linked.status,'written'); assert.equal(linked.task_id,linkedTask);
+      assert.equal(linked.status,'written'); assert.equal(linked.task_id,linkedIdeaTask);
 
       await go('/quickwrite'); await page.locator('#idea-status').selectOption('written');
       await until(async()=>await page.locator('.idea-card').count()===1,'written idea filter');
       await page.locator('.idea-card [data-open-idea]').click();
-      await page.locator(`.workspace[data-task-id="${linkedTask}"]`).waitFor();
+      await page.locator(`.workspace[data-task-id="${linkedIdeaTask}"]`).waitFor();
       await page.screenshot({path:path.join(output,'idea-box-linked-task.png'),fullPage:true});
+    });
+    await check('B18 task deletion confirmation and idea release', async()=>{
+      await go('/tasks');
+      const button=page.locator(`[data-delete-task="${linkedIdeaTask}"]`);
+      await button.waitFor();
+      await button.click();
+      await page.locator('dialog[open] button[value=cancel]').click();
+      assert.equal(await button.count(),1,'cancel keeps the task');
+      await button.click(); await confirm();
+      await until(async()=>await page.locator(`[data-delete-task="${linkedIdeaTask}"]`).count()===0,
+        'deleted task leaves overview');
+      const missing=await context.request.get(base+`/tasks/${linkedIdeaTask}`);
+      assert.equal(missing.status(),404);
+      const released=(await api('GET',`/ideas?q=${encodeURIComponent('迁移后继续')}`)).ideas[0];
+      assert.equal(released.status,'to_write'); assert.equal(released.task_id,null);
+      await page.screenshot({path:path.join(output,'task-deleted.png'),fullPage:true});
     });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {

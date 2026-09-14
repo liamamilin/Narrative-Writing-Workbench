@@ -87,8 +87,7 @@ def create_app(service: Service | None = None) -> FastAPI:
 
     @app.get("/tasks")
     def list_tasks():
-        return {"tasks": svc().db.q(
-            "SELECT * FROM tasks ORDER BY updated_at DESC LIMIT 50")}
+        return {"tasks": svc().list_tasks()}
 
     @app.get("/tasks/{task_id}")
     def get_task(task_id: str):
@@ -97,6 +96,10 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.patch("/tasks/{task_id}")
     def update_task(task_id: str, body: dict):
         return svc().update_task(task_id, body)
+
+    @app.delete("/tasks/{task_id}")
+    def delete_task(task_id: str):
+        return svc().delete_task(task_id)
 
     @app.post("/tasks/{task_id}/sources")
     def add_task_source(task_id: str, body: dict):
