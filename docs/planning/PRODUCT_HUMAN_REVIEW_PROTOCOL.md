@@ -105,3 +105,5 @@ python3 scripts/product_human_review.py summarize \
 - packet id：`db7c1f2964ed9bdbf8a5`
 
 评分模板仍为空。以上路径受 `.gitignore` 保护，只记录位置和 hash 链路，不把真实评估正文或人工身份提交到仓库。
+
+上述目录是 v1 基线评审包。v2 工具已经实现并通过测试，但尚未把新的 `--include-angle-options` 真实运行结果发给评审者；完成固定模型的真实评估后，应使用“核心体验 v2 评审包”命令另建目录，不覆盖这份历史基线。
