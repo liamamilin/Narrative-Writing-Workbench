@@ -31,6 +31,8 @@ def main():
                         help='real mode provider retries per call (default: 0)')
     parser.add_argument('--case-limit', type=int,
                         help='run only the first N cases for a capacity pilot')
+    parser.add_argument('--include-angle-options', action='store_true',
+                        help='for Quick Write cases, save a separate safe angle-options result for v2 human review')
     parser.add_argument(
         '--settings',
         help='real mode only: local Workbench settings used as the credential/endpoint source')
@@ -91,6 +93,7 @@ def main():
         'model_override': args.model,
         'timeout_seconds_override': args.timeout_seconds,
         'max_retries': args.max_retries,
+        'include_angle_options': args.include_angle_options,
     }
     (output / 'RUN_METADATA.json').write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2))
@@ -107,6 +110,12 @@ def main():
                     row['operations'].append(svc.operation_detail(tid, operation_id))
             try:
                 tid = svc.create_task(case['input'])['id']; row['task_id'] = tid
+                if row['mode'] == 'topic_only' and args.include_angle_options:
+                    angle_options = svc.angle_options(tid)
+                    capture_operation(angle_options)
+                    row['angle_options'] = {
+                        'candidates': angle_options['candidates'],
+                    }
                 if row['mode'] != 'draft_revision':
                     capture_operation(svc.generate(tid))
                 review = svc.review(tid)
@@ -142,10 +151,21 @@ def main():
             print(case['id'], row['status'], flush=True)
         worksheet = '# 产品效果人工评审索引\n\n'
         worksheet += f'运行模式：{args.engine}。mock 只验证流程，不能用于评价真实写作效果。评分必须由实际评审者填写；usage 未取得时保持未知。\n\n'
-        worksheet += ('正式评分前，请用 `scripts/product_human_review.py prepare` 生成匿名、随机排序的评审包，并把私有映射保存在评审包目录之外。不要直接查看本目录的模型、自动审阅或 operation 信息后评分。\n\n')
-        worksheet += '| 案例 | 运行 | 命题/推进 1–5 | 可辩护性 1–5 | 保留价值 1–5 | 补丁效果 1–5 | 评语/评审者 |\n|---|---|---|---|---|---|---|\n'
+        prepare_command = ('`scripts/product_human_review.py prepare --schema-version 2`'
+                           if args.include_angle_options else
+                           '`scripts/product_human_review.py prepare`')
+        worksheet += (f'正式评分前，请用 {prepare_command} 生成匿名、随机排序的评审包，并把私有映射保存在评审包目录之外。不要直接查看本目录的模型、自动审阅或 operation 信息后评分。\n\n')
+        if args.include_angle_options:
+            worksheet += ('v2 评审包会把初稿、角度候选和局部修订拆成独立评估项；以下索引只记录运行状态，评分字段以匿名包中的 `RATINGS.json` 为准。\n\n'
+                          '| 案例 | 运行 | v2 评审项 | 评语/评审者 |\n|---|---|---|---|\n')
+        else:
+            worksheet += '| 案例 | 运行 | 命题/推进 1–5 | 可辩护性 1–5 | 保留价值 1–5 | 补丁效果 1–5 | 评语/评审者 |\n|---|---|---|---|---|---|---|\n'
         for row in rows:
-            worksheet += f'| {row["case"]} | {row["status"]} | 待评 | 待评 | 待评 | 待评 | |\n'
+            if args.include_angle_options:
+                item_count = 2 if row.get('angle_options') is not None else 1
+                worksheet += f'| {row["case"]} | {row["status"]} | {item_count} 项（维度见 v2 评审包） | |\n'
+            else:
+                worksheet += f'| {row["case"]} | {row["status"]} | 待评 | 待评 | 待评 | 待评 | |\n'
         (output / 'HUMAN_REVIEW.md').write_text(worksheet)
         return 1 if any(r['status'] == 'failed' for r in rows) else 0
     finally:

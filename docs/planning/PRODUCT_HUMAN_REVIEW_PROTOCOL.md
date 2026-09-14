@@ -40,6 +40,47 @@ python3 scripts/product_human_review.py prepare \
 
 固定 seed、相同 `results.json` 和案例 fixture 会生成字节一致的评审正文及评分模板。工具拒绝未完成案例、重复案例、入口或验收标准不一致的结果。
 
+### 核心体验 v2 评审包
+
+P0-1 使用 v2 包把核心主链路拆成三类独立评估对象：基础初稿、F02 写前角度候选集和 F03 局部修订。v1 包仍可按原命令生成和汇总，历史待评包不需要迁移。
+
+先用评估器保存 Quick Write 的角度候选，再生成 v2 包：
+
+```bash
+python3 scripts/evaluate_product.py \
+  --engine real \
+  --include-angle-options \
+  --output .scratch/product-evaluation-real-<run>
+
+python3 scripts/product_human_review.py prepare \
+  --schema-version 2 \
+  --results .scratch/product-evaluation-real-<run>/results.json \
+  --output .scratch/product-human-review-<run> \
+  --key .scratch/product-human-review-<run>-private-key.json \
+  --seed 20260914
+```
+
+v2 的评分字段按评估对象隔离：
+
+| 评估对象 | 评分维度 | 额外填写 |
+|---|---|---|
+| 初稿 `draft` | 命题/推进、可辩护性、保留价值 | — |
+| 角度集 `angle_set` | 角度价值、角度区分度、角度可辩护性、选择信心 | 在 `preferred_candidate` 选择 C01–C05 |
+| 局部修订 `patch` | 目标改善、上下文保留、范围控制 | — |
+
+角度候选在公开评审包中只显示 `C01` 等匿名代码；原始候选 ID 只存放在评审包目录外的私有 key 中。`MANIFEST.json` 的案例数只统计本次 `results.json` 实际包含的案例，因此容量试跑和完整评估可以使用同一工具而不会把 fixture 中未运行的案例计入结果。
+
+v2 汇总命令与 v1 相同：
+
+```bash
+python3 scripts/product_human_review.py summarize \
+  --packet .scratch/product-human-review-<run> \
+  --key .scratch/product-human-review-<run>-private-key.json \
+  --output .scratch/product-human-review-<run>-summary
+```
+
+汇总会分别计算三类对象的维度均值，并恢复被选角度的原始 ID。没有完整填写 `preferred_candidate`、错误填写其他类型维度或来源 hash 不一致时，汇总继续拒绝，避免综合均分掩盖角度选择和修订副作用。
+
 ## 回收与汇总
 
 评审者只修改评审包中的 `RATINGS.json`：填写 `reviewer`、`reviewed_at`、每项 `scores` 和可选 `comments`。完成后由保管私有映射的人运行：
