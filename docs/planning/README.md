@@ -1,6 +1,6 @@
 # 产品与开发规划入口
 
-更新：2026-09-13。
+更新：2026-09-14。
 
 开发持续进行：[开发进展记录](../reports/DEVELOPMENT_PROGRESS.md)。该日志提供实际状态，已完成计划和初始审计见[归档](../archive/README.md)。
 
@@ -13,6 +13,7 @@
 | [产品演进方向与功能路线图](PRODUCT_EVOLUTION_ROADMAP.md) | 产品应往哪里发展，哪些新功能值得先做？ | 提案 |
 | [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md) | 每项候选功能怎样拆成可交付工作？ | F01–F06 工程实现已完成，真实使用评估继续收集 |
 | [下一阶段开发优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md) | 当前未完成工作按重要性和必要性怎样排序？ | 当前执行顺序 |
+| [任务删除规格](TASK_DELETION_SPEC_2026_09_14.md) | 删除任务时哪些数据清理、哪些内容保留？ | 已实现并通过自动验收 |
 | [历史文档归档](../archive/README.md) | 初始审计、已完成计划和旧路线图在哪里？ | 只作历史参考 |
 
 [本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.7 选题箱规格](../narrative-writing-product-v0.7-idea-box-spec/README.md) · [F06 实施报告](../reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md)
