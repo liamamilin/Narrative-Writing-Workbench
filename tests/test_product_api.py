@@ -181,6 +181,97 @@ def test_delete_running_task_is_rejected_without_partial_cleanup(client):
     assert db.q1("SELECT task_id FROM writing_configs WHERE task_id=?", (tid,))
 
 
+# -------------------------------------------------------- project delete ----
+
+def test_delete_project_cascades_tasks_sources_and_artifacts(client):
+    project = client.post("/projects", json={"name": "Collection"}).json()
+    source = client.post(f"/projects/{project['id']}/sources", json={
+        "title": "Shared note", "type": "note", "content": "Shared evidence.",
+    }).json()
+    tid = make_task(client, type="essay", project_id=project["id"],
+                    source_ids=[source["id"]])
+    generated = client.post(f"/tasks/{tid}/generate", json={})
+    assert generated.status_code == 200, generated.text
+    task = client.get(f"/tasks/{tid}").json()
+    draft = task["draft"]
+    assert client.post(f"/tasks/{tid}/review").status_code == 200
+    assert client.post(f"/tasks/{tid}/reader-path-review").status_code == 200
+
+    db = client.app.state.service.db
+
+    deleted = client.delete(f"/projects/{project['id']}")
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body["deleted"] is True
+    assert body["deleted_tasks"] == 1
+    assert body["removed_sources"] >= 1
+    assert client.get(f"/projects/{project['id']}").status_code == 404
+    assert client.get(f"/tasks/{tid}").status_code == 404
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],)) is None
+    assert db.q("SELECT * FROM task_sources WHERE source_id=?", (source["id"],)) == []
+    assert db.q("SELECT * FROM tasks WHERE project_id=?", (project["id"],)) == []
+    assert db.q("SELECT * FROM sources WHERE project_id=?", (project["id"],)) == []
+    assert db.q("SELECT * FROM drafts WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM versions WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM proposed_patches WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM reviews WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM writing_operations WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT e.* FROM operation_events e LEFT JOIN writing_operations o "
+                "ON o.id=e.operation_id WHERE o.id IS NULL") == []
+    assert client.get("/backups/export").status_code == 200
+
+
+def test_delete_project_releases_linked_ideas(client):
+    project = client.post("/projects", json={"name": "Topics"}).json()
+    idea = client.post("/ideas", json={"topic": "等待为什么改变人"}).json()["idea"]
+    task = client.post("/tasks", json={
+        "input_mode": "topic_only", "topic": idea["topic"], "idea_id": idea["id"],
+        "project_id": project["id"],
+    }).json()
+
+    deleted = client.delete(f"/projects/{project['id']}").json()
+    assert deleted["returned_ideas"] == 1
+    db = client.app.state.service.db
+    assert client.get(f"/tasks/{task['id']}").status_code == 404
+    assert db.q1("SELECT task_id,status FROM ideas WHERE id=?", (idea["id"],)) == {
+        "task_id": None, "status": "to_write"}
+
+
+def test_delete_running_project_is_rejected_without_partial_cleanup(client):
+    project = client.post("/projects", json={"name": "Running"}).json()
+    tid = make_task(client, project_id=project["id"])
+    db = client.app.state.service.db
+    db.exec(
+        "INSERT INTO writing_operations(id,task_id,kind,process_id,status,stage,"
+        "started_at,snapshot_json) VALUES(?,?,?,?,?,?,?,?)",
+        ("op_running", tid, "generate", "test", "running", "queued", "now", "{}"))
+
+    response = client.delete(f"/projects/{project['id']}")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TASK_RUNNING"
+    assert client.get(f"/projects/{project['id']}").status_code == 200
+    assert client.get(f"/tasks/{tid}").status_code == 200
+
+
+def test_delete_project_cleans_cross_task_source_links(client):
+    project_a = client.post("/projects", json={"name": "A"}).json()
+    project_b = client.post("/projects", json={"name": "B"}).json()
+    source = client.post(f"/projects/{project_a['id']}/sources", json={
+        "title": "Shared", "type": "note", "content": "cross-project evidence.",
+    }).json()
+    # Task in project B references a source owned by project A.
+    tid_b = make_task(client, project_id=project_b["id"], source_ids=[source["id"]])
+
+    deleted = client.delete(f"/projects/{project_a['id']}")
+    assert deleted.status_code == 200
+    db = client.app.state.service.db
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],)) is None
+    assert db.q("SELECT * FROM task_sources WHERE source_id=?", (source["id"],)) == []
+    # Task B survives; the link to the deleted source is simply gone.
+    assert client.get(f"/tasks/{tid_b}").status_code == 200
+    assert client.get("/backups/export").status_code == 200
+
+
 # ---------------------------------------------------------- generation ----
 
 def test_generate_creates_version_and_draft(client):

@@ -73,6 +73,10 @@ def create_app(service: Service | None = None) -> FastAPI:
     def get_project(project_id: str):
         return svc().project_detail(project_id)
 
+    @app.delete("/projects/{project_id}")
+    def delete_project(project_id: str):
+        return svc().delete_project(project_id)
+
     @app.post("/projects/{project_id}/sources")
     def create_source(project_id: str, body: dict):
         return svc().create_source(project_id, body.get("title", ""),

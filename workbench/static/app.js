@@ -210,6 +210,29 @@ function bindTaskDeleteButtons(refresh) {
   });
 }
 
+function bindProjectDeleteButtons(refresh) {
+  document.querySelectorAll("[data-delete-project]").forEach(button => {
+    button.onclick = async () => {
+      const pid = button.dataset.deleteProject;
+      const name = button.dataset.projectName || "未命名项目";
+      const confirmed = await confirmDialog(
+        "删除项目",
+        `将永久删除项目《${name}》及其全部任务、正文、版本、检查、运行记录和素材。关联选题会回到待写。`,
+        "永久删除", "取消");
+      if (!confirmed) return;
+      button.disabled = true;
+      try {
+        await api("DELETE", `/projects/${encodeURIComponent(pid)}`);
+        toast("项目已删除。");
+        await refresh();
+      } catch (e) {
+        toast(e.message || "项目删除失败。", true);
+        if (button.isConnected) button.disabled = false;
+      }
+    };
+  });
+}
+
 async function home() {
   const [tasks, projects] = await Promise.all([api("GET", "/tasks"), api("GET", "/projects")]);
   $("#app").innerHTML = `
@@ -240,11 +263,14 @@ async function home() {
         <div class="home-list">${
         projects.projects.length ? projects.projects.slice(0, 8).map(p => `
           <div class="row-item"><a class="grow" href="#/projects/${p.id}"><b>${esc(p.name)}</b></a>
-          <a class="small" href="#/projects/${p.id}" data-tip="打开此项目">打开</a></div>`).join("")
+          <a class="small" href="#/projects/${p.id}" data-tip="打开此项目">打开</a>
+          <button type="button" class="project-delete small" data-delete-project="${p.id}"
+            data-project-name="${esc(p.name)}" data-tip="删除项目及其全部任务与素材">删除</button></div>`).join("")
         : `<p class="muted">项目用于把相关素材与任务归堆(可选)。</p>`}
       </div></section>
     </div>`;
   bindTaskDeleteButtons(home);
+  bindProjectDeleteButtons(home);
 }
 
 async function tasks() {
@@ -1013,8 +1039,10 @@ async function projects() {
     <p><button class="primary" onclick="newProjectPrompt()" data-tip="新建一个项目">新建项目</button></p>` +
     (ps.projects.map(p => `<div class="card row">
       <a class="grow" href="#/projects/${p.id}"><b>${esc(p.name)}</b></a>
-      <span class="muted small">${esc(p.updated_at)}</span></div>`).join("") ||
+      <button type="button" class="project-delete small" data-delete-project="${p.id}"
+        data-project-name="${esc(p.name)}" data-tip="删除项目及其全部任务与素材">删除</button></div>`).join("") ||
       '<p class="muted">还没有项目。</p>');
+  bindProjectDeleteButtons(projects);
 }
 
 async function project(pid) {
@@ -1034,8 +1062,15 @@ async function project(pid) {
         <input id="src-title" data-tip="给这份素材起个名字" placeholder="素材标题">
         <textarea id="src-body" rows="4" aria-label="素材内容" placeholder="粘贴素材…"></textarea>
         <p><button id="src-add" data-tip="把素材存入本项目，供任务引用">添加素材</button></p></section>
+    </div>
+    <div class="task-danger-zone" style="margin-top:20px">
+      <b class="small">删除项目</b>
+      <p class="small muted">将永久删除本项目及其全部任务、正文、版本、检查、运行记录和素材。关联选题会回到待写。</p>
+      <button type="button" id="delete-project" class="danger"
+        data-delete-project="${pid}" data-project-name="${esc(p.name)}">删除这个项目</button>
     </div>`;
   bindTaskDeleteButtons(() => project(pid));
+  bindProjectDeleteButtons(() => { location.hash = "#/projects"; });
   $("#src-add").onclick = async () => {
     try {
       await api("POST", `/projects/${pid}/sources`, {
