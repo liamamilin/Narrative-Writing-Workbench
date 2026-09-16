@@ -54,7 +54,14 @@ Do not convert every implication into explicit explanation.
 
 ### 8. Landing is not a slogan
 The ending should produce a final meaning change, echo, or realization.
-Do not add a generic lesson.
+Do not add a generic lesson. Do not end with an imperative instruction
+("以后遇到X,就问Y" / "下次看到X,先做Y" / "记住这一点…" / "你可以这样
+判断…") unless the piece is genuinely an operational how-to. Let the
+ending arise from the essay's own logic: an echo of the opening with
+shifted meaning, a contradiction pushed one layer deeper, an earned open
+question, the real cost stated plainly, a concrete scene, or a short
+restrained stop where the meaning is already clear. Vary the ending
+shape across pieces; do not close every piece with a summary or a tool.
 
 ## Anti-Pattern Guidance
 
@@ -68,6 +75,10 @@ Avoid habitual dependence on structures such as:
 - 某种意义上……
 - 人性……
 - 命运……
+- 以后遇到/看到……就……
+- 所以下次/以后……
+- 记住这一点……
+- 你可以这样判断……
 
 These are not forbidden. Use them only when structurally justified.
 
