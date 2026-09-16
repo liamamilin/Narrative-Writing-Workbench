@@ -206,7 +206,8 @@ def test_progression_contract_carries_distinction_and_residue():
     from workbench.meaning_schema import PROGRESSION_CONTRACT
     assert "conceptual distinction" in PROGRESSION_CONTRACT
     assert "Residue" in PROGRESSION_CONTRACT
-    assert "总结陈词" in PROGRESSION_CONTRACT          # closing = tool, not summary
+    assert "总结陈词" in PROGRESSION_CONTRACT          # closing = residue, not summary
+    assert "action-tool ending" in PROGRESSION_CONTRACT  # no default imperative tool close
 
 
 def test_discover_prompt_demands_distinction_and_residue():
@@ -214,7 +215,7 @@ def test_discover_prompt_demands_distinction_and_residue():
     base = pathlib.Path(Config.default().prompts_dir)
     text = (base / "meaning_discovery.md").read_text(encoding="utf-8")
     assert "conceptual distinction" in text and "X ≠ Y" in text
-    assert "portable mental tool" in text
+    assert "action tool" in text
     assert "Residue" in text
 
 

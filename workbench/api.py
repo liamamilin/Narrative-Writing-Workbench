@@ -73,11 +73,24 @@ def create_app(service: Service | None = None) -> FastAPI:
     def get_project(project_id: str):
         return svc().project_detail(project_id)
 
+    @app.delete("/projects/{project_id}")
+    def delete_project(project_id: str):
+        return svc().delete_project(project_id)
+
     @app.post("/projects/{project_id}/sources")
     def create_source(project_id: str, body: dict):
         return svc().create_source(project_id, body.get("title", ""),
                                    body.get("type", "pasted_text"),
                                    body.get("content", ""))
+
+    @app.patch("/sources/{source_id}")
+    def update_source(source_id: str, body: dict):
+        return svc().update_source(source_id, body.get("title"),
+                                   body.get("content"))
+
+    @app.delete("/sources/{source_id}")
+    def delete_source(source_id: str):
+        return svc().delete_source(source_id)
 
     # ------------------------------------------------------------- tasks ----
 
@@ -105,6 +118,15 @@ def create_app(service: Service | None = None) -> FastAPI:
     def add_task_source(task_id: str, body: dict):
         return svc().add_task_source(task_id, body.get("title", ""),
                                      body.get("content", ""))
+
+    @app.patch("/tasks/{task_id}/sources/{source_id}")
+    def update_task_source(task_id: str, source_id: str, body: dict):
+        return svc().update_task_source(task_id, source_id, body.get("title"),
+                                        body.get("content"))
+
+    @app.delete("/tasks/{task_id}/sources/{source_id}")
+    def delete_task_source(task_id: str, source_id: str):
+        return svc().delete_task_source(task_id, source_id)
 
     @app.post("/tasks/{task_id}/generate")
     def generate(task_id: str, body: dict | None = None):

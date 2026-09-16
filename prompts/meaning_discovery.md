@@ -31,8 +31,18 @@ Boundary          命题什么时候成立/不成立        → boundary
 ↓
 Refined Thesis    更准确、更深的命题            → refined_thesis
 ↓
-Implication→Residue 读者带走一个可用的模型     → reader_end_state
+Residue           读完之后留下什么             → reader_end_state
 ```
+
+The chain is a **thinking aid, not a mandatory section template** for the
+final essay. Counterexample and Boundary exist to pressure-test the thesis
+internally; they become sections only when the essay's logic actually needs
+them. Do not force every piece into "拆概念 → 举例 → 反例 → 边界 → 给
+工具". Some theses are best served by observation, explanation, or
+renaming, and should stop where the tension is highest — not where a
+closed loop would feel tidy. The writer is not required to answer "读者
+以后该怎么办"; making that the default turns every essay into a method
+card.
 
 Rules for the chain:
 
@@ -63,13 +73,26 @@ Rules for the chain:
   `common_reading` — if no frame migration happened, you failed. The
   conceptual distinction (X ≠ Y) should be visible inside the refined
   thesis, not buried.
-- **Implication → Residue** (`reader_end_state`): not a mood, not a
-  summary of the essay. Name the **portable mental tool** the reader
-  keeps: a concept or distinction they can carry and reuse, and one
-  future situation where it will fire again (e.g. "以后再看到'自愿',
-  用退出成本重新检查一遍:没有退出选项的同意不算同意"). One
-  sentence, testable: if nothing is left to USE after reading, the
-  essay was a consumable.
+- **Residue** (`reader_end_state`): what stays after the last sentence. NOT a
+  mood, NOT a summary of the essay, and NOT by default an action tool.
+  Choose the form that fits THIS essay's own logic:
+  - a reframed concept or distinction the reader now holds (X ≠ Y);
+  - the core contradiction pushed one layer deeper than where the essay
+    started;
+  - the real, named cost of the structure the essay exposed;
+  - an open question the essay earned but did not close;
+  - a concrete image or scene that concentrates the meaning;
+  - a portable distinction the reader can reuse — ONLY when the essay is
+    genuinely about a reusable lens, not as the default ending.
+
+  Do NOT default to an imperative instruction ("以后遇到X,就问Y" /
+  "下次看到X,先做Y" / "记住这一点…"). That shape belongs to operational
+  how-to pieces; most observation / explanation / renaming essays should
+  stop at the point of maximum tension. One or two sentences. If the essay
+  has already said the thing clearly, a short, restrained residue is
+  correct — do not manufacture a tool just to feel "useful". A consumable
+  essay is one that leaves nothing to think about, not one that fails to
+  hand the reader a checklist.
 
 ## Selection
 

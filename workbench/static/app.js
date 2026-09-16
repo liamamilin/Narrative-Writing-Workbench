@@ -210,6 +210,29 @@ function bindTaskDeleteButtons(refresh) {
   });
 }
 
+function bindProjectDeleteButtons(refresh) {
+  document.querySelectorAll("[data-delete-project]").forEach(button => {
+    button.onclick = async () => {
+      const pid = button.dataset.deleteProject;
+      const name = button.dataset.projectName || "未命名项目";
+      const confirmed = await confirmDialog(
+        "删除项目",
+        `将永久删除项目《${name}》及其全部任务、正文、版本、检查、运行记录和素材。关联选题会回到待写。`,
+        "永久删除", "取消");
+      if (!confirmed) return;
+      button.disabled = true;
+      try {
+        await api("DELETE", `/projects/${encodeURIComponent(pid)}`);
+        toast("项目已删除。");
+        await refresh();
+      } catch (e) {
+        toast(e.message || "项目删除失败。", true);
+        if (button.isConnected) button.disabled = false;
+      }
+    };
+  });
+}
+
 async function home() {
   const [tasks, projects] = await Promise.all([api("GET", "/tasks"), api("GET", "/projects")]);
   $("#app").innerHTML = `
@@ -240,11 +263,14 @@ async function home() {
         <div class="home-list">${
         projects.projects.length ? projects.projects.slice(0, 8).map(p => `
           <div class="row-item"><a class="grow" href="#/projects/${p.id}"><b>${esc(p.name)}</b></a>
-          <a class="small" href="#/projects/${p.id}" data-tip="打开此项目">打开</a></div>`).join("")
+          <a class="small" href="#/projects/${p.id}" data-tip="打开此项目">打开</a>
+          <button type="button" class="project-delete small" data-delete-project="${p.id}"
+            data-project-name="${esc(p.name)}" data-tip="删除项目及其全部任务与素材">删除</button></div>`).join("")
         : `<p class="muted">项目用于把相关素材与任务归堆(可选)。</p>`}
       </div></section>
     </div>`;
   bindTaskDeleteButtons(home);
+  bindProjectDeleteButtons(home);
 }
 
 async function tasks() {
@@ -1013,12 +1039,16 @@ async function projects() {
     <p><button class="primary" onclick="newProjectPrompt()" data-tip="新建一个项目">新建项目</button></p>` +
     (ps.projects.map(p => `<div class="card row">
       <a class="grow" href="#/projects/${p.id}"><b>${esc(p.name)}</b></a>
-      <span class="muted small">${esc(p.updated_at)}</span></div>`).join("") ||
+      <button type="button" class="project-delete small" data-delete-project="${p.id}"
+        data-project-name="${esc(p.name)}" data-tip="删除项目及其全部任务与素材">删除</button></div>`).join("") ||
       '<p class="muted">还没有项目。</p>');
+  bindProjectDeleteButtons(projects);
 }
 
+let projectCache = null;
 async function project(pid) {
   const p = await api("GET", `/projects/${pid}`);
+  projectCache = p;
   $("#app").innerHTML = `
     <h1>${esc(p.name)}</h1><p class="muted">${esc(p.description || "")}</p>
     <div class="row"><button class="primary" data-tip="为本项目新建写作任务" onclick="location.hash='#/tasks/new?project=${encodeURIComponent(pid)}'">新建写作任务</button></div>
@@ -1026,16 +1056,21 @@ async function project(pid) {
       <section class="card project-task-list"><h3>任务</h3>${p.tasks.map(t => taskRow(t)).join("")
         || '<p class="muted">还没有任务。</p>'}</section>
       <section class="card"><h3>素材</h3>
-        <div id="src-list">${p.sources.map(s => `
-          <div class="srcitem"><b class="small">${esc(s.title)}</b>
-          <span class="muted small"> · ${esc(s.type)}</span></div>`).join("")
-        || '<p class="muted small">还没有素材。</p>'}</div>
+        <div id="src-list"></div>
         <label class="small muted" for="src-title" style="margin-top:10px">添加文字素材</label>
         <input id="src-title" data-tip="给这份素材起个名字" placeholder="素材标题">
         <textarea id="src-body" rows="4" aria-label="素材内容" placeholder="粘贴素材…"></textarea>
         <p><button id="src-add" data-tip="把素材存入本项目，供任务引用">添加素材</button></p></section>
+    </div>
+    <div class="task-danger-zone" style="margin-top:20px">
+      <b class="small">删除项目</b>
+      <p class="small muted">将永久删除本项目及其全部任务、正文、版本、检查、运行记录和素材。关联选题会回到待写。</p>
+      <button type="button" id="delete-project" class="danger"
+        data-delete-project="${pid}" data-project-name="${esc(p.name)}">删除这个项目</button>
     </div>`;
+  renderProjectSources(pid, p.sources, null);
   bindTaskDeleteButtons(() => project(pid));
+  bindProjectDeleteButtons(() => { location.hash = "#/projects"; });
   $("#src-add").onclick = async () => {
     try {
       await api("POST", `/projects/${pid}/sources`, {
@@ -1044,6 +1079,65 @@ async function project(pid) {
       project(pid);
     } catch (e) { toast(e.message, true); }
   };
+}
+
+function renderProjectSources(pid, sources, editId) {
+  const box = $("#src-list");
+  if (!sources.length) { box.innerHTML = '<p class="muted small">还没有素材。</p>'; return; }
+  box.innerHTML = sources.map(s => {
+    if (editId === s.id) {
+      return `<div class="srcitem editing" data-source-id="${esc(s.id)}">
+        <input class="src-edit-title small" value="${esc(s.title)}" placeholder="素材标题" aria-label="素材标题">
+        <textarea class="src-edit-body" rows="6" aria-label="素材内容">${esc(s.content)}</textarea>
+        <div class="srcitem-head"><span class="grow"></span>
+          <button type="button" class="small" data-psave="${esc(s.id)}" data-tip="保存修改">保存</button>
+          <button type="button" class="small" data-pcancel>取消</button></div></div>`;
+    }
+    return `<div class="srcitem" data-source-id="${esc(s.id)}">
+      <div class="srcitem-head"><b class="small">${esc(s.title)}</b>
+      <span class="muted small"> · ${esc(s.type)}</span>
+      <span class="grow"></span>
+      <button type="button" class="small" data-pedit="${esc(s.id)}" data-tip="修改这份素材">修改</button>
+      <button type="button" class="small" data-pdel="${esc(s.id)}" data-tip="删除这份素材及其任务引用">删除</button></div>
+      <div class="body">${esc(s.content)}</div></div>`;
+  }).join("");
+  bindProjectSourceButtons(pid);
+}
+
+function bindProjectSourceButtons(pid) {
+  const refresh = () => renderProjectSources(pid, projectCache.sources, null);
+  document.querySelectorAll("[data-pedit]").forEach(b => b.onclick = () => {
+    renderProjectSources(pid, projectCache.sources, b.dataset.pedit);
+    const ta = document.querySelector(".src-edit-body"); if (ta) ta.focus();
+  });
+  document.querySelectorAll("[data-pcancel]").forEach(b => b.onclick = refresh);
+  document.querySelectorAll("[data-psave]").forEach(b => b.onclick = async () => {
+    const sid = b.dataset.psave;
+    const card = b.closest(".srcitem");
+    b.disabled = true;
+    try {
+      await api("PATCH", `/sources/${encodeURIComponent(sid)}`, {
+        title: card.querySelector(".src-edit-title").value,
+        content: card.querySelector(".src-edit-body").value });
+      await project(pid);
+      toast("素材已修改。");
+    } catch (e) { toast(e.message || "素材修改失败。", true); if (b.isConnected) b.disabled = false; }
+  });
+  document.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => {
+    const sid = b.dataset.pdel;
+    const src = projectCache.sources.find(x => x.id === sid);
+    const confirmed = await confirmDialog(
+      "删除素材",
+      `将永久删除素材《${src ? src.title : ""}》及其在所有任务中的引用。引用它的依据卡会失效。`,
+      "永久删除", "取消");
+    if (!confirmed) return;
+    b.disabled = true;
+    try {
+      await api("DELETE", `/sources/${encodeURIComponent(sid)}`);
+      await project(pid);
+      toast("素材已删除。");
+    } catch (e) { toast(e.message || "素材删除失败。", true); if (b.isConnected) b.disabled = false; }
+  });
 }
 
 /* ------------------------------------------------------------- settings */
@@ -1247,7 +1341,7 @@ async function settings() {
 /* =============================================================== workspace */
 const WS = {
   tid: null, task: null, draft: null, versions: [], sel: new Set(),
-  selAnchor: null,
+  selAnchor: null, editSourceId: null,
   panelTab: "goal", view: "draft", review: null, evidence: null, map: null, reader: null,
   proposals: [], preserved: [], saveTimer: null, savePromise: null, dirty: false, editRevision: 0,
 };
@@ -1255,7 +1349,7 @@ const WS = {
 async function workspace(tid) {
   if (location.hash !== `#/tasks/${tid}`) return;
   if (WS.tid !== tid) { WS.view = "draft"; WS.panelTab = "goal"; priorSuggestions.length = 0; }
-  WS.tid = tid; WS.sel.clear(); WS.selAnchor = null;
+  WS.tid = tid; WS.sel.clear(); WS.selAnchor = null; WS.editSourceId = null;
   WS.proposals = []; WS.preserved = []; WS.review = null; WS.evidence = null; WS.map = null; WS.reader = null;
   await reloadTask();
   if (location.hash !== `#/tasks/${tid}`) return;
@@ -1397,11 +1491,69 @@ function renderWorkspace() {
 }
 
 function renderSources() {
-  $("#sources").innerHTML = WS.task.sources.map(s => `
-    <div class="srcitem" data-source-id="${esc(s.id)}"><b class="small">${esc(s.title)}</b>
-    <span class="muted small"> · ${esc(s.role)}</span>
-    <div class="body">${esc(s.content)}</div></div>`).join("")
-     || '<p class="muted small">还没有素材。</p>';
+  const sources = WS.task.sources;
+  if (!sources.length) { $("#sources").innerHTML = '<p class="muted small">还没有素材。</p>'; return; }
+  $("#sources").innerHTML = sources.map(s => {
+    if (WS.editSourceId === s.id) {
+      return `<div class="srcitem editing" data-source-id="${esc(s.id)}">
+        <input class="src-edit-title small" value="${esc(s.title)}" placeholder="素材标题" aria-label="素材标题">
+        <textarea class="src-edit-body" rows="6" aria-label="素材内容">${esc(s.content)}</textarea>
+        <div class="srcitem-head"><span class="grow"></span>
+          <button type="button" class="small" data-save-source="${esc(s.id)}" data-tip="保存修改">保存</button>
+          <button type="button" class="small" data-cancel-source>取消</button></div></div>`;
+    }
+    return `<div class="srcitem" data-source-id="${esc(s.id)}">
+      <div class="srcitem-head"><b class="small">${esc(s.title)}</b>
+      <span class="muted small"> · ${esc(s.role)}</span>
+      <span class="grow"></span>
+      <button type="button" class="small" data-edit-source="${esc(s.id)}" data-tip="修改这份素材">修改</button>
+      <button type="button" class="small" data-del-source="${esc(s.id)}" data-tip="从本任务移除这份素材">移除</button></div>
+      <div class="body">${esc(s.content)}</div></div>`;
+  }).join("");
+  bindSourceButtons();
+}
+
+function bindSourceButtons() {
+  document.querySelectorAll("[data-edit-source]").forEach(b => b.onclick = () => {
+    WS.editSourceId = b.dataset.editSource; renderSources();
+    const ta = document.querySelector(".src-edit-body"); if (ta) ta.focus();
+  });
+  document.querySelectorAll("[data-cancel-source]").forEach(b => b.onclick = () => {
+    WS.editSourceId = null; renderSources();
+  });
+  document.querySelectorAll("[data-save-source]").forEach(b => b.onclick = async () => {
+    const sid = b.dataset.saveSource;
+    const card = b.closest(".srcitem");
+    const title = card.querySelector(".src-edit-title").value;
+    const content = card.querySelector(".src-edit-body").value;
+    b.disabled = true;
+    try {
+      await flushAutosave({ checkpoint: false });
+      await api("PATCH", `/tasks/${WS.tid}/sources/${encodeURIComponent(sid)}`, { title, content });
+      await reloadTask(); WS.editSourceId = null; renderSources();
+      toast("素材已修改，将用于下一次生成或检查。");
+    } catch (e) {
+      toast(e.code === "SHARED_SOURCE"
+            ? (e.message || "此素材被其他任务引用，无法在此修改。")
+            : (e.message || "素材修改失败。"), true);
+      if (b.isConnected) b.disabled = false;
+    }
+  });
+  document.querySelectorAll("[data-del-source]").forEach(b => b.onclick = async () => {
+    const sid = b.dataset.delSource;
+    const confirmed = await confirmDialog(
+      "移除素材",
+      "将把这份素材从当前任务移除。引用它的依据卡会失效；项目素材会保留，可再次引用。",
+      "移除", "取消");
+    if (!confirmed) return;
+    b.disabled = true;
+    try {
+      await flushAutosave({ checkpoint: false });
+      await api("DELETE", `/tasks/${WS.tid}/sources/${encodeURIComponent(sid)}`);
+      await reloadTask(); renderSources();
+      toast("素材已移除。");
+    } catch (e) { toast(e.message || "素材移除失败。", true); if (b.isConnected) b.disabled = false; }
+  });
 }
 
 function renderCenter() {

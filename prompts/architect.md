@@ -116,6 +116,26 @@ You MUST NOT:
 - use redundant beats
 - use emotional escalation without narrative support
 
+## Landing Shape
+
+The final beat (`landing`) must arise from this piece's internal logic, not
+from a fixed template.
+
+- Do NOT default to an imperative action-tool ending ("以后遇到X,就问Y" /
+  "下次看到X,先做Y" / "记住这一点…"). That shape is reserved for pieces
+  whose explicit purpose is an operational how-to.
+- `reader_state.target` may be a reframed concept, a deepened contradiction,
+  an earned open question, the real cost of the exposed structure, or a
+  concentrated image — not only a "portable tool".
+- Vary the landing across pieces. Allowed shapes: echo the opening but
+  shift its meaning (`circular_landing`); push the core contradiction one
+  layer further; leave an open question the essay earned; state the cost of
+  the structure plainly; end on a concrete scene; or stop at the point of
+  maximum tension when the core meaning is already clear.
+- Prefer a short, restrained landing over a manufactured summary or a
+  slogan. If the penultimate beat already delivered the meaning, a minimal
+  landing is correct.
+
 ## Output Requirements
 
 Return only schema-valid WIR JSON.

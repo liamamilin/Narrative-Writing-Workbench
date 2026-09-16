@@ -181,6 +181,229 @@ def test_delete_running_task_is_rejected_without_partial_cleanup(client):
     assert db.q1("SELECT task_id FROM writing_configs WHERE task_id=?", (tid,))
 
 
+# -------------------------------------------------------- project delete ----
+
+def test_delete_project_cascades_tasks_sources_and_artifacts(client):
+    project = client.post("/projects", json={"name": "Collection"}).json()
+    source = client.post(f"/projects/{project['id']}/sources", json={
+        "title": "Shared note", "type": "note", "content": "Shared evidence.",
+    }).json()
+    tid = make_task(client, type="essay", project_id=project["id"],
+                    source_ids=[source["id"]])
+    generated = client.post(f"/tasks/{tid}/generate", json={})
+    assert generated.status_code == 200, generated.text
+    task = client.get(f"/tasks/{tid}").json()
+    draft = task["draft"]
+    assert client.post(f"/tasks/{tid}/review").status_code == 200
+    assert client.post(f"/tasks/{tid}/reader-path-review").status_code == 200
+
+    db = client.app.state.service.db
+
+    deleted = client.delete(f"/projects/{project['id']}")
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body["deleted"] is True
+    assert body["deleted_tasks"] == 1
+    assert body["removed_sources"] >= 1
+    assert client.get(f"/projects/{project['id']}").status_code == 404
+    assert client.get(f"/tasks/{tid}").status_code == 404
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],)) is None
+    assert db.q("SELECT * FROM task_sources WHERE source_id=?", (source["id"],)) == []
+    assert db.q("SELECT * FROM tasks WHERE project_id=?", (project["id"],)) == []
+    assert db.q("SELECT * FROM sources WHERE project_id=?", (project["id"],)) == []
+    assert db.q("SELECT * FROM drafts WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT * FROM versions WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM proposed_patches WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM reviews WHERE draft_id=?", (draft["id"],)) == []
+    assert db.q("SELECT * FROM writing_operations WHERE task_id=?", (tid,)) == []
+    assert db.q("SELECT e.* FROM operation_events e LEFT JOIN writing_operations o "
+                "ON o.id=e.operation_id WHERE o.id IS NULL") == []
+    assert client.get("/backups/export").status_code == 200
+
+
+def test_delete_project_releases_linked_ideas(client):
+    project = client.post("/projects", json={"name": "Topics"}).json()
+    idea = client.post("/ideas", json={"topic": "等待为什么改变人"}).json()["idea"]
+    task = client.post("/tasks", json={
+        "input_mode": "topic_only", "topic": idea["topic"], "idea_id": idea["id"],
+        "project_id": project["id"],
+    }).json()
+
+    deleted = client.delete(f"/projects/{project['id']}").json()
+    assert deleted["returned_ideas"] == 1
+    db = client.app.state.service.db
+    assert client.get(f"/tasks/{task['id']}").status_code == 404
+    assert db.q1("SELECT task_id,status FROM ideas WHERE id=?", (idea["id"],)) == {
+        "task_id": None, "status": "to_write"}
+
+
+def test_delete_running_project_is_rejected_without_partial_cleanup(client):
+    project = client.post("/projects", json={"name": "Running"}).json()
+    tid = make_task(client, project_id=project["id"])
+    db = client.app.state.service.db
+    db.exec(
+        "INSERT INTO writing_operations(id,task_id,kind,process_id,status,stage,"
+        "started_at,snapshot_json) VALUES(?,?,?,?,?,?,?,?)",
+        ("op_running", tid, "generate", "test", "running", "queued", "now", "{}"))
+
+    response = client.delete(f"/projects/{project['id']}")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TASK_RUNNING"
+    assert client.get(f"/projects/{project['id']}").status_code == 200
+    assert client.get(f"/tasks/{tid}").status_code == 200
+
+
+def test_delete_project_cleans_cross_task_source_links(client):
+    project_a = client.post("/projects", json={"name": "A"}).json()
+    project_b = client.post("/projects", json={"name": "B"}).json()
+    source = client.post(f"/projects/{project_a['id']}/sources", json={
+        "title": "Shared", "type": "note", "content": "cross-project evidence.",
+    }).json()
+    # Task in project B references a source owned by project A.
+    tid_b = make_task(client, project_id=project_b["id"], source_ids=[source["id"]])
+
+    deleted = client.delete(f"/projects/{project_a['id']}")
+    assert deleted.status_code == 200
+    db = client.app.state.service.db
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],)) is None
+    assert db.q("SELECT * FROM task_sources WHERE source_id=?", (source["id"],)) == []
+    # Task B survives; the link to the deleted source is simply gone.
+    assert client.get(f"/tasks/{tid_b}").status_code == 200
+    assert client.get("/backups/export").status_code == 200
+
+
+# --------------------------------------------------------- source edit ----
+
+def _evidence_task(client, **over):
+    over.setdefault("type", "essay")
+    tid = make_task(client, **over)
+    assert client.post(f"/tasks/{tid}/generate").status_code == 200
+    assert client.post(f"/tasks/{tid}/check-evidence").status_code == 200
+    return tid
+
+
+def test_update_task_source_edits_exclusive_in_place_and_stales_evidence(client):
+    tid = _evidence_task(client)
+    task = client.get(f"/tasks/{tid}").json()
+    source = task["sources"][0]
+    draft = task["draft"]
+    db = client.app.state.service.db
+    assert db.q1("SELECT id FROM claim_links WHERE source_id=?", (source["id"],))
+
+    updated = client.patch(
+        f"/tasks/{tid}/sources/{source['id']}",
+        json={"title": "改过的素材", "content": "完全不同的内容。"}).json()
+    assert updated["title"] == "改过的素材"
+    assert updated["content"] == "完全不同的内容。"
+    assert client.get(f"/tasks/{tid}").json()["sources"][0]["content"] == "完全不同的内容。"
+    # Source still linked, so the evidence link row remains; the check is stale.
+    assert db.q1("SELECT content FROM sources WHERE id=?", (source["id"],))["content"] == "完全不同的内容。"
+    assert db.q1("SELECT id FROM claim_links WHERE source_id=?", (source["id"],))
+    assert client.get(f"/tasks/{tid}/evidence-check").json()["stale"] is True
+    # Editing the material stalifies revision worklist items.
+    assert db.q1("SELECT status FROM revision_items WHERE draft_id=? "
+                 "AND status IN ('open','proposed') LIMIT 1", (draft["id"],)) is None
+    assert client.get("/backups/export").status_code == 200
+
+
+def test_update_task_source_shared_is_rejected(client):
+    project = client.post("/projects", json={"name": "Shared"}).json()
+    source = client.post(f"/projects/{project['id']}/sources", json={
+        "title": "Lib", "type": "note", "content": "shared note.",
+    }).json()
+    t1 = make_task(client, project_id=project["id"], source_ids=[source["id"]])
+    t2 = make_task(client, project_id=project["id"], source_ids=[source["id"]])
+
+    r = client.patch(f"/tasks/{t1}/sources/{source['id']}",
+                     json={"content": "only for t1"})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "SHARED_SOURCE"
+    assert client.get(f"/tasks/{t1}").json()["sources"][0]["content"] == "shared note."
+    assert client.get(f"/tasks/{t2}").json()["sources"][0]["content"] == "shared note."
+
+
+def test_delete_task_source_unlinks_cleans_evidence_and_orphans(client):
+    tid = _evidence_task(client)
+    task = client.get(f"/tasks/{tid}").json()
+    source = task["sources"][0]
+    db = client.app.state.service.db
+
+    deleted = client.delete(f"/tasks/{tid}/sources/{source['id']}").json()
+    assert deleted["deleted"] is True
+    assert deleted["removed_source"] is True
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],)) is None
+    assert db.q("SELECT * FROM task_sources WHERE source_id=?", (source["id"],)) == []
+    assert db.q("SELECT * FROM claim_links WHERE source_id=?", (source["id"],)) == []
+    assert client.get("/backups/export").status_code == 200
+
+
+def test_delete_task_source_keeps_project_library_source(client):
+    project = client.post("/projects", json={"name": "Lib"}).json()
+    source = client.post(f"/projects/{project['id']}/sources", json={
+        "title": "Keep", "type": "note", "content": "library note.",
+    }).json()
+    tid = make_task(client, project_id=project["id"], source_ids=[source["id"]])
+    db = client.app.state.service.db
+
+    deleted = client.delete(f"/tasks/{tid}/sources/{source['id']}").json()
+    assert deleted["removed_source"] is False
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],))
+    assert db.q("SELECT * FROM task_sources WHERE source_id=?", (source["id"],)) == []
+    # Project still owns the library source for reuse.
+    assert source["id"] in {s["id"] for s in
+                            client.get(f"/projects/{project['id']}").json()["sources"]}
+
+
+def test_delete_source_library_removes_links_and_proposal_reference(client):
+    project = client.post("/projects", json={"name": "Lib"}).json()
+    source = client.post(f"/projects/{project['id']}/sources", json={
+        "title": "S", "type": "note", "content": "library note for two tasks.",
+    }).json()
+    t1 = _evidence_task(client, project_id=project["id"], source_ids=[source["id"]])
+    t2 = make_task(client, project_id=project["id"], source_ids=[source["id"]])
+    db = client.app.state.service.db
+    link = db.q1("SELECT id FROM claim_links WHERE source_id=?", (source["id"],))
+    assert link, "evidence check should anchor a claim to the project source"
+    # Simulate a proposed patch that was generated from that evidence link.
+    patch_id = "patch_del_src_1"
+    draft_row = db.q1("SELECT id,current_version_id FROM drafts WHERE task_id=?", (t1,))
+    db.exec(
+        "INSERT INTO proposed_patches(id,draft_id,base_version_id,selection_json,"
+        "instruction,before_text,after_text,status,created_at,claim_link_id) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (patch_id, draft_row["id"], draft_row["current_version_id"], "{}",
+         "tighten", "旧", "新", "proposed", "now", link["id"]))
+    assert db.q1("SELECT claim_link_id FROM proposed_patches WHERE id=?",
+                 (patch_id,))["claim_link_id"] == link["id"]
+
+    deleted = client.delete(f"/sources/{source['id']}").json()
+    assert deleted["deleted"] is True
+    assert deleted["affected_tasks"] >= 1
+    assert db.q1("SELECT id FROM sources WHERE id=?", (source["id"],)) is None
+    assert db.q("SELECT * FROM task_sources WHERE source_id=?", (source["id"],)) == []
+    assert db.q("SELECT * FROM claim_links WHERE source_id=?", (source["id"],)) == []
+    # The patch survives with its Before/After; the evidence reference is severed.
+    assert db.q1("SELECT claim_link_id FROM proposed_patches WHERE id=?",
+                 (patch_id,))["claim_link_id"] is None
+    assert client.get("/backups/export").status_code == 200
+
+
+def test_update_source_library_edits_all_referencing_tasks(client):
+    project = client.post("/projects", json={"name": "Lib"}).json()
+    source = client.post(f"/projects/{project['id']}/sources", json={
+        "title": "Orig", "type": "note", "content": "v1 内容",
+    }).json()
+    t1 = make_task(client, project_id=project["id"], source_ids=[source["id"]])
+    t2 = make_task(client, project_id=project["id"], source_ids=[source["id"]])
+
+    updated = client.patch(f"/sources/{source['id']}",
+                           json={"title": "改标题", "content": "v2 内容"}).json()
+    assert updated["title"] == "改标题"
+    assert client.get(f"/tasks/{t1}").json()["sources"][0]["content"] == "v2 内容"
+    assert client.get(f"/tasks/{t2}").json()["sources"][0]["content"] == "v2 内容"
+    assert client.get("/backups/export").status_code == 200
+
+
 # ---------------------------------------------------------- generation ----
 
 def test_generate_creates_version_and_draft(client):

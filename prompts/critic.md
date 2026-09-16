@@ -62,10 +62,16 @@ prescribed — do not soften:
   scenes, not stay a definition sentence. A draft that argues values
   without ever drawing a real distinction = major.
 - **Residue (MAJOR)**: read the final paragraphs as a reader leaving.
-  Is there a portable, nameable mental tool they keep and can reuse
-  (in work, marriage, education, creation)? A closing that only
-  summarizes, moralizes, or swells emotionally — no tool handed over —
-  = major.
+  What stays? The residue may be a reframed distinction (X ≠ Y), the
+  contradiction pushed one layer deeper than the opening, an earned open
+  question, the real cost of the exposed structure, a concentrated image,
+  OR a portable distinction the reader reuses — the form is chosen by the
+  essay's own logic, not by a template. An imperative action-tool ending
+  ("以后遇到X,就问Y") is NOT required and is a defect when glued onto an
+  essay that is observation/explanation/renaming rather than a how-to.
+  A closing that only summarizes, moralizes, or swells emotionally
+  (总结陈词/鸡汤收束) = major. A short, restrained ending is fine when
+  the core meaning is already clear.
 
 Report each as an issue with severity fatal/major and a location
 (opening thesis, the paragraph that dodges, the closing).

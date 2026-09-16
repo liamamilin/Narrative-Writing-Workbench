@@ -357,65 +357,105 @@ class Service:
         return self.db.q(
             "SELECT * FROM tasks ORDER BY updated_at DESC, created_at DESC, id DESC")
 
-    def delete_task(self, tid: str) -> dict:
-        """Delete one idle task and all task-owned writing artifacts atomically.
+    def _delete_task_in_tx(self, tx, tid: str) -> tuple[int, int]:
+        """Remove one task and its writing artifacts within an open tx.
 
-        Sources in a project are library data and remain available. A source
-        without a project is removed only when the deleted task was its final
-        link. Linked ideas are preserved and become available to write again.
+        Returns (returned_ideas, removed_unlinked_sources). Project sources
+        are library data and remain; a project-less source is removed only
+        when the deleted task was its final link. Linked ideas are preserved
+        and become available to write again.
         """
+        task = tx.q1("SELECT id,project_id FROM tasks WHERE id=?", (tid,))
+        if not task:
+            raise ApiError("NOT_FOUND", "Task not found.", 404)
+        if tx.q1(
+                "SELECT id FROM writing_operations "
+                "WHERE task_id=? AND status='running' LIMIT 1", (tid,)):
+            raise ApiError(
+                "TASK_RUNNING", "任务仍在执行，请等待完成后再删除。", 409)
+
+        source_ids = [row["source_id"] for row in tx.q(
+            "SELECT source_id FROM task_sources WHERE task_id=?", (tid,))]
+        ts = now()
+        returned_ideas = tx.exec(
+            "UPDATE ideas SET task_id=NULL,"
+            "status=CASE WHEN status='written' THEN 'to_write' ELSE status END,"
+            "updated_at=? WHERE task_id=?", (ts, tid)).rowcount
+
+        # Draft-owned records must go before their Draft lookup disappears.
+        draft_lookup = "SELECT id FROM drafts WHERE task_id=?"
+        tx.exec(f"DELETE FROM reader_path_steps WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec(f"DELETE FROM revision_items WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec(f"DELETE FROM preserved_spans WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec(f"DELETE FROM claim_links WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec(f"DELETE FROM claim_checks WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec(f"DELETE FROM proposed_patches WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec(f"DELETE FROM reviews WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec(f"DELETE FROM versions WHERE draft_id IN ({draft_lookup})", (tid,))
+        tx.exec("DELETE FROM drafts WHERE task_id=?", (tid,))
+
+        operation_lookup = "SELECT id FROM writing_operations WHERE task_id=?"
+        tx.exec(f"DELETE FROM operation_events WHERE operation_id IN ({operation_lookup})", (tid,))
+        tx.exec(f"DELETE FROM operation_records WHERE operation_id IN ({operation_lookup})", (tid,))
+        tx.exec("DELETE FROM generation_results WHERE task_id=?", (tid,))
+        tx.exec("DELETE FROM engine_plans WHERE task_id=?", (tid,))
+        tx.exec("DELETE FROM meaning_discoveries WHERE task_id=?", (tid,))
+        tx.exec("DELETE FROM writing_operations WHERE task_id=?", (tid,))
+        tx.exec("DELETE FROM writing_configs WHERE task_id=?", (tid,))
+        tx.exec("DELETE FROM task_sources WHERE task_id=?", (tid,))
+        tx.exec("DELETE FROM tasks WHERE id=?", (tid,))
+
+        removed_sources = 0
+        for source_id in source_ids:
+            removed_sources += tx.exec(
+                "DELETE FROM sources WHERE id=? AND project_id IS NULL "
+                "AND NOT EXISTS(SELECT 1 FROM task_sources WHERE source_id=?)",
+                (source_id, source_id)).rowcount
+        if task.get("project_id"):
+            tx.exec("UPDATE projects SET updated_at=? WHERE id=?",
+                    (ts, task["project_id"]))
+        return returned_ideas, removed_sources
+
+    def delete_task(self, tid: str) -> dict:
+        """Delete one idle task and all task-owned writing artifacts atomically."""
         with self.db.transaction() as tx:
-            task = tx.q1("SELECT id,project_id FROM tasks WHERE id=?", (tid,))
-            if not task:
-                raise ApiError("NOT_FOUND", "Task not found.", 404)
-            if tx.q1(
-                    "SELECT id FROM writing_operations "
-                    "WHERE task_id=? AND status='running' LIMIT 1", (tid,)):
-                raise ApiError(
-                    "TASK_RUNNING", "任务仍在执行，请等待完成后再删除。", 409)
-
-            source_ids = [row["source_id"] for row in tx.q(
-                "SELECT source_id FROM task_sources WHERE task_id=?", (tid,))]
-            ts = now()
-            returned_ideas = tx.exec(
-                "UPDATE ideas SET task_id=NULL,"
-                "status=CASE WHEN status='written' THEN 'to_write' ELSE status END,"
-                "updated_at=? WHERE task_id=?", (ts, tid)).rowcount
-
-            # Draft-owned records must go before their Draft lookup disappears.
-            draft_lookup = "SELECT id FROM drafts WHERE task_id=?"
-            tx.exec(f"DELETE FROM reader_path_steps WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec(f"DELETE FROM revision_items WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec(f"DELETE FROM preserved_spans WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec(f"DELETE FROM claim_links WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec(f"DELETE FROM claim_checks WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec(f"DELETE FROM proposed_patches WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec(f"DELETE FROM reviews WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec(f"DELETE FROM versions WHERE draft_id IN ({draft_lookup})", (tid,))
-            tx.exec("DELETE FROM drafts WHERE task_id=?", (tid,))
-
-            operation_lookup = "SELECT id FROM writing_operations WHERE task_id=?"
-            tx.exec(f"DELETE FROM operation_events WHERE operation_id IN ({operation_lookup})", (tid,))
-            tx.exec(f"DELETE FROM operation_records WHERE operation_id IN ({operation_lookup})", (tid,))
-            tx.exec("DELETE FROM generation_results WHERE task_id=?", (tid,))
-            tx.exec("DELETE FROM engine_plans WHERE task_id=?", (tid,))
-            tx.exec("DELETE FROM meaning_discoveries WHERE task_id=?", (tid,))
-            tx.exec("DELETE FROM writing_operations WHERE task_id=?", (tid,))
-            tx.exec("DELETE FROM writing_configs WHERE task_id=?", (tid,))
-            tx.exec("DELETE FROM task_sources WHERE task_id=?", (tid,))
-            tx.exec("DELETE FROM tasks WHERE id=?", (tid,))
-
-            removed_sources = 0
-            for source_id in source_ids:
-                removed_sources += tx.exec(
-                    "DELETE FROM sources WHERE id=? AND project_id IS NULL "
-                    "AND NOT EXISTS(SELECT 1 FROM task_sources WHERE source_id=?)",
-                    (source_id, source_id)).rowcount
-            if task.get("project_id"):
-                tx.exec("UPDATE projects SET updated_at=? WHERE id=?",
-                        (ts, task["project_id"]))
+            returned_ideas, removed_sources = self._delete_task_in_tx(tx, tid)
         return {"id": tid, "deleted": True, "returned_ideas": returned_ideas,
                 "removed_unlinked_sources": removed_sources}
+
+    def delete_project(self, pid: str) -> dict:
+        """Delete a project and every task/source it owns atomically.
+
+        Each task's writing artifacts are removed; linked ideas are preserved
+        and become available to write again. Sources owned by the project are
+        removed, including task_sources links from other tasks that referenced
+        them. A running task anywhere in the project blocks deletion.
+        """
+        with self.db.transaction() as tx:
+            if not tx.q1("SELECT id FROM projects WHERE id=?", (pid,)):
+                raise ApiError("NOT_FOUND", "Project not found.", 404)
+            if tx.q1(
+                    "SELECT 1 FROM writing_operations o JOIN tasks t ON t.id=o.task_id "
+                    "WHERE t.project_id=? AND o.status='running' LIMIT 1", (pid,)):
+                raise ApiError(
+                    "TASK_RUNNING", "项目中有任务仍在执行，请等待完成后再删除。", 409)
+            task_ids = [row["id"] for row in tx.q(
+                "SELECT id FROM tasks WHERE project_id=?", (pid,))]
+            returned_ideas = 0
+            for tid in task_ids:
+                ri, _ = self._delete_task_in_tx(tx, tid)
+                returned_ideas += ri
+            # Drop links from other tasks to this project's sources, then the
+            # sources themselves, so no task_sources.source orphan remains.
+            tx.exec(
+                "DELETE FROM task_sources WHERE source_id IN "
+                "(SELECT id FROM sources WHERE project_id=?)", (pid,))
+            removed_sources = tx.exec(
+                "DELETE FROM sources WHERE project_id=?", (pid,)).rowcount
+            tx.exec("DELETE FROM projects WHERE id=?", (pid,))
+        return {"id": pid, "deleted": True, "deleted_tasks": len(task_ids),
+                "returned_ideas": returned_ideas,
+                "removed_sources": removed_sources}
 
     def get_project(self, pid: str) -> dict:
         row = self.db.q1("SELECT * FROM projects WHERE id=?", (pid,))
@@ -429,7 +469,7 @@ class Service:
             "SELECT * FROM tasks WHERE project_id=? ORDER BY updated_at DESC",
             (pid,))
         project["sources"] = self.db.q(
-            "SELECT id,title,type,project_id,updated_at FROM sources "
+            "SELECT id,title,type,project_id,content,updated_at FROM sources "
             "WHERE project_id=? ORDER BY updated_at DESC", (pid,))
         return project
 
@@ -450,6 +490,114 @@ class Service:
                      (sid, project_id, title or "Untitled", type_, content,
                       json.dumps(metadata or {}, ensure_ascii=False), ts, ts))
         return self.db.q1("SELECT * FROM sources WHERE id=?", (sid,))
+
+    def update_source(self, source_id: str, title: str | None,
+                      content: str | None) -> dict:
+        """Edit a library source in place. Affects every task that references
+        it; callers invalidate affected revision contexts."""
+        row = self.db.q1("SELECT * FROM sources WHERE id=?", (source_id,))
+        if not row:
+            raise ApiError("NOT_FOUND", "Source not found.", 404)
+        new_title = row["title"]
+        if title is not None and title.strip():
+            new_title = title.strip()
+        if content is not None and not content.strip():
+            raise ApiError("VALIDATION", "Source content is empty.")
+        new_content = content if content is not None else row["content"]
+        ts = now()
+        self.db.exec("UPDATE sources SET title=?, content=?, updated_at=? WHERE id=?",
+                     (new_title, new_content, ts, source_id))
+        return self.db.q1("SELECT * FROM sources WHERE id=?", (source_id,))
+
+    def _invalidate_tasks(self, tx, task_ids: list[str]) -> None:
+        ts = now()
+        for tid in task_ids:
+            tx.exec("UPDATE tasks SET updated_at=? WHERE id=?", (ts, tid))
+            draft = tx.q1("SELECT id FROM drafts WHERE task_id=?", (tid,))
+            if draft:
+                self._invalidate_revision_context(tx, draft["id"], preserve=False)
+
+    def delete_source(self, source_id: str) -> dict:
+        """Delete a library source, its task_sources links and the evidence
+        links that reference it. Proposed patches keep their Before/After but
+        lose the claim_link reference. All affected tasks are invalidated."""
+        with self.db.transaction() as tx:
+            if not tx.q1("SELECT id FROM sources WHERE id=?", (source_id,)):
+                raise ApiError("NOT_FOUND", "Source not found.", 404)
+            affected = [r["task_id"] for r in tx.q(
+                "SELECT DISTINCT task_id FROM task_sources WHERE source_id=?",
+                (source_id,))]
+            tx.exec(
+                "UPDATE proposed_patches SET claim_link_id=NULL WHERE claim_link_id IN "
+                "(SELECT id FROM claim_links WHERE source_id=?)", (source_id,))
+            tx.exec("DELETE FROM claim_links WHERE source_id=?", (source_id,))
+            tx.exec("DELETE FROM task_sources WHERE source_id=?", (source_id,))
+            tx.exec("DELETE FROM sources WHERE id=?", (source_id,))
+            self._invalidate_tasks(tx, affected)
+        return {"id": source_id, "deleted": True,
+                "affected_tasks": len(affected)}
+
+    def update_task_source(self, tid: str, source_id: str,
+                           title: str | None, content: str | None) -> dict:
+        """Edit a source linked to a task. Only allowed when the source is
+        exclusive to this task, so a shared library source is never mutated
+        from a single task's workspace."""
+        self.get_task(tid)
+        with self.db.transaction() as tx:
+            if not tx.q1("SELECT 1 FROM task_sources WHERE task_id=? AND source_id=?",
+                         (tid, source_id)):
+                raise ApiError("NOT_FOUND", "Source not linked to this task.", 404)
+            if content is not None and not content.strip():
+                raise ApiError("VALIDATION", "Source content is empty.")
+            ref_count = tx.q1(
+                "SELECT count(*) AS n FROM task_sources WHERE source_id=?",
+                (source_id,))["n"]
+            if ref_count > 1:
+                raise ApiError(
+                    "SHARED_SOURCE",
+                    "此素材被其他任务引用，请在项目页修改或先解除其他引用。", 409)
+            row = tx.q1("SELECT * FROM sources WHERE id=?", (source_id,))
+            new_title = row["title"]
+            if title is not None and title.strip():
+                new_title = title.strip()
+            new_content = content if content is not None else row["content"]
+            ts = now()
+            tx.exec("UPDATE sources SET title=?, content=?, updated_at=? WHERE id=?",
+                    (new_title, new_content, ts, source_id))
+            self._invalidate_tasks(tx, [tid])
+        return self.db.q1("SELECT * FROM sources WHERE id=?", (source_id,))
+
+    def delete_task_source(self, tid: str, source_id: str) -> dict:
+        """Remove a source from a task. The task_sources link is deleted; the
+        source row is removed only when it is project-less and unreferenced.
+        Evidence links for this source+task are severed so no orphan remains."""
+        self.get_task(tid)
+        with self.db.transaction() as tx:
+            if not tx.q1("SELECT 1 FROM task_sources WHERE task_id=? AND source_id=?",
+                         (tid, source_id)):
+                raise ApiError("NOT_FOUND", "Source not linked to this task.", 404)
+            draft_ids = [r["id"] for r in tx.q(
+                "SELECT id FROM drafts WHERE task_id=?", (tid,))]
+            if draft_ids:
+                ph = ",".join("?" * len(draft_ids))
+                tx.exec(
+                    f"UPDATE proposed_patches SET claim_link_id=NULL WHERE "
+                    f"claim_link_id IN (SELECT id FROM claim_links WHERE source_id=? "
+                    f"AND draft_id IN ({ph}))", (source_id, *draft_ids))
+                tx.exec(f"DELETE FROM claim_links WHERE source_id=? AND draft_id IN ({ph})",
+                        (source_id, *draft_ids))
+            tx.exec("DELETE FROM task_sources WHERE task_id=? AND source_id=?",
+                    (tid, source_id))
+            removed_source = False
+            row = tx.q1("SELECT project_id FROM sources WHERE id=?", (source_id,))
+            if (row and row["project_id"] is None
+                    and not tx.q("SELECT 1 FROM task_sources WHERE source_id=? LIMIT 1",
+                                (source_id,))):
+                tx.exec("DELETE FROM sources WHERE id=?", (source_id,))
+                removed_source = True
+            self._invalidate_tasks(tx, [tid])
+        return {"id": source_id, "deleted": True,
+                "removed_source": removed_source}
 
     # --------------------------------------------------------------- ideas ----
 
