@@ -90,3 +90,32 @@
 8. 成功删除项目后 GET Project 为 404，项目内任务、正文、版本、检查、素材及跨表 task_sources 链接均无孤儿行。
 9. 引用本项目素材的其他项目任务在项目删除后仍可访问，指向被删素材的 task_sources 链接已被清理。
 10. 项目中存在运行中任务时删除返回 409，项目与任务保持完整。
+
+## 素材编辑与删除（2026-09-15）
+
+工作台“素材”面板与项目详情页“素材”列表均提供“修改”和“删除/移除”。
+
+### 工作台素材（任务内）
+
+- 修改：`PATCH /tasks/{task_id}/sources/{source_id}`，`{title?, content?}`。
+  - 仅当该素材只被当前任务引用（task_sources 计数为 1）时才就地修改；否则返回 `409 SHARED_SOURCE`，提示在项目页修改或先解除其他引用。
+  - 修改后失效该任务的修订上下文（revision_items/preserved_spans 标记 stale），下次生成与检查使用新素材。引用该素材的依据卡因 sources 快照变化而自动 stale。
+- 移除：`DELETE /tasks/{task_id}/sources/{source_id}`。
+  - 删除该任务对该素材的 task_sources 链接；若素材无项目归属且无其他任务引用，一并删除素材行。
+  - 删除该素材在本任务草稿上的 claim_links（断开依据卡对该素材的引用），并把引用这些 claim_link 的 proposed_patches.claim_link_id 置空（保留 Before/After 提案）。
+  - 失效该任务的修订上下文。项目库素材仅解除引用，不删除素材行。
+
+### 项目库素材
+
+- 修改：`PATCH /sources/{source_id}`，`{title?, content?}`。就地修改素材，影响所有引用它的任务；逐个失效受影响任务的修订上下文。素材仍被引用，claim_links.source 关系不变，依据卡按快照失效。
+- 删除：`DELETE /sources/{source_id}`。
+  - 删除素材行、所有 task_sources 链接、引用该素材的全部 claim_links；把引用这些 claim_link 的 proposed_patches.claim_link_id 置空。
+  - 逐个失效受影响任务的修订上下文。
+- 未找到素材返回 `404 NOT_FOUND`。
+
+### 验收（素材）
+
+11. 工作台修改独占素材后内容更新、依据卡 stale、备份通过；共享素材修改返回 409 且不影响其他任务。
+12. 工作台移除素材后 task_sources 与对应 claim_links 清空，无主素材行删除，备份通过；项目库素材仅解除引用、素材行保留。
+13. 项目库删除后素材行、所有 task_sources 与 claim_links 清空，引用其 claim_link 的 proposed_patches.claim_link_id 为空，备份通过。
+14. 项目库修改后所有引用任务看到新内容并失效修订上下文，备份通过。

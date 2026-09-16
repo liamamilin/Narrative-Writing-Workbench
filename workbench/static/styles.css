@@ -268,6 +268,11 @@ button.danger:hover{background:#f8e9e5}
 .srcitem{border-bottom:1px dashed var(--line);padding:6px 0}
 .srcitem .body{white-space:pre-wrap;font-size:12.5px;color:var(--muted);
   max-height:88px;overflow:hidden}
+.srcitem-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.srcitem.editing{padding:8px 0}
+.srcitem.editing .body{max-height:none}
+.src-edit-title{width:100%;min-height:30px;margin-bottom:4px}
+.src-edit-body{width:100%;min-height:80px;font-size:12.5px;white-space:pre-wrap}
 
 .draft-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   min-height:40px;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:var(--sp-4)}
