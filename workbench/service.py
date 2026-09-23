@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import re
+import secrets
 import time
 import unicodedata
 from datetime import datetime, timezone
@@ -63,6 +64,10 @@ IDEA_MAX_HOOK_CHARS = 500
 IDEA_MAX_NOTE_CHARS = 2_000
 IDEA_MAX_DOMAIN_CHARS = 120
 IDEA_IMPORT_MAX = 200
+SHARE_MAX_TITLE_CHARS = 300
+SHARE_MAX_CONTENT_CHARS = 100_000
+SHARE_MAX_AUTHOR_CHARS = 80
+SHARE_MAX_EXCERPT_CHARS = 240
 # writing_mode -> engine task type (engine task types are closed; map onto them)
 _WRITING_MODE_TO_TYPE = {
     "deep_narrative": "essay",
@@ -92,6 +97,20 @@ def detect_fact_heavy(topic: str) -> bool:
 def normalize_idea_topic(topic: str) -> str:
     """Narrow, explainable equality for Idea deduplication."""
     return " ".join(unicodedata.normalize("NFKC", topic).split()).casefold()
+
+
+def _default_share_excerpt(content: str) -> str:
+    paragraph = next((part.strip() for part in content.split("\n\n")
+                      if part.strip()), "")
+    compact = " ".join(paragraph.split())
+    if len(compact) <= 180:
+        return compact
+    return compact[:179].rstrip() + "…"
+
+
+def _share_reading_minutes(content: str) -> int:
+    visible = len("".join(content.split()))
+    return max(1, (visible + 499) // 500)
 
 
 def _is_timeout_error(exc: BaseException) -> bool:
@@ -384,6 +403,7 @@ class Service:
 
         # Draft-owned records must go before their Draft lookup disappears.
         draft_lookup = "SELECT id FROM drafts WHERE task_id=?"
+        tx.exec("DELETE FROM article_shares WHERE task_id=?", (tid,))
         tx.exec(f"DELETE FROM reader_path_steps WHERE draft_id IN ({draft_lookup})", (tid,))
         tx.exec(f"DELETE FROM revision_items WHERE draft_id IN ({draft_lookup})", (tid,))
         tx.exec(f"DELETE FROM preserved_spans WHERE draft_id IN ({draft_lookup})", (tid,))
@@ -2578,6 +2598,139 @@ class Service:
         return build_export(
             content=row["content"], title=row["title"], identifier=version_id,
             format_=format_, include_title=include_title)
+
+    # ------------------------------------------------------------ sharing ----
+
+    @staticmethod
+    def _share_view(row: dict, *, current: dict | None = None,
+                    include_content: bool = False) -> dict:
+        view = {
+            "id": row["id"], "token": row["token"],
+            "path": f"/s/{row['token']}",
+            "title": row["title"], "author": row["author"],
+            "excerpt": row["excerpt"], "created_at": row["created_at"],
+            "draft_revision": row["draft_revision"],
+            "reading_minutes": _share_reading_minutes(row["content"]),
+        }
+        if include_content:
+            view["content"] = row["content"]
+        if current is not None:
+            view["stale"] = (
+                current.get("revision") != row["draft_revision"]
+                or current.get("working_content") != row["content"]
+                or current.get("title") != row["title"])
+        return view
+
+    @staticmethod
+    def _share_field(value, field: str, limit: int) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            raise ApiError("VALIDATION", f"{field} must be text.")
+        text = value.strip()
+        if len(text) > limit:
+            raise ApiError("VALIDATION", f"{field} is too long.")
+        return text
+
+    def get_task_share(self, tid: str) -> dict:
+        task = self.db.q1("SELECT id,title FROM tasks WHERE id=?", (tid,))
+        if not task:
+            raise ApiError("NOT_FOUND", "Task not found.", 404)
+        draft = self.db.q1(
+            "SELECT id,revision,working_content FROM drafts WHERE task_id=?", (tid,))
+        share = self.db.q1(
+            "SELECT * FROM article_shares WHERE task_id=? AND revoked_at IS NULL "
+            "ORDER BY created_at DESC,rowid DESC LIMIT 1", (tid,))
+        if not share:
+            return {"share": None}
+        current = {**(draft or {}), "title": (task["title"] or "未命名文章").strip()}
+        return {"share": self._share_view(share, current=current)}
+
+    def create_task_share(self, tid: str, payload: dict | None = None) -> dict:
+        payload = payload or {}
+        if not isinstance(payload, dict):
+            raise ApiError("VALIDATION", "Share options must be an object.")
+        author = self._share_field(
+            payload.get("author"), "author", SHARE_MAX_AUTHOR_CHARS)
+        excerpt = self._share_field(
+            payload.get("excerpt"), "excerpt", SHARE_MAX_EXCERPT_CHARS)
+        replace = payload.get("replace", False)
+        if type(replace) is not bool:
+            raise ApiError("VALIDATION", "replace must be true or false.")
+        expected_revision = payload.get("expected_revision")
+        if type(expected_revision) is not int:
+            raise ApiError("VALIDATION", "expected_revision must be an integer.")
+        with self.db.transaction() as tx:
+            task = tx.q1("SELECT id,title FROM tasks WHERE id=?", (tid,))
+            if not task:
+                raise ApiError("NOT_FOUND", "Task not found.", 404)
+            draft = tx.q1("SELECT * FROM drafts WHERE task_id=?", (tid,))
+            if not draft:
+                raise ApiError("NO_DRAFT", "Generate a draft before sharing.", 409)
+            self._check_revision(draft, expected_revision)
+            title = (task["title"] or "未命名文章").strip() or "未命名文章"
+            content = draft["working_content"]
+            if not content.strip():
+                raise ApiError("NO_DRAFT", "The draft is empty and cannot be shared.", 409)
+            if len(title) > SHARE_MAX_TITLE_CHARS or len(content) > SHARE_MAX_CONTENT_CHARS:
+                raise ApiError("VALIDATION", "The article is too long to share.")
+            if not excerpt:
+                excerpt = _default_share_excerpt(content)
+            existing = tx.q1(
+                "SELECT * FROM article_shares WHERE task_id=? AND revoked_at IS NULL "
+                "ORDER BY created_at DESC,rowid DESC LIMIT 1", (tid,))
+            current = {**draft, "title": title}
+            if existing and not replace:
+                if not self._share_view(existing, current=current)["stale"]:
+                    return {"share": self._share_view(existing, current=current),
+                            "created": False}
+                raise ApiError(
+                    "SHARE_EXISTS",
+                    "已有旧的分享快照；如需更新，请确认旧链接将失效。", 409)
+            ts = now()
+            if existing:
+                tx.exec("UPDATE article_shares SET revoked_at=? WHERE id=?",
+                        (ts, existing["id"]))
+            token = secrets.token_urlsafe(24)
+            while tx.q1("SELECT id FROM article_shares WHERE token=?", (token,)):
+                token = secrets.token_urlsafe(24)
+            share_id = new_id("share")
+            tx.exec(
+                "INSERT INTO article_shares(id,token,task_id,draft_id,draft_revision,"
+                "title,content,author,excerpt,created_at,revoked_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,NULL)",
+                (share_id, token, tid, draft["id"], draft["revision"], title,
+                 content, author, excerpt, ts))
+            row = tx.q1("SELECT * FROM article_shares WHERE id=?", (share_id,))
+        return {"share": self._share_view(row, current=current), "created": True}
+
+    def revoke_task_share(self, tid: str) -> dict:
+        with self.db.transaction() as tx:
+            if not tx.q1("SELECT id FROM tasks WHERE id=?", (tid,)):
+                raise ApiError("NOT_FOUND", "Task not found.", 404)
+            revoked = tx.exec(
+                "UPDATE article_shares SET revoked_at=? "
+                "WHERE task_id=? AND revoked_at IS NULL", (now(), tid)).rowcount
+        return {"task_id": tid, "revoked": bool(revoked)}
+
+    def public_share(self, token: str) -> dict:
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{24,64}", token):
+            raise ApiError("NOT_FOUND", "Shared article not found.", 404)
+        row = self.db.q1(
+            "SELECT * FROM article_shares WHERE token=? AND revoked_at IS NULL", (token,))
+        if not row:
+            raise ApiError("NOT_FOUND", "Shared article not found.", 404)
+        # Keep the public response deliberately smaller than the private
+        # task-facing view. Internal ids, the access token and draft revision
+        # are never part of the published article contract.
+        return {
+            "title": row["title"],
+            "content": row["content"],
+            "author": row["author"],
+            "excerpt": row["excerpt"],
+            "created_at": row["created_at"],
+            "reading_minutes": _share_reading_minutes(row["content"]),
+        }
 
     def create_workspace_backup(self):
         try:

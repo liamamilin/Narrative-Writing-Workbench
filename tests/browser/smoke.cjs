@@ -564,6 +564,43 @@ async function main() {
       assert.equal(released.status,'to_write'); assert.equal(released.task_id,null);
       await page.screenshot({path:path.join(output,'task-deleted.png'),fullPage:true});
     });
+    await check('B19 immutable article share, card and revocation', async()=>{
+      await go(`/tasks/${source}`);
+      await page.locator('#share-current').click();
+      await page.locator('.share-dialog[open]').waitFor();
+      assert.match(await page.locator('.share-local-warning').innerText(),/只在这台电脑/);
+      await page.locator('#share-author').fill('林墨');
+      await page.locator('#share-excerpt').fill('一篇用于验证独立阅读页的文章。');
+      await page.locator('#share-create').click();
+      await page.locator('#share-link').waitFor();
+      const oldUrl=await page.locator('#share-link').inputValue();
+      const publicPage=await context.request.get(oldUrl);
+      assert.equal(publicPage.status(),200);
+      assert.match(await publicPage.text(),/用于验证独立阅读页/);
+      const cardDownload=page.waitForEvent('download');
+      await page.locator('#share-card').click();
+      assert.match((await cardDownload).suggestedFilename(),/分享卡片\.png$/);
+      await page.locator('.share-dialog .dialog-close').click();
+
+      await editor().fill('分享之后修改的新正文。');
+      await until(async()=> (await api('GET',`/tasks/${source}`)).draft.working_content.startsWith('分享之后'),
+        'shared draft autosave');
+      assert.doesNotMatch(await (await context.request.get(oldUrl)).text(),/分享之后/,
+        'published snapshot stays immutable');
+      await page.locator('#share-current').click();
+      await page.locator('#share-replace').waitFor();
+      assert.match(await page.locator('.share-note.warn').innerText(),/正文已有新修改/);
+      await page.locator('#share-replace').click(); await confirm();
+      await until(async()=> (await page.locator('#share-link').inputValue())!==oldUrl,
+        'share link replaced');
+      assert.equal((await context.request.get(oldUrl)).status(),404);
+      const newUrl=await page.locator('#share-link').inputValue();
+      assert.match(await (await context.request.get(newUrl)).text(),/分享之后修改的新正文/);
+      await page.locator('#share-revoke').click(); await confirm();
+      await until(async()=>await page.locator('.share-dialog').count()===0,'share dialog closes');
+      assert.equal((await context.request.get(newUrl)).status(),404);
+      await page.screenshot({path:path.join(output,'article-share-revoked.png'),fullPage:true});
+    });
     assert.deepEqual(pageErrors,[], 'unhandled browser exceptions');
   } finally {
     fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({environment,results,pageErrors},null,2));

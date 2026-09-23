@@ -27,6 +27,7 @@ Material → Intent → Generate → Read → Review → Patch → Accept
 | Product V0.5 Evidence Cards | ✅ 完成(E0–E6) | `docs/narrative-writing-product-v0.5-evidence-cards-spec/`, `docs/reports/PRODUCT_V0_5_EVIDENCE_CARDS_IMPLEMENTATION_REPORT.md` |
 | Product V0.6 Reader Path | ✅ 工程完成(R0–R6；真实效果待评估) | `docs/narrative-writing-product-v0.6-reader-path-spec/`, `docs/reports/PRODUCT_V0_6_READER_PATH_IMPLEMENTATION_REPORT.md` |
 | Product V0.7 Local Idea Box | ✅ 完成(I0–I5) | `docs/narrative-writing-product-v0.7-idea-box-spec/`, `docs/reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md` |
+| Product V0.8 Article Sharing | ✅ 完成(S0–S6) | `docs/narrative-writing-product-v0.8-sharing-spec/`, `docs/reports/PRODUCT_V0_8_SHARING_IMPLEMENTATION_REPORT.md` |
 
 本轮稳定性修复与剩余验收见 [实施报告](docs/reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md)，持续进度见 [开发日志](docs/reports/DEVELOPMENT_PROGRESS.md)。
 
@@ -81,6 +82,7 @@ Workbench 的超时是每次模型调用的边界，产品适配器不做 SDK �
 体验路径:Quick Write 可直接“开始写”，也可“先看角度”→ 选择/编辑完整角度 → 确认并生成。素材写作路径:Start Writing → 粘贴素材 + 意图 → Create & Write → Generate
 Draft → 点选段落 → Revise/Shorter… → Generate Patch → Before/After →
 Accept(生成版本)→ Versions → Restore。工作台可把最新保存稿导出为 Markdown/纯文本，版本页也可下载任意历史版本。
+正文工具栏的“分享”会先保存当前编辑，再生成不可变文章快照、链接和 PNG 卡片；更新或停止分享后旧链接失效。公开页只显示文章白名单字段。本机地址生成的链接只在本机有效，跨设备分享需要使用手机可访问的部署地址。
 检查面板会把问题整理为最多三项优先修订工作单；可定位、处理或跳过，也可先把已满意段落标为“保留原文”。
 
 有材料的观点与分析任务还可运行“检查材料依据”：关键陈述卡会并列展示正文原句、材料关系和可回查的 Source 原句。关系与用户确认状态分开保存；正文或素材变化后旧检查会过期，从卡片发起的修改仍须经过 Before/After 和人工接受。

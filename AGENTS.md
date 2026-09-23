@@ -29,6 +29,12 @@ those base specs first, then `IDEA_BOX_IMPLEMENTATION_TASK.md` and
 `product/36..38`. Implemented: see
 `docs/reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md`.
 
+For article sharing, the **V0.8 extension** at
+`docs/narrative-writing-product-v0.8-sharing-spec/` extends the product with
+immutable, revocable public snapshots. Read its implementation task and
+`product/39..41`. Implemented: see
+`docs/reports/PRODUCT_V0_8_SHARING_IMPLEMENTATION_REPORT.md`.
+
 For export/backup work, read the **V0.2 extension** at
 `docs/narrative-writing-product-v0.2-export-backup-spec/`. For optional
 pre-writing angle confirmation, read V0 and V0.1 first, then the **V0.3

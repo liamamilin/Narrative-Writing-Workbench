@@ -6,12 +6,14 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
 from .progress import BROKER, sse_format
 from .backup import MAX_ARCHIVE_BYTES
 from .service import ApiError, Service
+from .sharing import PUBLIC_HEADERS, render_missing_article, render_public_article
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -289,6 +291,45 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.get("/tasks/{task_id}/writing-map")
     def writing_map(task_id: str):
         return svc().writing_map(task_id)
+
+    # ------------------------------------------------------------ sharing ----
+
+    @app.get("/tasks/{task_id}/share")
+    def get_task_share(task_id: str):
+        return svc().get_task_share(task_id)
+
+    @app.post("/tasks/{task_id}/share")
+    def create_task_share(task_id: str, body: dict | None = None):
+        return svc().create_task_share(task_id, body or {})
+
+    @app.delete("/tasks/{task_id}/share")
+    def revoke_task_share(task_id: str):
+        return svc().revoke_task_share(task_id)
+
+    @app.get("/s/{token}/meta")
+    def public_share_meta(token: str):
+        try:
+            return JSONResponse(svc().public_share(token), headers=PUBLIC_HEADERS)
+        except ApiError as exc:
+            if exc.status == 404:
+                return JSONResponse(
+                    {"error": {"code": "NOT_FOUND", "message": "Shared article not found.",
+                               "retryable": False}},
+                    status_code=404, headers=PUBLIC_HEADERS)
+            raise
+
+    @app.get("/s/{token}")
+    def public_share_page(token: str, request: Request):
+        try:
+            share = svc().public_share(token)
+        except ApiError as exc:
+            if exc.status == 404:
+                return HTMLResponse(render_missing_article(), status_code=404,
+                                    headers=PUBLIC_HEADERS)
+            raise
+        return HTMLResponse(
+            render_public_article(share, str(request.url).split("?", 1)[0]),
+            headers=PUBLIC_HEADERS)
 
     @app.post("/tasks/{task_id}/checkpoint")
     def checkpoint(task_id: str, body: dict | None = None):

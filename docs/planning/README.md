@@ -1,6 +1,6 @@
 # 产品与开发规划入口
 
-更新：2026-09-14。
+更新：2026-09-23。
 
 开发持续进行：[开发进展记录](../reports/DEVELOPMENT_PROGRESS.md)。该日志提供实际状态，已完成计划和初始审计见[归档](../archive/README.md)。
 
@@ -14,13 +14,14 @@
 | [新功能开发计划](NEW_FEATURE_DEVELOPMENT_PLAN.md) | 每项候选功能怎样拆成可交付工作？ | F01–F06 工程实现已完成，真实使用评估继续收集 |
 | [下一阶段开发优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md) | 当前未完成工作按重要性和必要性怎样排序？ | 当前执行顺序 |
 | [任务删除规格](TASK_DELETION_SPEC_2026_09_14.md) | 删除任务时哪些数据清理、哪些内容保留？ | 已实现并通过自动验收 |
+| [V0.8 文章分享规格](../narrative-writing-product-v0.8-sharing-spec/README.md) | 当前正文怎样生成可撤销链接、卡片和独立阅读页？ | 已实现并通过自动验收 |
 | [历史文档归档](../archive/README.md) | 初始审计、已完成计划和旧路线图在哪里？ | 只作历史参考 |
 
-[本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.7 选题箱规格](../narrative-writing-product-v0.7-idea-box-spec/README.md) · [F06 实施报告](../reports/PRODUCT_V0_7_IDEA_BOX_IMPLEMENTATION_REPORT.md)
+[本轮实施报告](../reports/V0_1_STABILIZATION_IMPLEMENTATION_REPORT_2026_09_13.md) · [稳定性 API 与数据契约](STABILIZATION_API_AND_DATA.md) · [V0.7 选题箱规格](../narrative-writing-product-v0.7-idea-box-spec/README.md) · [V0.8 分享实施报告](../reports/PRODUCT_V0_8_SHARING_IMPLEMENTATION_REPORT.md)
 
 ## 当前建议
 
-F01–F06 的工程实现已完成。当前按核心体验推进：基础初稿、F02 角度和 F03 修订的匿名评审工具准备阶段已完成，下一步用固定真实模型生成 v2 评审包并回收至少两份独立评分；同时完成 B09/B10/B13/B14 核心交互走查。随后验证导出、恢复和选题持久化。F04 单独评估材料关系可信度，F05 单独评估相对普通 Review 的增量价值。F07–F09 只在各自启动信号满足后进入规格或阶段 A。
+F01–F06 与用户提出的 F10 文章分享工程实现已完成。当前按核心体验推进：基础初稿、F02 角度和 F03 修订的匿名评审工具准备阶段已完成，下一步用固定真实模型生成 v2 评审包并回收至少两份独立评分；同时完成核心交互人工走查。随后验证导出、恢复、选题持久化与跨设备分享部署。F04 单独评估材料关系可信度，F05 单独评估相对普通 Review 的增量价值。F07–F09 只在各自启动信号满足后进入规格或阶段 A。
 
 当前开发顺序已经写入[下一阶段开发优先级](NEXT_DEVELOPMENT_PRIORITIES_2026_09_13.md)：`P0-1 核心质量评审 → P0-2 核心交互走查 → 现场缺陷修复 → F04/F05 分项决策 → 按证据决定 F07–F09`。
 
