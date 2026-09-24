@@ -67,7 +67,7 @@ h3{font-size:1rem;font-weight:650}
 /* ---------- page containers ----------
    默认内容页 1120px；表单页 760px；工作区吃满窗口。 */
 #app{max-width:1120px;margin:0 auto;padding:var(--sp-5) var(--sp-5) 72px}
-#app:has(.workspace){max-width:1560px}
+#app:has(.workspace){max-width:1560px;height:calc(100vh - 58px);padding-bottom:var(--sp-4);overflow:hidden}
 #app:has(.form){max-width:1120px}
 .form{max-width:760px;margin:0 auto}
 .form label{display:block;margin:var(--sp-4) 0 var(--sp-1);font-weight:600;font-size:14px}
@@ -258,8 +258,8 @@ button.danger:hover{background:#f8e9e5}
 /* ---------- workspace ----------
    侧栏受限宽，中央吃剩余空间；纸面是视觉重心。 */
 .workspace{display:grid;grid-template-columns:minmax(190px,215px) minmax(0,1fr) minmax(255px,290px);
-  gap:var(--sp-4);height:calc(100vh - 122px)}
-.workspace>section{overflow-y:auto;border-radius:var(--r);padding:var(--sp-4);
+  gap:var(--sp-4);height:100%;min-height:0}
+.workspace>section{min-height:0;overflow-y:auto;border-radius:var(--r);padding:var(--sp-4);
   scrollbar-color:var(--line-strong) transparent}
 .workspace h3{margin:2px 0 10px;color:var(--muted);font-size:12px;font-weight:650;
   text-transform:uppercase;letter-spacing:.07em}
@@ -276,7 +276,8 @@ button.danger:hover{background:#f8e9e5}
 
 .draft-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   min-height:40px;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:var(--sp-4)}
-#doc-title{font-family:var(--serif);font-size:1.12rem;font-weight:650}
+#doc-title{flex:1 1 340px;min-width:0;font-family:var(--serif);font-size:1.12rem;
+  font-weight:650;line-height:1.45;overflow-wrap:anywhere}
 #save-state{color:var(--muted);font-size:12.5px;min-width:56px}
 .export-format{width:auto;min-height:30px;padding:4px 8px;font-size:13px}
 .share-current{color:var(--cinnabar);border-color:var(--cinnabar);background:rgba(163,72,54,.04)}
@@ -309,8 +310,9 @@ button.danger:hover{background:#f8e9e5}
 #selbar button{min-height:30px;padding:4px 12px;font-size:13px}
 
 /* writing panel */
-.panel-tabs{display:flex;gap:2px;margin-bottom:var(--sp-3);border-bottom:1px solid var(--line);
-  overflow-x:auto;white-space:nowrap}
+.panel-tabs{position:sticky;top:0;z-index:2;display:flex;gap:2px;margin:-4px 0 var(--sp-3);
+  padding-top:4px;border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap;
+  background:rgba(236,228,214,.96)}
 .panel-tabs button{padding:6px 9px;font-size:13.5px}
 #panel .trio{grid-template-columns:1fr}
 #panel .trio select{margin-top:2px}
@@ -481,6 +483,7 @@ button.danger:hover{background:#f8e9e5}
   .qw-grid{grid-template-columns:minmax(0,1fr) 300px}
 }
 @media (max-width:960px){
+  #app:has(.workspace){height:auto;min-height:calc(100vh - 58px);padding-bottom:72px;overflow:visible}
   #topbar{align-items:flex-start;flex-wrap:wrap}
   #topbar nav{width:100%;justify-content:flex-start;overflow-x:auto;flex-wrap:nowrap}
   .entries{grid-template-columns:1fr}
@@ -500,6 +503,7 @@ button.danger:hover{background:#f8e9e5}
   #topbar .brand{width:100%}
   #topbar nav a{padding:6px 8px;font-size:13px}
   #app{padding:var(--sp-4) var(--sp-4) 56px}
+  #app:has(.workspace){min-height:0;padding-bottom:56px}
   .task-list-head{align-items:flex-start;flex-direction:column;gap:var(--sp-3)}
   .task-list-head .action-link{align-self:flex-start}
   .task-updated{display:block;margin:2px 0 0}
