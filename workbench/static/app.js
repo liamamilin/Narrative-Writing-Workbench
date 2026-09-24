@@ -53,6 +53,201 @@ async function downloadExport(path) {
   return filename;
 }
 
+function defaultShareExcerpt(content) {
+  const paragraph = (content || "").split(/\n\s*\n/).find(part => part.trim()) || "";
+  const compact = paragraph.replace(/\s+/g, " ").trim();
+  return compact.length <= 180 ? compact : compact.slice(0, 179).trimEnd() + "…";
+}
+
+function absoluteShareUrl(share) {
+  return new URL(share.path, window.location.href).href;
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(value); return; } catch (_) { /* fallback */ }
+  }
+  const input = document.createElement("textarea");
+  input.value = value; input.readOnly = true; input.style.position = "fixed";
+  input.style.opacity = "0"; document.body.appendChild(input); input.select();
+  const copied = document.execCommand("copy"); input.remove();
+  if (!copied) throw new Error("浏览器未允许复制，请手动复制链接。");
+}
+
+function canvasLines(ctx, text, maxWidth, maxLines) {
+  const lines = []; let line = "";
+  for (const char of Array.from(text || "")) {
+    const next = line + char;
+    if (line && ctx.measureText(next).width > maxWidth) {
+      lines.push(line); line = char;
+      if (lines.length === maxLines) break;
+    } else line = next;
+  }
+  if (lines.length < maxLines && line) lines.push(line);
+  if (lines.length === maxLines && Array.from(text || "").join("") !== lines.join("")) {
+    let last = lines[maxLines - 1];
+    while (last && ctx.measureText(last + "…").width > maxWidth) last = last.slice(0, -1);
+    lines[maxLines - 1] = last + "…";
+  }
+  return lines;
+}
+
+async function downloadShareCard({ title, excerpt, author, url }) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080; canvas.height = 1440;
+  const ctx = canvas.getContext("2d");
+  const gradient = ctx.createLinearGradient(0, 0, 1080, 1440);
+  gradient.addColorStop(0, "#fffdf8"); gradient.addColorStop(1, "#eee4d4");
+  ctx.fillStyle = gradient; ctx.fillRect(0, 0, 1080, 1440);
+  ctx.strokeStyle = "#d2c4b0"; ctx.lineWidth = 2; ctx.strokeRect(58, 58, 964, 1324);
+  ctx.fillStyle = "#b84634"; ctx.font = '34px -apple-system,"PingFang SC",sans-serif';
+  ctx.fillText("纸墨写作台 · 文章", 120, 166);
+  ctx.fillStyle = "#2c2822"; ctx.font = '700 72px "Songti SC","Noto Serif CJK SC",serif';
+  let y = 300;
+  canvasLines(ctx, title || "未命名文章", 840, 4).forEach(line => { ctx.fillText(line, 120, y); y += 108; });
+  ctx.fillStyle = "#b84634"; ctx.fillRect(120, y + 12, 84, 4); y += 92;
+  ctx.fillStyle = "#655e55"; ctx.font = '38px "Songti SC","Noto Serif CJK SC",serif';
+  canvasLines(ctx, excerpt || "", 840, 5).forEach(line => { ctx.fillText(line, 120, y); y += 66; });
+  ctx.fillStyle = "#82786b"; ctx.font = '30px -apple-system,"PingFang SC",sans-serif';
+  if (author) ctx.fillText(author, 120, 1248);
+  let host = ""; try { host = new URL(url).host; } catch (_) { host = url; }
+  ctx.fillText(host, 120, 1308);
+  ctx.strokeStyle = "#b84634"; ctx.lineWidth = 3; ctx.strokeRect(886, 1220, 76, 76);
+  ctx.fillStyle = "#b84634"; ctx.font = '40px "Songti SC",serif'; ctx.fillText("墨", 904, 1274);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("浏览器无法生成分享卡片。");
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl; link.download = `${(title || "文章").replace(/[\\/:*?"<>|]/g, "-").slice(0, 60)}-分享卡片.png`;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
+async function openTaskShare() {
+  if (!WS.draft) return;
+  const taskId = WS.tid;
+  await flushAutosave({ checkpoint: false });
+  let current = (await api("GET", `/tasks/${encodeURIComponent(taskId)}/share`)).share;
+  if (WS.tid !== taskId) return;
+  const previousFocus = document.activeElement;
+  const dialog = document.createElement("dialog");
+  dialog.className = "product-dialog share-dialog";
+  document.body.appendChild(dialog);
+  const close = () => {
+    if (dialog.open) dialog.close();
+    dialog.remove();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
+
+  const previewMarkup = (title, excerpt, author, url = "") => `
+    <aside class="share-card-preview" aria-label="分享卡片预览">
+      <div><div class="share-card-kicker">纸墨写作台 · 文章</div>
+        <div class="share-card-title">${esc(title || "未命名文章")}</div>
+        <div class="share-card-excerpt">${esc(excerpt || "从正文中选一句摘要，让读者知道这篇文章写什么。")}</div></div>
+      <div class="share-card-foot"><span>${esc(author || "文章分享")}${url ? `<br>${esc(new URL(url).host)}` : ""}</span><span class="share-card-seal">墨</span></div>
+    </aside>`;
+
+  const render = () => {
+    const share = current;
+    const title = share?.title || WS.task.title || "未命名文章";
+    const excerpt = share?.excerpt || defaultShareExcerpt(WS.draft.working_content);
+    const author = share?.author || "";
+    const url = share ? absoluteShareUrl(share) : "";
+    const localOnly = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+    const canReplace = Boolean(share?.stale);
+    dialog.innerHTML = `<div class="share-dialog-body">
+      <div class="share-dialog-head"><div><h2>${share ? "分享这篇文章" : "生成文章分享"}</h2>
+        <p>${share ? "链接打开的是发布时的独立快照，之后修改正文不会悄悄改变它。" : "生成一个只包含标题、正文和署名信息的独立阅读页。"}</p></div>
+        <button type="button" class="dialog-close" aria-label="关闭">关闭</button></div>
+      <div class="share-dialog-grid"><div class="share-fields">
+        ${share?.stale ? `<div class="share-note warn">正文已有新修改。当前链接仍保留旧快照；更新后旧链接会立即失效。</div>` :
+          `<div class="share-note">素材、写作目标、检查记录、版本历史和模型配置不会出现在分享页。</div>`}
+        <label for="share-author">作者署名（可选）</label>
+        <input id="share-author" maxlength="80" value="${esc(author)}" ${share && !canReplace ? "disabled" : ""} placeholder="例如：林墨">
+        <label for="share-excerpt">文章摘要（可选）</label>
+        <textarea id="share-excerpt" maxlength="240" ${share && !canReplace ? "disabled" : ""} placeholder="默认取正文第一段">${esc(excerpt)}</textarea>
+        ${share ? `<label for="share-link">分享链接</label><div class="share-link-row">
+          <input id="share-link" readonly value="${esc(url)}"><button type="button" id="share-copy">复制链接</button>
+          <a class="action-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开文章</a></div>` : ""}
+        ${localOnly ? `<div class="share-local-warning">当前地址只在这台电脑上可访问。若要发给别人，请先把服务部署到可访问的域名，再生成链接。</div>` : ""}
+        <div class="share-actions">
+          ${!share ? `<button type="button" class="primary" id="share-create">生成链接</button>` : `
+            <button type="button" id="share-native">系统分享</button>
+            <button type="button" id="share-card">保存分享卡片</button>
+            ${canReplace ? `<button type="button" class="primary" id="share-replace">更新分享</button>` : ""}
+            <button type="button" class="danger" id="share-revoke">停止分享</button>`}
+        </div>
+      </div><div id="share-preview">${previewMarkup(title, excerpt, author, url)}</div></div>
+    </div>`;
+    dialog.querySelector(".dialog-close").onclick = close;
+    const authorInput = dialog.querySelector("#share-author");
+    const excerptInput = dialog.querySelector("#share-excerpt");
+    const refreshPreview = () => {
+      dialog.querySelector("#share-preview").innerHTML = previewMarkup(
+        title, excerptInput.value.trim(), authorInput.value.trim(), url);
+    };
+    authorInput.oninput = refreshPreview; excerptInput.oninput = refreshPreview;
+    const create = async replace => {
+      if (replace) {
+        const confirmed = await confirmDialog(
+          "更新分享快照", "更新后，旧链接会立即失效。已经收到旧链接的人将无法继续打开它。", "更新并使旧链接失效", "取消");
+        if (!confirmed || WS.tid !== taskId) return;
+      }
+      const button = dialog.querySelector(replace ? "#share-replace" : "#share-create");
+      button.disabled = true;
+      try {
+        await flushAutosave({ checkpoint: false });
+        const result = await api("POST", `/tasks/${encodeURIComponent(taskId)}/share`, {
+          expected_revision: WS.draft.revision,
+          author: authorInput.value.trim(), excerpt: excerptInput.value.trim(), replace,
+        });
+        current = result.share; render();
+        toast(replace ? "分享已更新，旧链接已失效。" : "分享链接已生成。");
+      } catch (error) {
+        toast(error.message || "分享生成失败。", true);
+        if (button.isConnected) button.disabled = false;
+      }
+    };
+    const createButton = dialog.querySelector("#share-create");
+    if (createButton) createButton.onclick = () => create(false);
+    const replaceButton = dialog.querySelector("#share-replace");
+    if (replaceButton) replaceButton.onclick = () => create(true);
+    const copyButton = dialog.querySelector("#share-copy");
+    if (copyButton) copyButton.onclick = async () => {
+      try { await copyText(url); toast("分享链接已复制。"); }
+      catch (error) { toast(error.message, true); }
+    };
+    const nativeButton = dialog.querySelector("#share-native");
+    if (nativeButton) nativeButton.onclick = async () => {
+      try {
+        if (navigator.share) await navigator.share({ title: share.title, text: share.excerpt, url });
+        else { await copyText(url); toast("当前浏览器不支持系统分享，链接已复制。"); }
+      } catch (error) { if (error.name !== "AbortError") toast("系统分享没有完成。", true); }
+    };
+    const cardButton = dialog.querySelector("#share-card");
+    if (cardButton) cardButton.onclick = async () => {
+      cardButton.disabled = true;
+      try {
+        await downloadShareCard({ title: share.title, excerpt: share.excerpt, author: share.author, url });
+        toast("分享卡片已保存。");
+      } catch (error) { toast(error.message || "卡片保存失败。", true); }
+      finally { if (cardButton.isConnected) cardButton.disabled = false; }
+    };
+    const revokeButton = dialog.querySelector("#share-revoke");
+    if (revokeButton) revokeButton.onclick = async () => {
+      const confirmed = await confirmDialog("停止分享", "停止后，这个链接将立即无法访问。", "停止分享", "取消");
+      if (!confirmed || WS.tid !== taskId) return;
+      revokeButton.disabled = true;
+      try {
+        await api("DELETE", `/tasks/${encodeURIComponent(taskId)}/share`);
+        close(); toast("分享已停止，原链接已失效。");
+      } catch (error) { toast(error.message || "停止分享失败。", true); revokeButton.disabled = false; }
+    };
+  };
+  render(); dialog.showModal();
+}
+
 async function uploadBackup(path, file) {
   let r;
   try {
@@ -194,7 +389,7 @@ function bindTaskDeleteButtons(refresh) {
       const title = button.dataset.taskTitle || "未命名任务";
       const confirmed = await confirmDialog(
         "删除任务",
-        `将永久删除《${title}》及其正文、版本、检查和运行记录。项目素材会保留；关联选题会回到待写。`,
+        `将永久删除《${title}》及其正文、版本、检查、运行记录和分享链接。项目素材会保留；关联选题会回到待写。`,
         "永久删除", "取消");
       if (!confirmed) return;
       button.disabled = true;
@@ -217,7 +412,7 @@ function bindProjectDeleteButtons(refresh) {
       const name = button.dataset.projectName || "未命名项目";
       const confirmed = await confirmDialog(
         "删除项目",
-        `将永久删除项目《${name}》及其全部任务、正文、版本、检查、运行记录和素材。关联选题会回到待写。`,
+        `将永久删除项目《${name}》及其全部任务、正文、版本、检查、运行记录、分享链接和素材。关联选题会回到待写。`,
         "永久删除", "取消");
       if (!confirmed) return;
       button.disabled = true;
@@ -1064,7 +1259,7 @@ async function project(pid) {
     </div>
     <div class="task-danger-zone" style="margin-top:20px">
       <b class="small">删除项目</b>
-      <p class="small muted">将永久删除本项目及其全部任务、正文、版本、检查、运行记录和素材。关联选题会回到待写。</p>
+      <p class="small muted">将永久删除本项目及其全部任务、正文、版本、检查、运行记录、分享链接和素材。关联选题会回到待写。</p>
       <button type="button" id="delete-project" class="danger"
         data-delete-project="${pid}" data-project-name="${esc(p.name)}">删除这个项目</button>
     </div>`;
@@ -1428,6 +1623,7 @@ function renderWorkspace() {
          </select>
          <button class="small" id="export-current" ${WS.draft ? "" : "disabled"} data-tip="先保存当前编辑，再下载这一份正文">导出当前稿</button>
          <a class="small" href="#/tasks/${t.id}/versions" data-tip="对比差异、恢复旧稿">版本</a>
+         <button class="small share-current" id="share-current" ${WS.draft ? "" : "disabled"} data-tip="生成独立阅读页、分享链接和图片卡片">分享</button>
       </div>
       <div id="center-body"></div>
     </section>
@@ -1469,6 +1665,12 @@ function renderWorkspace() {
       toast("当前稿已下载。");
     } catch (e) { toast(e.message || "导出失败。", true); }
     finally { if (button.isConnected) button.disabled = false; }
+  };
+  $("#share-current").onclick = async () => {
+    const button = $("#share-current"); button.disabled = true;
+    try { await openTaskShare(); }
+    catch (e) { toast(e.message || "暂时无法打开分享设置。", true); }
+    finally { if (button.isConnected) button.disabled = !WS.draft; }
   };
    $("#add-src-btn").onclick = async () => {
      const body = $("#add-src").value.trim(); if (!body) return;
@@ -1912,7 +2114,7 @@ function renderPanel() {
      <p class="small muted">自动保存不会创建版本。只有生成、接受 AI 修改、手动节点和恢复操作会留下版本。</p>
      <div class="task-danger-zone">
        <b class="small">删除任务</b>
-       <p class="small muted">删除正文、版本、检查和运行记录。项目素材会保留。</p>
+       <p class="small muted">删除正文、版本、检查、运行记录和分享链接。项目素材会保留。</p>
        <button id="delete-current-task" class="danger">删除这个任务</button>
      </div>`;
 
@@ -1956,7 +2158,7 @@ function renderPanel() {
         await flushAutosave({ checkpoint: false });
         const confirmed = await confirmDialog(
           "删除任务",
-          `将永久删除《${taskDisplayTitle(t)}》及其正文、版本、检查和运行记录。项目素材会保留；关联选题会回到待写。`,
+          `将永久删除《${taskDisplayTitle(t)}》及其正文、版本、检查、运行记录和分享链接。项目素材会保留；关联选题会回到待写。`,
           "永久删除", "取消");
         if (!confirmed || WS.tid !== taskId) return;
         button.disabled = true;

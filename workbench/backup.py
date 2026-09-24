@@ -45,6 +45,7 @@ REQUIRED_COLUMNS = {
     "claim_links": {"id", "check_id", "draft_id", "claim_id", "claim_type", "relation", "explanation", "revision_goal", "paragraph_start", "paragraph_end", "draft_char_start", "draft_char_end", "draft_quote", "source_id", "source_content_hash", "source_char_start", "source_char_end", "source_quote", "user_status", "patch_id", "created_at", "updated_at"},
     "reader_path_steps": {"id", "review_id", "draft_id", "step_id", "base_revision", "content_hash", "paragraph_start", "paragraph_end", "char_start", "char_end", "quote", "primary_function", "knowledge_gain", "question_raised", "question_answered", "created_at"},
     "ideas": {"id", "topic", "normalized_topic", "hook", "domain", "domain_name", "note", "origin", "source_key", "status", "task_id", "created_at", "updated_at"},
+    "article_shares": {"id", "token", "task_id", "draft_id", "draft_revision", "title", "content", "author", "excerpt", "created_at", "revoked_at"},
     "writing_operations": {"id", "task_id", "kind", "process_id", "status", "stage", "started_at", "finished_at", "elapsed_ms", "input_fingerprint", "snapshot_json", "retry_of", "error_code", "result_json", "usage_json"},
     "operation_events": {"operation_id", "seq", "kind", "data_json", "elapsed_ms", "created_at"},
     "operation_records": {"id", "operation_id", "category", "name", "status", "data_json", "elapsed_ms", "created_at"},
@@ -63,13 +64,23 @@ REQUIRED_INDEX_SQL = {
     "reader_path_steps_review": "create index reader_path_steps_review on reader_path_steps(review_id)",
     "ideas_status_updated": "create index ideas_status_updated on ideas(status,updated_at)",
     "ideas_task": "create index ideas_task on ideas(task_id)",
+    "article_shares_task": "create index article_shares_task on article_shares(task_id,created_at)",
+    "active_article_share": "create unique index active_article_share on article_shares(task_id) where revoked_at is null",
+}
+V7_REQUIRED_COLUMNS = {
+    table: set(columns) for table, columns in REQUIRED_COLUMNS.items()
+    if table != "article_shares"
+}
+V7_REQUIRED_INDEX_SQL = {
+    name: sql for name, sql in REQUIRED_INDEX_SQL.items()
+    if name not in {"article_shares_task", "active_article_share"}
 }
 V6_REQUIRED_COLUMNS = {
-    table: set(columns) for table, columns in REQUIRED_COLUMNS.items()
+    table: set(columns) for table, columns in V7_REQUIRED_COLUMNS.items()
     if table != "ideas"
 }
 V6_REQUIRED_INDEX_SQL = {
-    name: sql for name, sql in REQUIRED_INDEX_SQL.items()
+    name: sql for name, sql in V7_REQUIRED_INDEX_SQL.items()
     if name not in {"ideas_status_updated", "ideas_task"}
 }
 V5_REQUIRED_COLUMNS = {
@@ -104,6 +115,8 @@ V3_REQUIRED_INDEX_SQL = {
 def _schema_contract(version: int):
     if version == SCHEMA_VERSION:
         return REQUIRED_COLUMNS, REQUIRED_INDEX_SQL
+    if version == 7:
+        return V7_REQUIRED_COLUMNS, V7_REQUIRED_INDEX_SQL
     if version == 6:
         return V6_REQUIRED_COLUMNS, V6_REQUIRED_INDEX_SQL
     if version == 5:
@@ -270,6 +283,10 @@ def _orphan_checks(version: int) -> list[tuple[str, str]]:
         checks.extend([
             ("ideas.status_task", "SELECT 1 FROM ideas WHERE (status='written' AND task_id IS NULL) OR (status='to_write' AND task_id IS NOT NULL) LIMIT 1"),
             ("ideas.task", "SELECT 1 FROM ideas i LEFT JOIN tasks t ON t.id=i.task_id WHERE i.task_id IS NOT NULL AND (t.id IS NULL OR t.input_mode<>'topic_only') LIMIT 1"),
+        ])
+    if version >= 8:
+        checks.extend([
+            ("article_shares.task_draft", "SELECT 1 FROM article_shares x LEFT JOIN tasks t ON t.id=x.task_id LEFT JOIN drafts d ON d.id=x.draft_id WHERE t.id IS NULL OR d.id IS NULL OR d.task_id<>x.task_id LIMIT 1"),
         ])
     return checks
 
