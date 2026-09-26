@@ -574,6 +574,12 @@ async function main() {
       await page.locator('#share-create').click();
       await page.locator('#share-link').waitFor();
       const oldUrl=await page.locator('#share-link').inputValue();
+      await page.locator('#share-copy').click();
+      await until(async()=> (await page.locator('#share-copy').innerText())==='已复制',
+        'share link copy feedback');
+      assert.equal(await page.locator('#share-copy').innerText(),'已复制');
+      assert.match(await page.locator('#share-copy-status').innerText(),/已复制到剪贴板/);
+      assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),oldUrl);
       const publicPage=await context.request.get(oldUrl);
       assert.equal(publicPage.status(),200);
       assert.match(await publicPage.text(),/用于验证独立阅读页/);

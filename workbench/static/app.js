@@ -169,7 +169,8 @@ async function openTaskShare() {
         <textarea id="share-excerpt" maxlength="240" ${share && !canReplace ? "disabled" : ""} placeholder="默认取正文第一段">${esc(excerpt)}</textarea>
         ${share ? `<label for="share-link">分享链接</label><div class="share-link-row">
           <input id="share-link" readonly value="${esc(url)}"><button type="button" id="share-copy">复制链接</button>
-          <a class="action-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开文章</a></div>` : ""}
+          <a class="action-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开文章</a></div>
+          <p class="share-copy-status" id="share-copy-status" role="status" aria-live="polite"></p>` : ""}
         ${localOnly ? `<div class="share-local-warning">当前地址只在这台电脑上可访问。若要发给别人，请先把服务部署到可访问的域名，再生成链接。</div>` : ""}
         <div class="share-actions">
           ${!share ? `<button type="button" class="primary" id="share-create">生成链接</button>` : `
@@ -215,8 +216,22 @@ async function openTaskShare() {
     if (replaceButton) replaceButton.onclick = () => create(true);
     const copyButton = dialog.querySelector("#share-copy");
     if (copyButton) copyButton.onclick = async () => {
-      try { await copyText(url); toast("分享链接已复制。"); }
-      catch (error) { toast(error.message, true); }
+      const linkInput = dialog.querySelector("#share-link");
+      const status = dialog.querySelector("#share-copy-status");
+      copyButton.disabled = true;
+      try {
+        await copyText(url);
+        copyButton.textContent = "已复制";
+        status.textContent = "链接已复制到剪贴板。";
+        status.classList.remove("error");
+      } catch (_) {
+        linkInput.focus(); linkInput.select();
+        copyButton.textContent = "请手动复制";
+        status.textContent = "浏览器未允许自动复制，链接已为你选中。";
+        status.classList.add("error");
+      } finally {
+        copyButton.disabled = false;
+      }
     };
     const nativeButton = dialog.querySelector("#share-native");
     if (nativeButton) nativeButton.onclick = async () => {

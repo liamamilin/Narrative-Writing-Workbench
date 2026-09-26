@@ -530,6 +530,8 @@ button.danger:hover{background:#f8e9e5}
 .share-link-row{display:flex;gap:8px;margin:14px 0}
 .share-link-row input{min-width:0;flex:1;font-size:13px}
 .share-link-row .action-link{white-space:nowrap;min-height:34px;padding:6px 12px}
+.share-copy-status{min-height:20px;margin:-9px 0 0;color:var(--accent);font-size:12px;line-height:1.6}
+.share-copy-status.error{color:var(--cinnabar)}
 .share-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
 .share-actions .danger{margin-left:auto}
 .share-card-preview{aspect-ratio:3/4;padding:24px;display:flex;flex-direction:column;justify-content:space-between;
