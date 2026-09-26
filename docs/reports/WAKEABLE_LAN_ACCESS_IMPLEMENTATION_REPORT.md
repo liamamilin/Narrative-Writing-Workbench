@@ -12,6 +12,7 @@
 - 首次请求或工作进程已退出时，代理按需启动 `python -m workbench.server`，等待 `/settings` 就绪后转发原请求。
 - 代理只转发必要 HTTP 方法并过滤 hop-by-hop 头；普通响应补齐长度，SSE 响应保持流式转发；`HEAD` 不发送响应体。
 - `scripts/launch_workbench.sh` 默认让代理监听 `0.0.0.0`，检测 `en0`/`en1` 的局域网地址并打印手机 URL。设置 `WORKBENCH_HOST=127.0.0.1` 可关闭局域网监听。
+- 设置页新增“访问地址”卡片，显示本机 URL、手机 URL，并支持复制手机地址；未检测到 Wi-Fi 时提示 `WORKBENCH_ADVERTISED_HOST` 配置。
 - `scripts/launch_workbench.sh stop` 停止公开入口，入口退出时也会回收当前工作进程。
 
 ## 使用

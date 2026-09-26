@@ -1337,7 +1337,11 @@ function bindProjectSourceButtons(pid) {
 
 /* ------------------------------------------------------------- settings */
 async function settings() {
-  const [s, pr] = await Promise.all([api("GET", "/settings"), api("GET", "/settings/providers")]);
+  const [s, pr, network] = await Promise.all([
+    api("GET", "/settings"),
+    api("GET", "/settings/providers"),
+    api("GET", "/server-info"),
+  ]);
   if (location.hash !== "#/settings") return;
   const known = pr.providers.find(p => p.base_url && p.base_url === s.base_url);
   $("#app").innerHTML = `
@@ -1345,6 +1349,18 @@ async function settings() {
     <h1>设置</h1>
     <p class="muted small">配置保存在本机 <code>workbench/settings.json</code>(仅本地,保存后立即生效,无需重启)。
     密钥只写入本地文件,接口永远不会回传完整密钥。</p>
+    <section class="card" style="margin:14px 0 20px">
+      <h2>访问地址</h2>
+      <p class="muted small">电脑和手机连接同一 Wi‑Fi 时，手机打开下面的局域网地址。</p>
+      <p><span class="muted small">本机：</span>
+        <a href="${esc(network.local_url)}" target="_blank" rel="noreferrer">${esc(network.local_url)}</a></p>
+      ${network.lan_url
+        ? `<p><span class="muted small">手机：</span><strong>${esc(network.lan_url)}</strong>
+             <button id="copy-lan-url" style="margin-left:8px">复制地址</button></p>
+           <p class="muted small">同一无线网络内，持有此地址的设备可以访问当前工作台；当前没有登录验证。</p>`
+        : `<p class="muted small">当前未检测到局域网地址。请确认电脑已连接 Wi‑Fi，或重启时设置
+             <code>WORKBENCH_ADVERTISED_HOST=电脑IP</code>。</p>`}
+    </section>
     <label for="s-engine">引擎模式</label>
     <select id="s-engine" data-tip="mock=离线秒级体验界面;real=调用真实 LLM harness">
       <option value="real"${s.engine === "real" ? " selected" : ""}>real(真实引擎)</option>
@@ -1393,6 +1409,16 @@ async function settings() {
   </div>`;
 
   const PROVIDERS = pr.providers;
+  if (network.lan_url) {
+    $("#copy-lan-url").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(network.lan_url);
+        toast("手机访问地址已复制。");
+      } catch (_) {
+        toast("复制失败，请手动选择地址。", true);
+      }
+    };
+  }
   const viewProvider = $("#s-provider");
   const stillHere = () => $("#s-provider") === viewProvider;
   const showResult = html => { if (stillHere()) $("#s-result").innerHTML = html; };

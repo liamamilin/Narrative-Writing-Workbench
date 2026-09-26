@@ -66,6 +66,8 @@ pip install -r requirements.txt -r requirements-workbench.txt
 `http://局域网IP:8600`，同一无线网络下的手机可直接访问这个地址。默认监听局域网，
 没有账号和访问控制，只应在可信网络使用；只想本机访问时可用
 `WORKBENCH_HOST=127.0.0.1 ./scripts/launch_workbench.sh`。
+设置页也会显示本机和手机访问地址，并提供复制手机地址按钮；如果系统没有检测到 Wi‑Fi 地址，
+可在重启时设置 `WORKBENCH_ADVERTISED_HOST=电脑局域网IP`。
 
 切换到**真实引擎**:在浏览器打开的 Settings 页填 Base URL / API Key / Model
 (选服务商填入端点；模型清单供参考，也可手填别名),或手动:

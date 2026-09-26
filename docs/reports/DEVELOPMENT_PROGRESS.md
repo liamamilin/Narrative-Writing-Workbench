@@ -296,3 +296,9 @@
 - `scripts/launch_workbench.sh` 改为启动代理，保留原本的本机地址和 `stop` 行为；代理和工作进程均可被一次停止命令清理。修复 SIGTERM 下 `shutdown()` 的线程调用约束，避免停止时挂起。
 - 默认绑定 `0.0.0.0`，启动时通过 macOS `en0`/`en1` 检测并打印同一无线网络的手机地址；设置 `WORKBENCH_HOST=127.0.0.1` 可恢复本机-only 模式。当前没有账号或访问控制，局域网地址只应在可信网络使用。
 - 集成演练将空闲时间压缩为 1.2 秒：首次 `/settings` 请求成功，工作进程退出后等待同一 URL 再次请求成功，随后 SIGTERM 停止代理无挂起；Python 编译和 shell 语法检查通过。完整 pytest：393 passed / 32.92 秒。
+
+### 2026-09-26 — 设置页显示访问地址
+
+- 新增 `GET /server-info`，由启动代理传递公开端口、监听范围和检测到的局域网地址；工作进程使用随机内部端口时，设置页仍显示用户真正应访问的 8600 地址。
+- 设置页新增“访问地址”卡片：显示本机 URL、手机 URL、无认证提示和复制按钮；本机-only 模式不会误报手机地址，未检测到 Wi-Fi 时提示 `WORKBENCH_ADVERTISED_HOST`。
+- 新增 2 项网络信息回归；专项设置/网络测试 15 passed，Python/JavaScript/shell 语法检查通过。完整 Python 回归：395 passed / 33.34 秒；使用已安装 Google Chrome 的 Playwright B00–B19 全部通过。

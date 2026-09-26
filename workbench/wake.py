@@ -72,6 +72,9 @@ class WakeProxy:
             env = os.environ.copy()
             env["WORKBENCH_HOST"] = self.child_host
             env["WORKBENCH_PORT"] = str(self.child_port)
+            # Preserve the public listener details for the Settings page.
+            env.setdefault("WORKBENCH_PUBLIC_PORT", str(self.public_port))
+            env.setdefault("WORKBENCH_PUBLIC_HOST", self.public_host)
             # The proxy owns the public port and is itself the wake mechanism.
             env["WORKBENCH_WAKE_PROXY"] = "0"
             root = Path(__file__).resolve().parent.parent

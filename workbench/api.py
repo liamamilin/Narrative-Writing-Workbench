@@ -14,6 +14,7 @@ from .progress import BROKER, sse_format
 from .backup import MAX_ARCHIVE_BYTES
 from .service import ApiError, Service
 from .sharing import PUBLIC_HEADERS, render_missing_article, render_public_article
+from .network import server_info
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -392,6 +393,10 @@ def create_app(service: Service | None = None) -> FastAPI:
     @app.get("/settings")
     def settings():
         return svc().settings_view()
+
+    @app.get("/server-info")
+    def get_server_info():
+        return server_info()
 
     @app.post("/settings")
     def update_settings(body: dict):

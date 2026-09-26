@@ -77,7 +77,10 @@ done
 [ -z "$PY" ] && { echo "未找到带 fastapi/uvicorn 的 python3,先运行: pip install -r requirements.txt -r requirements-workbench.txt"; exit 1; }
 
 mkdir -p .scratch
-WORKBENCH_PORT="$PORT" WORKBENCH_HOST="$BIND_HOST" nohup "$PY" -m workbench.wake > .scratch/workbench.log 2>&1 &
+WORKBENCH_PORT="$PORT" WORKBENCH_HOST="$BIND_HOST" \
+WORKBENCH_PUBLIC_PORT="$PORT" WORKBENCH_PUBLIC_HOST="$BIND_HOST" \
+WORKBENCH_ADVERTISED_HOST="$LAN_IP" \
+nohup "$PY" -m workbench.wake > .scratch/workbench.log 2>&1 &
 for i in $(seq 1 20); do curl -s -m 1 "$URL/settings" >/dev/null 2>&1 && break; sleep 1; done
 if ! curl -s -m 2 "$URL/settings" >/dev/null 2>&1; then
   echo "启动失败,服务日志(.scratch/workbench.log)末尾:"
