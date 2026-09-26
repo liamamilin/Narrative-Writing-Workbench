@@ -1345,67 +1345,122 @@ async function settings() {
   if (location.hash !== "#/settings") return;
   const known = pr.providers.find(p => p.base_url && p.base_url === s.base_url);
   $("#app").innerHTML = `
-  <div class="form" style="max-width:640px">
-    <h1>设置</h1>
-    <p class="muted small">配置保存在本机 <code>workbench/settings.json</code>(仅本地,保存后立即生效,无需重启)。
-    密钥只写入本地文件,接口永远不会回传完整密钥。</p>
-    <section class="card" style="margin:14px 0 20px">
-      <h2>访问地址</h2>
-      <p class="muted small">电脑和手机连接同一 Wi‑Fi 时，手机打开下面的局域网地址。</p>
-      <p><span class="muted small">本机：</span>
-        <a href="${esc(network.local_url)}" target="_blank" rel="noreferrer">${esc(network.local_url)}</a></p>
-      ${network.lan_url
-        ? `<p><span class="muted small">手机：</span><strong>${esc(network.lan_url)}</strong>
-             <button id="copy-lan-url" style="margin-left:8px">复制地址</button></p>
-           <p class="muted small">同一无线网络内，持有此地址的设备可以访问当前工作台；当前没有登录验证。</p>`
-        : `<p class="muted small">当前未检测到局域网地址。请确认电脑已连接 Wi‑Fi，或重启时设置
-             <code>WORKBENCH_ADVERTISED_HOST=电脑IP</code>。</p>`}
-    </section>
-    <label for="s-engine">引擎模式</label>
-    <select id="s-engine" data-tip="mock=离线秒级体验界面;real=调用真实 LLM harness">
-      <option value="real"${s.engine === "real" ? " selected" : ""}>real(真实引擎)</option>
-      <option value="mock"${s.engine === "mock" ? " selected" : ""}>mock(离线演示)</option>
-    </select>
-    <label for="s-provider">API 服务商</label>
-    <select id="s-provider" data-tip="选本地 Ollama / LM Studio 无需密钥">
-      ${pr.providers.map(p => `<option value="${p.id}"${known && known.id === p.id ? " selected" : ""}${p.id === "custom" && !known ? " selected" : ""}>${esc(p.name)}</option>`).join("")}
-    </select>
-    <label for="s-base">API 地址</label>
-    <input id="s-base" data-tip="OpenAI 兼容端点;选上方服务商可自动填入" value="${esc(s.base_url)}" placeholder="https://…/v1 或 http://127.0.0.1:11434/v1">
-    <label for="s-key">API 密钥</label>
-    <input id="s-key" type="password" data-tip="仅保存在本机 settings.json,接口只回传掩码" placeholder="${s.has_key ? "已保存 " + esc(s.api_key_masked) + "(留空则不修改)" : "sk-…(本地 Ollama 可留空)"}">
-    <label for="s-model">模型</label>
-    <div class="row">
-      <input id="s-model" class="grow" list="s-model-list" value="${esc(s.model)}" placeholder="选择或输入模型名" data-tip="下拉选常见模型;也可手填">
-      <datalist id="s-model-list">${(known ? known.models : []).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
-      <button id="s-fetch" data-tip="向该地址请求模型清单(GET /models)，只列出已可用的模型，不会下载">刷新模型列表</button>
+  <div class="settings-page">
+    <header class="settings-page-head">
+      <div>
+        <p class="settings-kicker">工作台偏好</p>
+        <h1>设置</h1>
+        <p>连接写作模型，管理访问地址与本地数据。</p>
+      </div>
+      <span class="settings-mode"><i></i>${s.engine === "real" ? "真实引擎" : "离线演示"}</span>
+    </header>
+
+    <div class="settings-layout">
+      <section class="settings-card settings-model-card">
+        <div class="settings-card-head">
+          <div>
+            <p class="settings-card-index">01</p>
+            <h2>模型连接</h2>
+          </div>
+          <p>保存后立即生效，无需重启应用。</p>
+        </div>
+
+        <div class="settings-field-grid">
+          <div class="settings-field">
+            <label for="s-engine">引擎模式</label>
+            <select id="s-engine" data-tip="mock=离线秒级体验界面;real=调用真实 LLM harness">
+              <option value="real"${s.engine === "real" ? " selected" : ""}>real（真实引擎）</option>
+              <option value="mock"${s.engine === "mock" ? " selected" : ""}>mock（离线演示）</option>
+            </select>
+          </div>
+          <div class="settings-field">
+            <label for="s-provider">API 服务商</label>
+            <select id="s-provider" data-tip="选本地 Ollama / LM Studio 无需密钥">
+              ${pr.providers.map(p => `<option value="${p.id}"${known && known.id === p.id ? " selected" : ""}${p.id === "custom" && !known ? " selected" : ""}>${esc(p.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div class="settings-field settings-field-wide">
+            <label for="s-base">API 地址</label>
+            <input id="s-base" data-tip="OpenAI 兼容端点;选上方服务商可自动填入" value="${esc(s.base_url)}" placeholder="https://…/v1 或 http://127.0.0.1:11434/v1">
+          </div>
+          <div class="settings-field settings-field-wide">
+            <label for="s-key">API 密钥 <span>只保存在本机</span></label>
+            <input id="s-key" type="password" data-tip="仅保存在本机 settings.json,接口只回传掩码" placeholder="${s.has_key ? "已保存 " + esc(s.api_key_masked) + "（留空则不修改）" : "sk-…（本地 Ollama 可留空）"}">
+          </div>
+          <div class="settings-field settings-field-wide">
+            <label for="s-model">模型</label>
+            <div class="settings-model-row">
+              <input id="s-model" list="s-model-list" value="${esc(s.model)}" placeholder="选择或输入模型名" data-tip="下拉选常见模型;也可手填">
+              <datalist id="s-model-list">${(known ? known.models : []).map(m => `<option value="${esc(m)}">`).join("")}</datalist>
+              <button id="s-fetch" data-tip="向该地址请求模型清单(GET /models)，只列出已可用的模型，不会下载">刷新列表</button>
+            </div>
+            <p class="settings-field-hint" id="s-model-hint"></p>
+          </div>
+          <div class="settings-field">
+            <label for="s-timeout">单次超时 <span>秒</span></label>
+            <input id="s-timeout" type="number" min="30" step="30" value="${s.timeout_seconds ?? ""}" placeholder="300" data-tip="单次 LLM 调用超时">
+          </div>
+          <div class="settings-field">
+            <label for="s-temp">写作温度 <span>0–2</span></label>
+            <input id="s-temp" type="number" min="0" max="2" step="0.1" value="${s.writer_temperature ?? ""}" placeholder="0.7" data-tip="越高越发散,越低越克制(仅作用于正文写作)">
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button class="primary" id="s-save" data-tip="保存并热切换引擎">保存设置</button>
+          <button id="s-test" data-tip="用当前参数发一次最小请求，不保存">测试连接</button>
+          <span id="s-result" class="small"></span>
+        </div>
+        <p class="settings-private">密钥只写入 <code>workbench/settings.json</code>，接口不会回传完整内容。</p>
+      </section>
+
+      <aside class="settings-rail">
+        <section class="settings-card settings-access-card">
+          <div class="settings-card-head compact">
+            <div>
+              <p class="settings-card-index">02</p>
+              <h2>访问地址</h2>
+            </div>
+            ${network.lan_url ? `<span class="settings-status">局域网已开启</span>` : ""}
+          </div>
+          <p class="settings-card-copy">电脑和手机连接同一 Wi-Fi 后，手机打开下面的地址。</p>
+          ${network.lan_url
+            ? `<div class="settings-address-box">
+                 <span>手机访问</span>
+                 <strong>${esc(network.lan_url)}</strong>
+                 <button class="small" id="copy-lan-url">复制地址</button>
+               </div>
+               <div class="settings-local-link"><span>本机</span>
+                 <a href="${esc(network.local_url)}" target="_blank" rel="noreferrer">${esc(network.local_url)}</a>
+               </div>
+               <p class="settings-network-note">同一网络中持有地址的设备可以访问；当前没有登录验证。</p>`
+            : `<div class="settings-empty-note">当前未检测到局域网地址。请确认电脑已连接 Wi-Fi，或重启时设置
+                 <code>WORKBENCH_ADVERTISED_HOST=电脑IP</code>。</div>`}
+        </section>
+
+        <section class="settings-card settings-data-card">
+          <div class="settings-card-head compact">
+            <div>
+              <p class="settings-card-index">03</p>
+              <h2>本地数据</h2>
+            </div>
+          </div>
+          <p class="settings-card-copy">备份项目、素材、正文和版本；不会包含 API 密钥或日志。</p>
+          <button id="backup-download" data-tip="下载当前整个工作区的一致性快照">下载工作区备份</button>
+          <div class="settings-restore">
+            <label for="backup-file">从备份恢复</label>
+            <p>先预检，再恢复到独立工作区；当前数据不会被覆盖。</p>
+            <input id="backup-file" type="file" accept=".zip,application/zip"
+              data-tip="先校验包格式、hash、数据库完整性和引用关系">
+            <div class="settings-restore-actions">
+              <button id="backup-inspect" disabled>预检备份</button>
+              <button class="primary" id="backup-restore" disabled>恢复</button>
+            </div>
+            <p id="backup-result" class="muted small" role="status"></p>
+          </div>
+        </section>
+      </aside>
     </div>
-    <p class="muted small" id="s-model-hint" style="margin:4px 0 0"></p>
-    <div class="trio" style="margin-top:10px">
-      <div><span class="muted small">超时(秒)</span>
-        <input id="s-timeout" type="number" min="30" step="30" value="${s.timeout_seconds ?? ""}" placeholder="300" data-tip="单次 LLM 调用超时"></div>
-      <div><span class="muted small">写作温度</span>
-        <input id="s-temp" type="number" min="0" max="2" step="0.1" value="${s.writer_temperature ?? ""}" placeholder="0.7" data-tip="越高越发散,越低越克制(仅作用于正文写作)"></div>
-    </div>
-    <p class="row" style="margin-top:20px">
-      <button class="primary" id="s-save" data-tip="保存并热切换引擎">保存</button>
-      <button id="s-test" data-tip="用当前参数发一次最小请求，不保存">测试连接</button>
-      <span id="s-result" class="small"></span>
-    </p>
-    <section class="card" style="margin-top:28px">
-      <h2>本地数据</h2>
-      <p class="muted small">备份包含已保存的项目、素材、正文和版本，不包含 settings.json、API 密钥、环境变量或日志。
-      恢复会创建新的独立工作区，不会改写当前数据。</p>
-      <p><button id="backup-download" data-tip="下载当前整个工作区的一致性快照">下载工作区备份</button></p>
-      <label for="backup-file">预检并恢复备份</label>
-      <input id="backup-file" type="file" accept=".zip,application/zip"
-        data-tip="先校验包格式、hash、数据库完整性和引用关系">
-      <p class="row">
-        <button id="backup-inspect" disabled>预检备份</button>
-        <button class="primary" id="backup-restore" disabled>恢复到新工作区</button>
-      </p>
-      <p id="backup-result" class="muted small" role="status"></p>
-    </section>
   </div>`;
 
   const PROVIDERS = pr.providers;
