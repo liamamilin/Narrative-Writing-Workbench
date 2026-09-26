@@ -71,7 +71,7 @@
 
 ## 本地优先，随时可换大脑
 
-- 单文件 SQLite + 无账号无云依赖，`scripts/launch_workbench.sh` 一键起，闲置自动退出；
+- 单文件 SQLite + 无账号无云依赖，`scripts/launch_workbench.sh` 一键起；工作进程闲置自动退出，但同一 URL 会由轻量入口保留并在再次访问时唤醒；默认监听局域网，终端会打印手机访问地址；
 - 引擎可换：**mock 演示模式**零 key 全功能可玩；真实模式在 Settings 填 key/base-url/model 即可热切换。OpenCode Go 的现场主链路已用 `deepseek-v4-flash` 完整跑通；模型清单与短连接测试只证明可调用，首次使用仍应先做一篇容量试跑；
 - 提示词全部外置于 `prompts/`，结构化输出有 schema 校验，中间产物全部持久化——这是一台可审计的写作认知装置（Writing Cognition Harness），不是黑盒。
 
@@ -82,7 +82,7 @@
 ## 快速开始
 
 ```bash
-./scripts/launch_workbench.sh        # → http://127.0.0.1:8600
+./scripts/launch_workbench.sh        # → http://127.0.0.1:8600，并打印同一 Wi-Fi 的手机地址
 # 无 key 也能玩：Settings 切到 mock 引擎
 # 真实生成：Settings 填 OpenCode Go key + deepseek-v4-flash，保存即生效
 ```

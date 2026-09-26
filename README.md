@@ -60,8 +60,12 @@ pip install -r requirements.txt -r requirements-workbench.txt
 ```
 
 不配置任何密钥即可体验完整交互:默认走内置 **mock 引擎**(离线、确定性)。
-服务空闲 30 分钟无任何请求会**自动退出**(下次直接重跑脚本即可;
-`WORKBENCH_IDLE_TIMEOUT` 分钟可调,0 关闭)。
+工作进程空闲 30 分钟无任何请求会**自动退出**(默认值可由
+`WORKBENCH_IDLE_TIMEOUT` 分钟调整,0 关闭)，但启动脚本保留同一个 URL 的轻量唤醒入口；
+30 分钟后再次打开原地址会自动拉起工作进程，不需要重跑脚本。启动时终端还会打印
+`http://局域网IP:8600`，同一无线网络下的手机可直接访问这个地址。默认监听局域网，
+没有账号和访问控制，只应在可信网络使用；只想本机访问时可用
+`WORKBENCH_HOST=127.0.0.1 ./scripts/launch_workbench.sh`。
 
 切换到**真实引擎**:在浏览器打开的 Settings 页填 Base URL / API Key / Model
 (选服务商填入端点；模型清单供参考，也可手填别名),或手动:
@@ -73,7 +77,7 @@ cp workbench/settings.example.json workbench/settings.json
 ```
 
 > 密钥只存本地 `workbench/settings.json`(已在 `.gitignore` 中,永不入库);
-> 服务启动时把它注入进程环境,API 只回传掩码。`scripts/launch_workbench.sh stop` 停止。
+> 服务启动时把它注入进程环境,API 只回传掩码。`scripts/launch_workbench.sh stop` 会同时停止唤醒入口和当前工作进程。
 
 真实模型必须先通过完整生成链路，连接测试或短话题生成不能代表长结构化 JSON 兼容。2026-09-13 的同 API、同任务对照中，OpenCode Go 的 `deepseek-v4-flash` 在 258.76 秒内完成意义发现、命题评审、结构和正文；`mimo-v2.5` 两次打满 6,000 输出 token 后仍返回截断 JSON，在意义发现阶段失败。因此当前交互主链路优先使用 `deepseek-v4-flash` 或其他已完成容量试跑的模型；`mimo-v2.5` 暂不作为长结构生成推荐。详情见[真实模型评估报告](docs/reports/REAL_MODEL_EVALUATION_REPORT_2026_09_13.md)。
 
@@ -82,7 +86,7 @@ Workbench 的超时是每次模型调用的边界，产品适配器不做 SDK �
 体验路径:Quick Write 可直接“开始写”，也可“先看角度”→ 选择/编辑完整角度 → 确认并生成。素材写作路径:Start Writing → 粘贴素材 + 意图 → Create & Write → Generate
 Draft → 点选段落 → Revise/Shorter… → Generate Patch → Before/After →
 Accept(生成版本)→ Versions → Restore。工作台可把最新保存稿导出为 Markdown/纯文本，版本页也可下载任意历史版本。
-正文工具栏的“分享”会先保存当前编辑，再生成不可变文章快照、链接和 PNG 卡片；更新或停止分享后旧链接失效。公开页只显示文章白名单字段。本机地址生成的链接只在本机有效，跨设备分享需要使用手机可访问的部署地址。
+正文工具栏的“分享”会先保存当前编辑，再生成不可变文章快照、链接和 PNG 卡片；更新或停止分享后旧链接失效。公开页只显示文章白名单字段。跨设备访问时请使用启动脚本打印的局域网地址生成和打开分享链接。
 检查面板会把问题整理为最多三项优先修订工作单；可定位、处理或跳过，也可先把已满意段落标为“保留原文”。
 
 有材料的观点与分析任务还可运行“检查材料依据”：关键陈述卡会并列展示正文原句、材料关系和可回查的 Source 原句。关系与用户确认状态分开保存；正文或素材变化后旧检查会过期，从卡片发起的修改仍须经过 Before/After 和人工接受。
